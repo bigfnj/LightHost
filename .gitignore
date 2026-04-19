@@ -1,0 +1,50 @@
+# Build output
+/build/
+/Builds/
+/out/
+/dist/
+/cmake-build-*/
+
+# CMake-generated files
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/CTestTestfile.cmake
+/compile_commands.json
+/Testing/
+
+# Generated JUCE code (legacy Projucer)
+/JuceLibraryCode/
+
+# JUCE helper build directories
+/juce_build/
+
+# IDE files - Visual Studio
+.vs/
+*.user
+*.suo
+*.ncb
+*.sdf
+*.opensdf
+*.db
+*.opendb
+*.VC.db
+
+# IDE files - Xcode
+xcuserdata/
+*.xcworkspace/
+DerivedData/
+
+# IDE files - CLion / CMake
+.idea/
+.cache/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code AI session settings (personal — contains permission overrides)
+.claude/
+
+# Vendor frameworks / SDKs under lib/ are source dependencies and stay trackable.
