@@ -6,6 +6,23 @@
 
 ---
 
+## [4.0.1] — 2026-05-28
+
+### Dependency — JUCE 8.0.12 → 8.0.13
+
+- Updated vendored JUCE to **8.0.13** (released 2026-05-19). Brings improved Windows
+  rendering performance, improved Component painting performance, faster
+  `juce_gui_basics` compile times, and reduced stack size for `Component` and
+  `ListenerList` — meaningful gains for our primary Windows platform and our
+  custom-painted Preferences chain list with lane dropdowns.
+- API: replaced the deprecated `AudioProcessor::createEditorIfNeeded()` call in
+  `PluginWindow::getWindowFor()` with `createEditorAndMakeActive()`. The new method
+  also registers the editor pointer back on the `AudioProcessor` so
+  `getActiveEditor()` returns the correct result. No behavioural change for
+  LightHost — we already store our own pointer to the editor.
+
+---
+
 ## [4.0.0] — 2026-05-28
 
 ### Feature — Parallel Processing Lanes + Plugin Delay Compensation
