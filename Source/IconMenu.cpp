@@ -1,4 +1,5 @@
 #include "IconMenu.hpp"
+#include "DelayProcessor.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
 #include <BinaryData.h>
@@ -477,11 +478,31 @@ void IconMenu::reconnectGraph()
     static constexpr int kChannelOne = 0;
     static constexpr int kChannelTwo = 1;
 
+    // Sweep any leftover PDC delay nodes from the previous wiring — they will be
+    // re-created below sized to the current per-lane latency.  Collect IDs first
+    // because graph.getNodes() returns a ReferenceCountedArray and mutating it
+    // during iteration is unsafe.  removeNode() also removes the node's connections.
+    {
+        std::vector<NodeID> stale;
+        for (auto* node : graph.getNodes())
+            if (dynamic_cast<DelayProcessor*> (node->getProcessor()) != nullptr)
+                stale.push_back (node->nodeID);
+        for (auto id : stale)
+            graph.removeNode (id);
+    }
+
     for (auto& c : graph.getConnections())
         graph.removeConnection (c);
 
     const auto& sorted = getTimeSortedList();
     const auto numPlugins = static_cast<int> (sorted.size());
+
+    auto* settings = getAppProperties().getUserSettings();
+    struct LaneInfo {
+        std::vector<NodeID> nodes;
+        double latencySamples = 0.0;
+    };
+    std::map<int, LaneInfo> lanesData;
 
     if (numPlugins == 0)
     {
@@ -491,55 +512,77 @@ void IconMenu::reconnectGraph()
         return;
     }
 
-    auto* settings = getAppProperties().getUserSettings();
-    NodeID lastActiveNodeId {};
-    bool hasInputConnected = false;
-
     for (int i = 0; i < numPlugins; ++i)
     {
-        const auto& plugin = sorted[static_cast<size_t> (i)];
-        const auto nodeIdVal = settings->getIntValue (getKey ("nodeid", plugin), 0);
-        if (nodeIdVal == 0)
-            continue;
-
+        const auto& pd = sorted[static_cast<size_t> (i)];
+        const auto nodeIdVal = settings->getIntValue (getKey ("nodeid", pd), 0);
+        if (nodeIdVal == 0) continue;
         const NodeID nodeId { static_cast<uint32> (nodeIdVal) };
-        if (graph.getNodeForId (nodeId) == nullptr)
-            continue;
 
-        if (settings->getBoolValue (getKey ("bypass", plugin), false))
-            continue;
-
-        if (! hasInputConnected)
+        if (auto* node = graph.getNodeForId (nodeId))
         {
-            graph.addConnection ({ { inputNodeId, kChannelOne }, { nodeId, kChannelOne } });
-            if (! graph.addConnection ({ { inputNodeId, kChannelTwo }, { nodeId, kChannelTwo } }))
-                graph.addConnection ({ { inputNodeId, kChannelOne }, { nodeId, kChannelTwo } });
-            hasInputConnected = true;
+            const bool bypassed = settings->getBoolValue (getKey ("bypass", pd), false);
+            node->setBypassed (bypassed);
+            int lane = settings->getIntValue (getKey ("lane", pd), 0);
+            
+            lanesData[lane].nodes.push_back(nodeId);
+            // Bypassed plugins contribute zero latency by design (DAW convention) —
+            // PDC compensates the active processing path only.
+            if (!bypassed && node->getProcessor())
+                lanesData[lane].latencySamples += node->getProcessor()->getLatencySamples();
         }
-        else
-        {
-            graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { nodeId, kChannelOne } });
-            graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { nodeId, kChannelTwo } });
-        }
-
-        lastActiveNodeId = nodeId;
     }
 
-    if (lastActiveNodeId.uid != 0)
+    if (lanesData.empty())
     {
-        graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { outputNodeId, kChannelOne } });
-        graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { outputNodeId, kChannelTwo } });
-    }
-    else
-    {
-        // All plugins bypassed — wire input directly to output
         graph.addConnection ({ { inputNodeId, kChannelOne }, { outputNodeId, kChannelOne } });
         if (! graph.addConnection ({ { inputNodeId, kChannelTwo }, { outputNodeId, kChannelTwo } }))
             graph.addConnection ({ { inputNodeId, kChannelOne }, { outputNodeId, kChannelTwo } });
+        return;
+    }
+
+    double maxLatency = 0.0;
+    for (const auto& [lane, info] : lanesData)
+        if (info.latencySamples > maxLatency)
+            maxLatency = info.latencySamples;
+
+    for (auto& [lane, info] : lanesData)
+    {
+        if (info.nodes.empty()) continue;
+
+        NodeID lastActiveNodeId {};
+        for (const auto& nodeId : info.nodes)
+        {
+            if (lastActiveNodeId.uid == 0)
+            {
+                graph.addConnection ({ { inputNodeId, kChannelOne }, { nodeId, kChannelOne } });
+                if (! graph.addConnection ({ { inputNodeId, kChannelTwo }, { nodeId, kChannelTwo } }))
+                    graph.addConnection ({ { inputNodeId, kChannelOne }, { nodeId, kChannelTwo } });
+            }
+            else
+            {
+                graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { nodeId, kChannelOne } });
+                if (! graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { nodeId, kChannelTwo } }))
+                    graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { nodeId, kChannelTwo } });
+            }
+            lastActiveNodeId = nodeId;
+        }
+
+        const int latencyDiff = static_cast<int>(maxLatency - info.latencySamples);
+        if (latencyDiff > 0)
+        {
+            auto delayNodeId = graph.addNode(std::make_unique<DelayProcessor>(latencyDiff))->nodeID;
+            graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { delayNodeId, kChannelOne } });
+            if (! graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { delayNodeId, kChannelTwo } }))
+                graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { delayNodeId, kChannelTwo } });
+            lastActiveNodeId = delayNodeId;
+        }
+
+        graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { outputNodeId, kChannelOne } });
+        if (! graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { outputNodeId, kChannelTwo } }))
+            graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { outputNodeId, kChannelTwo } });
     }
 }
-
-//==============================================================================
 void IconMenu::autoMatchSampleRate()
 {
     auto* device = deviceManager.getCurrentAudioDevice();
@@ -625,6 +668,10 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
     }
     else if (changed == &deviceManager)
     {
+        // JUCE marshals ChangeBroadcaster callbacks to the message thread; assert to
+        // catch any future regression that would make reconnectGraph() unsafe here.
+        JUCE_ASSERT_MESSAGE_THREAD;
+
         if (isHandlingDeviceChange)
             return;
 
@@ -925,16 +972,23 @@ void IconMenu::showPreferences()
     for (const auto& plugin : chain)
         bypassStates.push_back (settings->getBoolValue (getKey ("bypass", plugin), false));
 
+    std::vector<int> laneStates;
+    laneStates.reserve (chain.size());
+    for (const auto& pd : chain)
+        laneStates.push_back (getAppProperties().getUserSettings()->getIntValue (getKey ("lane", pd), 0));
+
     preferencesWindow = std::make_unique<PreferencesWindow> (
         deviceManager,
         knownPluginList,
         chain,
         bypassStates,
+        laneStates,
         [safe] (const std::vector<PluginDescription>& newChain,
-                const std::vector<bool>& newBypass)
+                const std::vector<bool>& newBypass,
+                const std::vector<int>& newLanes)
         {
             if (auto* im = safe.getComponent())
-                im->applyPluginChain (newChain, newBypass);
+                im->applyPluginChain (newChain, newBypass, newLanes);
         },
         [safe] (const PluginDescription& pd)
         {
@@ -979,7 +1033,12 @@ void IconMenu::refreshPreferencesIfOpen()
     for (const auto& p : chain)
         bypass.push_back (settings->getBoolValue (getKey ("bypass", p), false));
 
-    preferencesWindow->refreshPluginChain (chain, bypass);
+    std::vector<int> lanes;
+    lanes.reserve (chain.size());
+    for (const auto& pd : chain)
+        lanes.push_back (getAppProperties().getUserSettings()->getIntValue (getKey("lane", pd), 0));
+
+    preferencesWindow->refreshPluginChain (chain, bypass, lanes);
 }
 
 void IconMenu::openPluginEditorFor (const PluginDescription& pd)
@@ -1004,7 +1063,8 @@ void IconMenu::openPluginEditorFor (const PluginDescription& pd)
 }
 
 void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
-                                  const std::vector<bool>& bypassStates)
+                                  const std::vector<bool>& bypassStates,
+                                  const std::vector<int>& lanes)
 {
     // Helper: stable string identity for matching plugins across lists.
     auto identity = [] (const PluginDescription& pd) -> String
@@ -1079,6 +1139,7 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         settings->removeValue (getKey ("order",  existing));
         settings->removeValue (getKey ("bypass", existing));
         settings->removeValue (getKey ("state",  existing));
+        settings->removeValue (getKey ("lane",  existing));
         settings->removeValue (getKey ("nodeid", existing));
         activePluginList.removeType (existing);  // triggers changeListener → persists XML
     }
@@ -1111,6 +1172,8 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         settings->setValue (getKey ("order", newChain[i]), baseTime + static_cast<int> (i));
         if (i < bypassStates.size())
             settings->setValue (getKey ("bypass", newChain[i]), bypassStates[i]);
+        if (i < lanes.size())
+            settings->setValue (getKey ("lane", newChain[i]), lanes[i]);
     }
 
     settings->saveIfNeeded();

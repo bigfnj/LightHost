@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.28)
 set(CMAKE_SYSTEM_VERSION "10.0.26100.0" CACHE STRING "Windows SDK version" FORCE)
 
 project(LightHost
-    VERSION 3.8.1
+    VERSION 4.0.0
     DESCRIPTION "Lightweight VST/AU/VST3 Audio Plugin Host"
     HOMEPAGE_URL "https://github.com/BigFNj"
     LANGUAGES C CXX
@@ -41,6 +41,7 @@ juce_add_gui_app(LightHost
 # ── Source files ────────────────────────────────────────────────────────────────
 target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
+    Source/DelayProcessor.hpp
     Source/IconMenu.cpp
     Source/PluginWindow.cpp
     Source/PreferencesWindow.cpp
