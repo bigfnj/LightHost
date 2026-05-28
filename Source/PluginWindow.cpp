@@ -152,7 +152,10 @@ PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node::Ptr node,
     {
         if (type == Normal)
         {
-            ui = processor->createEditorIfNeeded();
+            // JUCE 8.0.13+ replaced createEditorIfNeeded() with createEditorAndMakeActive(),
+            // which also registers the editor pointer back on the AudioProcessor so
+            // getActiveEditor() returns the correct result.
+            ui = processor->createEditorAndMakeActive();
             if (ui == nullptr)
                 type = Generic;
         }

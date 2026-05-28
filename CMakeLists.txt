@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.28)
 set(CMAKE_SYSTEM_VERSION "10.0.26100.0" CACHE STRING "Windows SDK version" FORCE)
 
 project(LightHost
-    VERSION 4.0.0
+    VERSION 4.0.1
     DESCRIPTION "Lightweight VST/AU/VST3 Audio Plugin Host"
     HOMEPAGE_URL "https://github.com/BigFNj"
     LANGUAGES C CXX
