@@ -4,6 +4,70 @@
 
 ## [Unreleased]
 
+---
+
+## [4.0.0] — 2026-05-28
+
+### Feature — Parallel Processing Lanes + Plugin Delay Compensation
+
+#### Parallel Lanes (`Source/IconMenu.cpp`, `Source/PreferencesWindow.cpp`, `Source/PreferencesWindow.h`)
+
+- Each plugin can now be assigned to one of four parallel processing lanes (Lane 0–3) via
+  a per-row dropdown in the Preferences chain list. Plugins on the same lane execute in
+  sequence; lanes run in parallel and sum into the output node.
+- The graph wiring in `IconMenu::reconnectGraph()` groups nodes by lane via a `std::map<int, LaneInfo>`,
+  then connects `input → lane[0..n] → output` per lane. The JUCE `AudioProcessorGraph` handles
+  the topological ordering and the implicit summing at the output node.
+- Lane assignments are persisted per-plugin as `plugin-lane-<plugin-key>` integer entries in the
+  settings file, alongside the existing order/bypass/state values.
+- The `AudioChainListComponent` now carries a third companion vector (`lanes`) maintained in
+  lockstep with `items` and `bypassed`. A central `syncBypassedSize()` helper enforces the invariant
+  across all mutation sites (add, delete, drag-reorder).
+
+#### Plugin Delay Compensation (`Source/DelayProcessor.hpp`, `Source/IconMenu.cpp`)
+
+- New `DelayProcessor` audio processor — a lightweight 2-channel circular-buffer delay that buffers
+  audio by exactly N samples per `prepareToPlay`. Reports zero latency itself; transparently
+  inserted into the graph for PDC compensation only.
+- `reconnectGraph()` now sums per-lane plugin latencies (`getLatencySamples()`), computes the
+  maximum across lanes, and inserts a `DelayProcessor` node on each shorter lane before its
+  output connection so all lanes arrive sample-aligned at the output node.
+- Bypassed plugins contribute zero latency by design (matches DAW convention — PDC compensates
+  the active processing path only).
+
+### Stability — QA Hardening of Lanes + PDC Implementation
+
+#### `DelayProcessor` Node Lifecycle (`Source/IconMenu.cpp`)
+
+- Fixed memory leak: `reconnectGraph()` now sweeps and removes existing `DelayProcessor` nodes
+  before re-wiring. Previously, each call removed connections but left old delay nodes orphaned
+  in the graph — unbounded growth on every bypass toggle, plugin move, device change, or chain edit.
+- IDs are collected first, then nodes removed in a second pass, because mutating
+  `graph.getNodes()` (a `ReferenceCountedArray`) during iteration is unsafe. `removeNode()`
+  also disconnects the node automatically.
+
+#### Lane Vector Invariant Across All Mutation Sites (`Source/PreferencesWindow.cpp`)
+
+- Fixed lane-not-saved bug when adding a plugin via the "+ Add Plugin" menu: the callback now
+  calls `syncBypassedSize()` after `items.push_back()`, extending both `bypassed` and `lanes`
+  to match. Previously `lanes` was left undersized, so the new plugin's lane assignment was
+  silently dropped on Apply.
+
+#### Defensive Threading Assertion (`Source/IconMenu.cpp`)
+
+- Added `JUCE_ASSERT_MESSAGE_THREAD` at the top of the device-change branch in
+  `changeListenerCallback()`. JUCE's `ChangeBroadcaster` marshals callbacks to the message thread,
+  so `reconnectGraph()` is safe to call there — the assertion makes the invariant explicit and
+  catches any future regression in debug builds.
+
+#### `DelayProcessor` Allocation Safety (`Source/DelayProcessor.hpp`)
+
+- Clamp `delayInSamples` in `prepareToPlay()` to at most 10 seconds at the current sample rate
+  before sizing the circular buffer. Guards against a misbehaving plugin reporting absurd
+  latency that would otherwise trigger a gigabyte-sized allocation.
+- Added `using juce::AudioProcessor::processBlock;` to expose the base-class double-precision
+  overload (silences `-Woverloaded-virtual` from the float-only override).
+
 ### Stability — Crash Hardening Around Preferences, Apply, and Plugin Editors
 
 #### Runtime Logging for Silent Failures (`Source/HostStartup.cpp`)

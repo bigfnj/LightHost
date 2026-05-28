@@ -35,7 +35,8 @@ private:
     void reloadPlugins();
     void showPreferences();
     void applyPluginChain (const std::vector<juce::PluginDescription>& newChain,
-                           const std::vector<bool>& bypassStates);
+                           const std::vector<bool>& bypassStates,
+                           const std::vector<int>& laneStates);
     void openPluginEditorFor (const juce::PluginDescription& pd);
     void refreshPreferencesIfOpen();
     void loadActivePlugins();

@@ -23,8 +23,10 @@ public:
         juce::KnownPluginList& knownPlugins,
         const std::vector<juce::PluginDescription>& activeChain,
         const std::vector<bool>& bypassStates,
+        const std::vector<int>& laneStates,
         std::function<void (const std::vector<juce::PluginDescription>&,
-                            const std::vector<bool>&)> onApply,
+                            const std::vector<bool>&,
+                            const std::vector<int>&)> onApply,
         std::function<void (const juce::PluginDescription&)> onEditPlugin,
         std::function<void()> onClose);
 
@@ -32,7 +34,8 @@ public:
     void closeButtonPressed() override;
 
     void refreshPluginChain (const std::vector<juce::PluginDescription>& chain,
-                             const std::vector<bool>& bypassStates);
+                             const std::vector<bool>& bypassStates,
+                             const std::vector<int>& laneStates);
 
 private:
     std::function<void()> onCloseFn;

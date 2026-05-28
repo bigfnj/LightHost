@@ -54,12 +54,14 @@ public:
 
     std::vector<juce::PluginDescription> items;
     std::vector<bool>                    bypassed;
+    std::vector<int>                     lanes;
     std::function<void()>                onChange;
     std::function<void (int)>            onEditClicked;
 
     void syncBypassedSize()
     {
         bypassed.resize (items.size(), false);
+        lanes.resize (items.size(), 0);
     }
 
     int getPreferredHeight() const noexcept
@@ -127,6 +129,14 @@ public:
             g.setColour (txt.withAlpha (0.70f));
             g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
             g.drawText ("Edit", editRect, juce::Justification::centred);
+            
+            // ── Lane button ────────────────────────────────────────────────
+            const auto laneRect = getLaneButtonArea (i);
+            g.setColour (bg.darker (0.05f));
+            g.fillRoundedRectangle (laneRect.toFloat(), 3.0f);
+            g.setColour (txt.withAlpha (0.85f));
+            int ln = (static_cast<size_t>(i) < lanes.size()) ? lanes[static_cast<size_t>(i)] : 0;
+            g.drawText ("Lane " + juce::String(ln), laneRect, juce::Justification::centred);
 
             // ── Drag handle (three horizontal bars, right edge) ────────────
             g.setColour (txt.withAlpha (0.28f));
@@ -182,12 +192,35 @@ public:
                     safe->items.erase (safe->items.begin() + row);
                     if (row < static_cast<int> (safe->bypassed.size()))
                         safe->bypassed.erase (safe->bypassed.begin() + row);
+                    if (row < static_cast<int> (safe->lanes.size()))
+                        safe->lanes.erase (safe->lanes.begin() + row);
                     if (safe->onChange) safe->onChange();
                     safe->repaint();
                 });
             return;
         }
 
+        // Lane button
+        if (getLaneButtonArea(row).contains(e.getPosition()))
+        {
+            juce::PopupMenu m;
+            m.addItem(1, "Lane 0");
+            m.addItem(2, "Lane 1");
+            m.addItem(3, "Lane 2");
+            m.addItem(4, "Lane 3");
+            juce::Component::SafePointer<AudioChainListComponent> safe (this);
+            m.showMenuAsync (
+                juce::PopupMenu::Options{}.withTargetScreenArea ({ e.getScreenX(), e.getScreenY(), 1, 1 }),
+                [safe, row] (int result)
+                {
+                    if (safe == nullptr || result == 0) return;
+                    safe->lanes.resize (safe->items.size(), 0);
+                    safe->lanes[static_cast<size_t>(row)] = result - 1;
+                    if (safe->onChange) safe->onChange();
+                    safe->repaint();
+                });
+            return;
+        }
         // Checkbox
         if (getCheckboxArea (row).contains (e.getPosition()))
         {
@@ -232,14 +265,18 @@ public:
             const size_t src    = static_cast<size_t> (dragSourceRow);
             auto plugin         = items[src];
             const bool bypass   = (src < bypassed.size()) ? bypassed[src] : false;
+            const int  lane     = (src < lanes.size()) ? lanes[src] : 0;
 
             items.erase   (items.begin()    + dragSourceRow);
             if (src < bypassed.size())
                 bypassed.erase (bypassed.begin() + dragSourceRow);
+            if (src < lanes.size())
+                lanes.erase (lanes.begin() + dragSourceRow);
 
             const int adj = (insertAt > dragSourceRow) ? insertAt - 1 : insertAt;
             items.insert   (items.begin()    + adj, plugin);
             bypassed.insert (bypassed.begin() + adj, bypass);
+            lanes.insert (lanes.begin() + adj, lane);
 
             if (onChange) onChange();
         }
@@ -260,15 +297,19 @@ private:
         return { 8, cy - 9, 18, 18 };
     }
 
-    [[nodiscard]] juce::Rectangle<int> getNameArea (int row) const noexcept
+        [[nodiscard]] juce::Rectangle<int> getNameArea (int row) const noexcept
     {
-        // Left edge after checkbox (34), right edge before Edit button area
-        return { 34, row * kRowHeight, getWidth() - 34 - 58 - 26, kRowHeight };
+        return { 34, row * kRowHeight, getWidth() - 34 - 118 - 26, kRowHeight };
     }
 
     [[nodiscard]] juce::Rectangle<int> getEditButtonArea (int row) const noexcept
     {
         return { getWidth() - 80, row * kRowHeight + 7, 52, kRowHeight - 14 };
+    }
+
+    [[nodiscard]] juce::Rectangle<int> getLaneButtonArea (int row) const noexcept
+    {
+        return { getWidth() - 140, row * kRowHeight + 7, 52, kRowHeight - 14 };
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioChainListComponent)
@@ -293,8 +334,10 @@ public:
         juce::KnownPluginList& knownPlugins_,
         const std::vector<juce::PluginDescription>& activeChain,
         const std::vector<bool>& bypassStates,
+        const std::vector<int>& laneStates,
         std::function<void (const std::vector<juce::PluginDescription>&,
-                            const std::vector<bool>&)> onApply,
+                            const std::vector<bool>&,
+                            const std::vector<int>&)> onApply,
         std::function<void (const juce::PluginDescription&)> onEditPlugin)
         : deviceManager (dm),
           knownPlugins   (knownPlugins_),
@@ -313,6 +356,7 @@ public:
         addAndMakeVisible (chainSectionLabel);
         chainList.items    = activeChain;
         chainList.bypassed = bypassStates;
+        chainList.lanes    = laneStates;
         chainList.syncBypassedSize();
         chainList.onChange = [this] { updateChainListHeight(); chainList.repaint(); };
         chainList.onEditClicked = [this] (int i)
@@ -382,10 +426,10 @@ public:
     }
 
     void setChain (const std::vector<juce::PluginDescription>& chain,
-                   const std::vector<bool>& bypass)
+                   const std::vector<bool>& bypass, const std::vector<int>& laneStates)
     {
         chainList.items    = chain;
-        chainList.bypassed = bypass;
+        chainList.bypassed = bypass; chainList.lanes = laneStates;
         chainList.syncBypassedSize();
         updateChainListHeight();
         chainList.repaint();
@@ -483,7 +527,8 @@ private:
     juce::KnownPluginList&    knownPlugins;
 
     std::function<void (const std::vector<juce::PluginDescription>&,
-                        const std::vector<bool>&)>    onApplyFn;
+                        const std::vector<bool>&,
+                        const std::vector<int>&)>    onApplyFn;
     std::function<void (const juce::PluginDescription&)> onEditPluginFn;
 
     // INPUT
@@ -699,7 +744,7 @@ private:
                     juce::Logger::writeToLog ("Preferences: setAudioDeviceSetup error: " + error);
 
                 // 3. Plugin chain + bypass states
-                if (safe->onApplyFn) safe->onApplyFn (chain, bypass);
+                if (safe->onApplyFn) safe->onApplyFn (chain, bypass, safe->chainList.lanes);
 
                 // 4. Re-enable Apply now that all restarts are complete
                 if (safe != nullptr)
@@ -785,6 +830,7 @@ private:
                 if (result <= 0 || result > static_cast<int> (types.size())) return;
                 safe->chainList.items.push_back (types[static_cast<size_t> (result - 1)]);
                 safe->chainList.bypassed.push_back (false);
+                safe->chainList.syncBypassedSize();  // extends lanes too — keeps the trio in lockstep
                 safe->updateChainListHeight();
                 safe->chainList.repaint();
             });
@@ -801,8 +847,10 @@ PreferencesWindow::PreferencesWindow (
     juce::KnownPluginList& knownPlugins,
     const std::vector<juce::PluginDescription>& activeChain,
     const std::vector<bool>& bypassStates,
+    const std::vector<int>& laneStates,
     std::function<void (const std::vector<juce::PluginDescription>&,
-                        const std::vector<bool>&)> onApply,
+                        const std::vector<bool>&,
+                        const std::vector<int>&)> onApply,
     std::function<void (const juce::PluginDescription&)> onEditPlugin,
     std::function<void()> onClose)
     : DocumentWindow ("Preferences",
@@ -812,7 +860,7 @@ PreferencesWindow::PreferencesWindow (
       onCloseFn (std::move (onClose))
 {
     auto* content = new PreferencesContentComponent (
-        deviceManager, knownPlugins, activeChain, bypassStates,
+        deviceManager, knownPlugins, activeChain, bypassStates, laneStates,
         std::move (onApply), std::move (onEditPlugin));
 
     content->setSize (520, 560);
@@ -832,8 +880,9 @@ void PreferencesWindow::closeButtonPressed()
 }
 
 void PreferencesWindow::refreshPluginChain (const std::vector<juce::PluginDescription>& chain,
-                                             const std::vector<bool>& bypassStates)
+                                             const std::vector<bool>& bypassStates,
+                                             const std::vector<int>& laneStates)
 {
     if (auto* content = dynamic_cast<PreferencesContentComponent*> (getContentComponent()))
-        content->setChain (chain, bypassStates);
+        content->setChain (chain, bypassStates, laneStates);
 }
