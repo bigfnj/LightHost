@@ -1,18 +1,24 @@
 # Light Host
 
-Light Host is a lightweight desktop audio plugin host built with JUCE. It is designed to live in the system tray on Windows or the menu bar on macOS, with no permanent main window. Audio flows through a realtime `AudioProcessorGraph`, and plugins can be added, removed, reordered, bypassed, and edited from the tray/menu UI and the Preferences window.
+Light Host is a lightweight desktop audio plugin host built with **JUCE 8.0.13**. It is designed to live in the system tray on Windows or the menu bar on macOS, with no permanent main window. Audio flows through a realtime `AudioProcessorGraph` with support for parallel processing lanes and automatic delay compensation. Plugins can be added, removed, reordered, bypassed, edited, and assigned to lanes from the tray/menu UI and the Preferences window.
+
+Current version: **4.0.1** — see [CHANGELOG.md](CHANGELOG.md).
 
 ## What It Does
 
-- Hosts audio plugins in a simple chained signal path
+- Hosts audio plugins in chained and parallel signal paths
 - Runs as a tray/menu-bar utility instead of a traditional DAW-style app
+- Supports up to four **parallel processing lanes** (Lane 0–3) with automatic
+  **Plugin Delay Compensation** so all lanes arrive sample-aligned at the output
 - Opens a unified Preferences window for:
   - input/output device selection
   - device API selection
   - sample rate and buffer size
   - plugin chain editing
+  - per-plugin lane assignment
 - Supports plugin bypass, reorder, delete, and editor opening
-- Saves plugin state, device settings, and plugin order between launches
+- Saves plugin state, device settings, plugin order, and lane assignments
+  between launches
 - Loads active plugins in the background so startup stays responsive
 
 ## Supported Plugin Formats
@@ -27,9 +33,24 @@ Platform support depends on the build target and available SDK support:
 
 - Left-click tray icon: opens Preferences
 - Right-click tray icon: opens the action menu
-- Plugins are connected in series through a JUCE `AudioProcessorGraph`
+- Plugins on the same lane are connected in series through a JUCE `AudioProcessorGraph`
+- Lanes run in parallel; their outputs sum automatically at the graph's output node
+- An internal `DelayProcessor` is auto-inserted on shorter lanes so all lanes
+  remain sample-aligned (Plugin Delay Compensation)
 - If all plugins are bypassed, input is wired directly to output
 - Mono input is duplicated to stereo output where needed
+
+## Lanes and PDC
+
+Each plugin row in the Preferences chain list has a **Lane** dropdown (Lane 0–3).
+Plugins on the same lane are chained in order; lanes are processed in parallel
+and summed at the output. Lane assignments persist between launches.
+
+Plugin Delay Compensation is automatic: on every graph reconnect, LightHost
+sums each lane's `getLatencySamples()`, finds the maximum across lanes, and
+inserts a transparent delay processor on every shorter lane so the summing
+point stays phase-aligned. Bypassed plugins contribute zero latency, matching
+standard DAW convention.
 
 ## Project Layout
 
@@ -150,7 +171,6 @@ If the host crashes without a message, the log should be the first place to chec
 
 ## Known Limitations
 
-- No latency compensation
 - Stereo-focused routing only
 - No side-chain routing
 - No MIDI routing
