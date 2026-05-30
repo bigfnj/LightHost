@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+jobs:
+  build-windows:
+    name: Build Windows Release
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build --preset release
+
+      - name: Package Windows artifact
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $exeDir  = "build\release\LightHost_artefacts\Release"
+          $zipName = "LightHost-${version}-windows-x64.zip"
+          Compress-Archive -Path "$exeDir\Light Host.exe" -DestinationPath $zipName
+
+      - name: Upload Windows zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: LightHost-${{ github.ref_name }}-windows-x64.zip
+          retention-days: 1
+
+  build-linux:
+    name: Build Linux Release
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install JUCE Linux dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libfreetype-dev \
+            libfontconfig1-dev \
+            libx11-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxext-dev \
+            libxinerama-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            libglu1-mesa-dev \
+            mesa-common-dev
+
+      - name: Configure
+        run: cmake --preset ninja-release
+
+      - name: Build
+        run: cmake --build build/ninja-release -j$(nproc)
+
+      - name: Package Linux artifact
+        run: |
+          VERSION="${{ github.ref_name }}"
+          BIN_DIR="build/ninja-release/LightHost_artefacts"
+          TAR_NAME="LightHost-${VERSION}-linux-x64.tar.gz"
+          tar -czf "$TAR_NAME" -C "$BIN_DIR" "Light Host"
+
+      - name: Upload Linux tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: LightHost-${{ github.ref_name }}-linux-x64.tar.gz
+          retention-days: 1
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-24.04
+    needs: [build-windows, build-linux]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VER="${VERSION#v}"
+          awk "/^## \[${VER}\]/{found=1; next} found && /^## \[/{exit} found{print}" \
+              CHANGELOG.md > release_notes.md
+          echo "----- Release notes preview -----"
+          cat release_notes.md
+          echo "----- end -----"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: LightHost ${{ github.ref_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/windows-release/*.zip
+            dist/linux-release/*.tar.gz

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.28)
+cmake_minimum_required(VERSION 4.2)  # Visual Studio 18 2026 generator requires CMake 4.2+
 
 # ── Windows SDK version (Windows 11 26100) ──────────────────────────────────────
 # Must be set before project() so the VS generator picks it up for WindowsTargetPlatformVersion.
