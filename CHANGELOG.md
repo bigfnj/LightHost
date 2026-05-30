@@ -6,6 +6,23 @@
 
 ---
 
+## [4.0.2] — 2026-05-30
+
+### Bugfix — Lane Changes Silently Discarded by Apply
+
+- `IconMenu::applyPluginChain()` had a "skip Apply if nothing changed"
+  optimization that compared only the plugin order and bypass states between
+  the current and requested chains. Lane assignments were not included in the
+  comparison, so when a user changed only a lane dropdown and clicked Apply,
+  the function detected no change and returned early — **before** writing the
+  new lane values to settings. On the next launch the lane reverted to its
+  previously persisted value.
+- The fix extends the comparison to also detect lane mismatches, so Apply
+  proceeds and `settings->setValue(getKey("lane", ...), ...)` is reached for
+  every plugin whose lane was changed.
+
+---
+
 ## [4.0.1] — 2026-05-28
 
 ### Dependency — JUCE 8.0.12 → 8.0.13

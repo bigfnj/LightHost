@@ -1075,22 +1075,29 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     auto* settings = getAppProperties().getUserSettings();
     const auto& currentChain = getTimeSortedList();
 
-    bool identicalOrderAndBypass = currentChain.size() == newChain.size();
-    for (size_t i = 0; identicalOrderAndBypass && i < newChain.size(); ++i)
+    bool identicalChain = currentChain.size() == newChain.size();
+    for (size_t i = 0; identicalChain && i < newChain.size(); ++i)
     {
         if (identity (currentChain[i]) != identity (newChain[i]))
         {
-            identicalOrderAndBypass = false;
+            identicalChain = false;
             break;
         }
 
         const bool currentBypass = settings->getBoolValue (getKey ("bypass", currentChain[i]), false);
         const bool requestedBypass = i < bypassStates.size() ? bypassStates[i] : false;
         if (currentBypass != requestedBypass)
-            identicalOrderAndBypass = false;
+            identicalChain = false;
+
+        // Lane changes alone would not flip order/bypass — include them here
+        // or Apply silently no-ops when only the lane dropdown was changed.
+        const int currentLane = settings->getIntValue (getKey ("lane", currentChain[i]), 0);
+        const int requestedLane = i < lanes.size() ? lanes[i] : 0;
+        if (currentLane != requestedLane)
+            identicalChain = false;
     }
 
-    if (identicalOrderAndBypass)
+    if (identicalChain)
     {
         juce::Logger::writeToLog ("IconMenu: Apply pressed with no plugin-chain changes");
         return;
