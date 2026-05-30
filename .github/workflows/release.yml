@@ -43,6 +43,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup CMake (>= 4.2)
+        uses: lukka/get-cmake@latest
+        # ubuntu-24.04 ships CMake 3.31; we require 4.2+ per cmake_minimum_required.
+
       - name: Install JUCE Linux dependencies
         run: |
           sudo apt-get update -qq
