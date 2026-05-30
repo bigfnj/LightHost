@@ -75,8 +75,10 @@ jobs:
       - name: Package Linux artifact
         run: |
           VERSION="${{ github.ref_name }}"
-          BIN_DIR="build/ninja-release/LightHost_artefacts"
+          # JUCE places the binary under <artefacts>/Release/ even for single-config Ninja
+          BIN_DIR="build/ninja-release/LightHost_artefacts/Release"
           TAR_NAME="LightHost-${VERSION}-linux-x64.tar.gz"
+          ls -la "$BIN_DIR"
           tar -czf "$TAR_NAME" -C "$BIN_DIR" "Light Host"
 
       - name: Upload Linux tarball
