@@ -1,15 +1,26 @@
 {
   "schema": 1,
   "project": "LightHost",
-  "last_audit_commit": "5768fe0",
-  "last_audit_at": "2026-06-01T19:33:51Z",
+  "last_audit_commit": "7e676b1",
+  "last_audit_at": "2026-06-01T19:52:25Z",
   "generator": "manual-bootstrap/1.0.0",
-  "overview": "Lightweight desktop audio plugin host built on JUCE 8.0.13. Lives in the system tray (Windows) / menu bar (macOS) with no main window; audio flows through a realtime AudioProcessorGraph that supports up to 4 parallel processing lanes with automatic Plugin Delay Compensation (PDC). Hosts VST/VST3/AU plugins. Settings — device choice, plugin chain, lane assignments, per-plugin state — persist via PropertiesFile. Current version 4.0.2. Forked from Rolando Islas (2015), GPLv2+.",
+  "overview": "Lightweight desktop audio plugin host built on JUCE 8.0.13. Lives in the system tray (Windows) / menu bar (macOS) with no main window; audio flows through a realtime AudioProcessorGraph that supports up to 4 parallel processing lanes with automatic Plugin Delay Compensation (PDC). Hosts VST/VST3/AU plugins. Settings — device choice, plugin chain, lane assignments, per-plugin state — persist via PropertiesFile. Current version 4.0.3. Forked from Rolando Islas (2015), GPLv2+.",
   "frameworks": [
-    {"name": "JUCE", "version": "8.0.13"},
-    {"name": "C++23"},
-    {"name": "CMake", "version": ">=4.2"},
-    {"name": "Steinberg VST2.4 SDK", "version": "vendored under lib/"}
+    {
+      "name": "JUCE",
+      "version": "8.0.13"
+    },
+    {
+      "name": "C++23"
+    },
+    {
+      "name": "CMake",
+      "version": ">=4.2"
+    },
+    {
+      "name": "Steinberg VST2.4 SDK",
+      "version": "vendored under lib/"
+    }
   ],
   "test_command": "",
   "tracked_globs": {
