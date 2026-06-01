@@ -587,7 +587,7 @@ void IconMenu::reconnectGraph()
 void IconMenu::logAudioConfig (const juce::String& contextLabel) const
 {
     const auto setup    = deviceManager.getAudioDeviceSetup();
-    const auto* device  = deviceManager.getCurrentAudioDevice();
+    auto* device        = deviceManager.getCurrentAudioDevice();
     const auto driver   = deviceManager.getCurrentAudioDeviceType();
 
     const int activeIn  = setup.inputChannels.countNumberOfSetBits();
