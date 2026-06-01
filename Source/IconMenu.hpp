@@ -54,6 +54,7 @@ private:
     [[nodiscard]] const std::vector<juce::PluginDescription>& getTimeSortedList() const;
     void reconnectGraph();
     void autoMatchSampleRate();
+    void logAudioConfig (const juce::String& contextLabel) const;
 
     #if JUCE_WINDOWS
     [[nodiscard]] static juce::File getStartupShortcutPath();

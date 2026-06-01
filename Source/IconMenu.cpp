@@ -280,6 +280,8 @@ IconMenu::IconMenu()
     deviceManager.addAudioCallback (&player);
     deviceManager.addChangeListener (this);
 
+    logAudioConfig ("startup");
+
     // Known plugins
     if (auto savedPluginList = getAppProperties().getUserSettings()->getXmlValue ("pluginList"))
         knownPluginList.recreateFromXml (*savedPluginList);
@@ -582,6 +584,29 @@ void IconMenu::reconnectGraph()
             graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { outputNodeId, kChannelTwo } });
     }
 }
+void IconMenu::logAudioConfig (const juce::String& contextLabel) const
+{
+    const auto setup    = deviceManager.getAudioDeviceSetup();
+    const auto* device  = deviceManager.getCurrentAudioDevice();
+    const auto driver   = deviceManager.getCurrentAudioDeviceType();
+
+    const int activeIn  = setup.inputChannels.countNumberOfSetBits();
+    const int activeOut = setup.outputChannels.countNumberOfSetBits();
+    const int devIn     = device != nullptr ? device->getInputChannelNames().size()  : 0;
+    const int devOut    = device != nullptr ? device->getOutputChannelNames().size() : 0;
+    const double sr     = setup.sampleRate;
+    const int bufSize   = setup.bufferSize;
+
+    juce::Logger::writeToLog (
+        "AudioConfig [" + contextLabel + "]: driver=" + driver
+        + " input='" + setup.inputDeviceName + "' (active " + juce::String (activeIn)
+        + "/" + juce::String (devIn) + " ch)"
+        + " output='" + setup.outputDeviceName + "' (active " + juce::String (activeOut)
+        + "/" + juce::String (devOut) + " ch)"
+        + " sr=" + juce::String (sr, 0) + "Hz"
+        + " buf=" + juce::String (bufSize) + " samples");
+}
+
 void IconMenu::autoMatchSampleRate()
 {
     auto* device = deviceManager.getCurrentAudioDevice();
@@ -682,6 +707,7 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
         autoMatchSampleRate();
         juce::Logger::writeToLog ("IconMenu: audio device change handled for type "
                                   + deviceManager.getCurrentAudioDeviceType());
+        logAudioConfig ("device-change");
 
         if (auto xml = deviceManager.createStateXml())
         {

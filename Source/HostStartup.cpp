@@ -23,11 +23,24 @@ public:
         appProperties = std::make_unique<juce::ApplicationProperties>();
         appProperties->setStorageParameters (options);
 
-        fileLogger.reset (juce::FileLogger::createDateStampedLogger (
-            getApplicationName(),
-            "LightHost_",
-            ".log",
-            "Light Host " + getApplicationVersion() + " starting"));
+        // Single rotating log file at <appData>/Light Host/LightHost.log.
+        // JUCE's FileLogger ctor trims the existing file to maxInitialFileSizeBytes
+        // (256 KB) on open — so the file size is bounded across an arbitrary
+        // number of sessions. Welcome banner makes sessions visually separable
+        // inside the rotated file.
+        constexpr juce::int64 kMaxLogBytes = 256 * 1024;
+        const auto logDir = juce::FileLogger::getSystemLogFileFolder()
+                                .getChildFile (getApplicationName());
+        logDir.createDirectory();
+
+        const auto banner = "\n==== Light Host " + getApplicationVersion()
+                          + " starting at "
+                          + juce::Time::getCurrentTime().toString (true, true)
+                          + " ====";
+
+        fileLogger.reset (new juce::FileLogger (logDir.getChildFile ("LightHost.log"),
+                                                banner,
+                                                kMaxLogBytes));
         juce::Logger::setCurrentLogger (fileLogger.get());
         juce::Logger::writeToLog ("PluginHostApp: initialise");
 
