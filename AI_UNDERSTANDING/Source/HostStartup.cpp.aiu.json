@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "path": "Source/HostStartup.cpp",
-  "sha1": "bf218d11171bff2462d5cadcd254986d28ba25cd",
-  "purpose": "JUCE application entry point. Defines PluginHostApp (subclass of juce::JUCEApplication) which on initialise() sets up ApplicationProperties, a date-stamped FileLogger, the default LookAndFeel, and constructs the single IconMenu instance. Owns appProperties and fileLogger for the rest of the process lifetime; exposes getAppProperties() free function consumed by IconMenu.",
+  "sha1": "20cb3a25652c17b8a97b6515c107c7bc849e109c",
+  "purpose": "JUCE application entry point. Defines PluginHostApp (subclass of juce::JUCEApplication) which on initialise() sets up ApplicationProperties, a size-capped FileLogger, the default LookAndFeel, and constructs the single IconMenu instance. Owns appProperties and fileLogger for the rest of the process lifetime; exposes getAppProperties() free function consumed by IconMenu.",
   "exports": [
     "getAppProperties",
     "START_JUCE_APPLICATION (macro instantiates PluginHostApp)"
@@ -34,6 +34,7 @@
   "gotchas": [
     "getAppProperties() does a dynamic_cast<PluginHostApp*> on JUCEApplication::getInstance() — calling it before initialise() or after shutdown() will crash. IconMenu must never store a stale reference.",
     "FileLogger is created lazily-on-the-spot in initialise() and explicitly cleared (setCurrentLogger(nullptr)) before fileLogger.reset() in shutdown(). Reordering these lines causes use-after-free during teardown.",
+    "Log file is a SINGLE rotating file at <FileLogger::getSystemLogFileFolder()>/Light Host/LightHost.log — JUCE's FileLogger ctor trims to maxInitialFileSizeBytes (kMaxLogBytes = 256 KB) on every open, so the file size is bounded across an arbitrary number of sessions. The previous behaviour used createDateStampedLogger which created one file per launch and grew the file count without limit.",
     "Multi-instance suffix only takes effect when the command-line flag is present at launch; switching instances at runtime is not supported.",
     "[[maybe_unused]] on commandLine is intentional — JUCE delivers it, we only use getCommandLineParameterArray() instead because it handles quoting/escaping for us."
   ]

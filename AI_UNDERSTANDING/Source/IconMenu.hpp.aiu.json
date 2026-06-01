@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "Source/IconMenu.hpp",
-  "sha1": "f9762d1154f558d2434d6d48511606d78f5aeff2",
+  "sha1": "e78b443a9d39ab0c711eeb2ed0ce58b3a5dc1f0f",
   "purpose": "Header for IconMenu, the central app component. Owns the AudioDeviceManager, AudioPluginFormatManager, two KnownPluginLists (known vs active), the realtime AudioProcessorGraph, the AudioProcessorPlayer driving it, and the PreferencesWindow lifetime. Subclasses SystemTrayIconComponent + Timer + ChangeListener so it can render the tray icon, run periodic UI refresh, and listen for KnownPluginList changes.",
   "exports": [
     "IconMenu"

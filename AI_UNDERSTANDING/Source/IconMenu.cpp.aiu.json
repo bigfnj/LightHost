@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "Source/IconMenu.cpp",
-  "sha1": "e7e3293635c56cdff0699fcae68b406a7c43e68c",
+  "sha1": "7d7ec702e74496070c9321f29dc01cbef9d4c520",
   "purpose": "Implementation of IconMenu — the application's central component. Owns the audio device manager + processor graph + player, the known-vs-active plugin lists, settings persistence keyed by getKey(), background plugin loading via PluginLoadThread, the right-click action menu, the Preferences window lifetime, and the per-lane PDC graph reconnection. Also contains the nested PluginListWindow (with an AugmentedPluginListComponent that adds a 'Scan Custom Folder' option) and Windows-only Run-at-Startup shell-shortcut helpers.",
   "exports": [
     "IconMenu (ctor/dtor/all members)",
@@ -74,6 +74,7 @@
     {"name": "applyPluginChain", "summary": "PreferencesWindow Apply handler. Diffs newChain vs current via stable identity string; short-circuits when identical (including lane equality); removes plugins no longer present (with state/window cleanup); assigns NodeIDs for new plugins; writes time-based order values + bypass/lane settings; loadActivePlugins() if new instances need DLL loads, else reconnectGraph() only."},
     {"name": "PluginLoadThread::run", "summary": "Worker thread. Iterates LoadSpec list, calls formatManager.createPluginInstance for each, marshals the unique_ptr back to the message thread via callAsync targeting onPluginInstanceReady. Issues a final callAsync to onAllPluginsLoaded when done. Captures IconMenu via SafePointer for safe no-op on shutdown."},
     {"name": "changeListenerCallback", "summary": "Multiplexer for three sources: knownPluginList → persist pluginList XML; activePluginList → persist pluginListActive XML; deviceManager → reentrancy-guarded reconnectGraph + autoMatchSampleRate + persist audioDeviceState XML. JUCE_ASSERT_MESSAGE_THREAD enforces the assumption that JUCE marshals these callbacks."},
-    {"name": "getKey", "summary": "Stable settings-key generator: 'plugin-' + lowercase(type) + plugin.name + plugin.version + plugin.pluginFormatName. The single source of truth for how every per-plugin setting is named on disk. Changing it invalidates all persisted state."}
+    {"name": "getKey", "summary": "Stable settings-key generator: 'plugin-' + lowercase(type) + plugin.name + plugin.version + plugin.pluginFormatName. The single source of truth for how every per-plugin setting is named on disk. Changing it invalidates all persisted state."},
+    {"name": "logAudioConfig", "summary": "Diagnostic helper. Writes a single line summarising driver, input/output device names, active vs total channel counts on each, sample rate, and buffer size. Called once at startup (after deviceManager.initialise) and again from changeListenerCallback whenever the device manager fires, so the log file always contains the current routing state at every transition."}
   ]
 }
