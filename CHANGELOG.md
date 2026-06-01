@@ -40,8 +40,27 @@ takes down the host.
   debug-only no-op so this is a release-build noop.
 
 All exception handlers log via `juce::Logger::writeToLog`, so failures show
-up in the date-stamped LightHost log file rather than silently corrupting
-state or crashing the host.
+up in the LightHost log file rather than silently corrupting state or
+crashing the host.
+
+### Logging — bounded file size + audio-config diagnostics
+
+- **Log file is now bounded.** `HostStartup.cpp` previously used
+  `FileLogger::createDateStampedLogger`, which created a fresh log file per
+  launch — file count grew without limit. The logger is now a single
+  rotating `LightHost.log` at the JUCE system log folder
+  (`%APPDATA%\Light Host\LightHost.log` on Windows). `juce::FileLogger`
+  trims the file to 256 KB on every open, so size is bounded across an
+  arbitrary number of sessions. Sessions are visually separable inside
+  the file via a `==== Light Host vX.Y.Z starting at <time> ====` banner.
+- **Audio configuration is now logged at every transition.** A new
+  `IconMenu::logAudioConfig(contextLabel)` helper writes a one-line summary
+  of the active audio driver, input/output device names, active-vs-total
+  channel counts, sample rate, and buffer size. Called once at startup
+  after `deviceManager.initialise` and again from `changeListenerCallback`
+  on every device change, so the log captures the current routing state at
+  every transition. Useful for diagnosing routing-related issues (e.g.
+  Teams noise-suppression bypass on virtual-cable outputs).
 
 ---
 

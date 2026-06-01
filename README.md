@@ -2,7 +2,7 @@
 
 Light Host is a lightweight desktop audio plugin host built with **JUCE 8.0.13**. It is designed to live in the system tray on Windows or the menu bar on macOS, with no permanent main window. Audio flows through a realtime `AudioProcessorGraph` with support for parallel processing lanes and automatic delay compensation. Plugins can be added, removed, reordered, bypassed, edited, and assigned to lanes from the tray/menu UI and the Preferences window.
 
-Current version: **4.0.1** — see [CHANGELOG.md](CHANGELOG.md).
+Current version: **4.0.3** — see [CHANGELOG.md](CHANGELOG.md).
 
 ## What It Does
 
@@ -38,7 +38,6 @@ Platform support depends on the build target and available SDK support:
 - An internal `DelayProcessor` is auto-inserted on shorter lanes so all lanes
   remain sample-aligned (Plugin Delay Compensation)
 - If all plugins are bypassed, input is wired directly to output
-- Mono input is duplicated to stereo output where needed
 
 ## Lanes and PDC
 
@@ -156,16 +155,23 @@ On Windows the executable is `Light Host.exe`.
 
 ## Logging and Crash Triage
 
-The app now creates a date-stamped JUCE file log at startup. This is useful when a plugin or device change causes a silent exit.
+LightHost writes a single rotating log file at `LightHost.log` under the JUCE system log folder:
 
-The log records events such as:
+- Windows: `%APPDATA%\Light Host\LightHost.log` (typically `C:\Users\<you>\AppData\Roaming\Light Host\LightHost.log`)
+- macOS: `~/Library/Logs/Light Host/LightHost.log`
+- Linux: `~/.config/Light Host/LightHost.log`
+
+The log is trimmed to 256 KB on every launch, so the file cannot grow indefinitely. Each session begins with a `==== Light Host vX.Y.Z starting at <time> ====` banner so individual runs stay visually separable.
+
+The log records:
 
 - app startup/shutdown
+- audio configuration at startup and on every device change (driver, input/output device names, active-vs-total channel counts, sample rate, buffer size)
 - plugin load begin/end/failure
 - Preferences open/close
 - Apply operations
 - plugin editor open attempts
-- device-change handling
+- exception captures around plugin state save/restore, plugin-list mutation, and audio device switching
 
 If the host crashes without a message, the log should be the first place to check.
 
@@ -180,14 +186,16 @@ If the host crashes without a message, the log should be the first place to chec
 
 ## Stability Notes
 
-Because Light Host runs plugins in-process, a plugin that crashes the host process can still take the application down. Recent hardening work reduced host-side crash risk around:
+Because Light Host runs plugins in-process, a plugin that crashes the host process can still take the application down. v4.0.3 closed out the host-side production-hardening backlog with exception protection around:
 
-- Preferences Apply
-- background plugin loading
-- plugin state save/restore
-- plugin editor creation
+- Preferences Apply (`setCurrentAudioDeviceType` / `setAudioDeviceSetup`)
+- background plugin loading and state restore
+- plugin state save (`getStateInformation` and `saveIfNeeded`)
+- plugin editor creation (`PluginWindow::getWindowFor`)
+- plugin-list mutation (`activePluginList.addType` / `removeType`)
+- `pluginLoadGeneration` is `std::atomic<int>` for explicit cross-thread semantics
 
-That said, a truly unstable plugin can still crash the process directly.
+All exception handlers log via `juce::Logger::writeToLog` so failures land in the log rather than silently corrupting state. That said, a truly unstable plugin can still crash the process directly — in-process hosting cannot fully sandbox plugin code.
 
 ## License
 
