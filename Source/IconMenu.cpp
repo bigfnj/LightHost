@@ -212,7 +212,6 @@ public:
 
             if (instance == nullptr)
             {
-                DBG ("PluginLoadThread: failed to load " + spec.description.name + " - " + error);
                 juce::Logger::writeToLog ("Plugin load failed: " + spec.description.name + " - " + error);
                 continue;
             }
@@ -836,7 +835,20 @@ void IconMenu::handleDeletePlugin (int index)
     settings->removeValue (getKey ("nodeid", pluginToDelete));
     settings->saveIfNeeded();
 
-    activePluginList.removeType (pluginToDelete);  // triggers changeListener → persists XML
+    try
+    {
+        activePluginList.removeType (pluginToDelete);  // triggers changeListener → persists XML
+    }
+    catch (const std::exception& e)
+    {
+        juce::Logger::writeToLog ("activePluginList.removeType threw std::exception for "
+                                  + pluginToDelete.name + ": " + juce::String (e.what()));
+    }
+    catch (...)
+    {
+        juce::Logger::writeToLog ("activePluginList.removeType threw unknown exception for "
+                                  + pluginToDelete.name);
+    }
     sortedCacheDirty = true;
     reconnectGraph();  // rewire around the removed node — no plugin loads needed
     refreshPreferencesIfOpen();
@@ -948,7 +960,19 @@ void IconMenu::savePluginStates()
         }
     }
 
-    settings->saveIfNeeded();
+    try
+    {
+        settings->saveIfNeeded();
+    }
+    catch (const std::exception& e)
+    {
+        juce::Logger::writeToLog ("Settings saveIfNeeded threw std::exception in savePluginStates: "
+                                  + juce::String (e.what()));
+    }
+    catch (...)
+    {
+        juce::Logger::writeToLog ("Settings saveIfNeeded threw unknown exception in savePluginStates");
+    }
 }
 
 //==============================================================================
@@ -1148,7 +1172,20 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         settings->removeValue (getKey ("state",  existing));
         settings->removeValue (getKey ("lane",  existing));
         settings->removeValue (getKey ("nodeid", existing));
-        activePluginList.removeType (existing);  // triggers changeListener → persists XML
+        try
+        {
+            activePluginList.removeType (existing);  // triggers changeListener → persists XML
+        }
+        catch (const std::exception& e)
+        {
+            juce::Logger::writeToLog ("activePluginList.removeType threw std::exception for "
+                                      + existing.name + ": " + juce::String (e.what()));
+        }
+        catch (...)
+        {
+            juce::Logger::writeToLog ("activePluginList.removeType threw unknown exception for "
+                                      + existing.name);
+        }
     }
 
     // ── Step 2: assign NodeIDs and register any newly added plugins ──────────
@@ -1167,7 +1204,20 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
             settings->setValue ("nextPluginNodeId", nodeIdVal + 1);
             settings->setValue (getKey ("nodeid", np), nodeIdVal);
         }
-        activePluginList.addType (np);  // triggers changeListener → persists XML
+        try
+        {
+            activePluginList.addType (np);  // triggers changeListener → persists XML
+        }
+        catch (const std::exception& e)
+        {
+            juce::Logger::writeToLog ("activePluginList.addType threw std::exception for "
+                                      + np.name + ": " + juce::String (e.what()));
+        }
+        catch (...)
+        {
+            juce::Logger::writeToLog ("activePluginList.addType threw unknown exception for "
+                                      + np.name);
+        }
         hasNewPlugins = true;
     }
 

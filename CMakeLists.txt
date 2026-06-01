@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 4.2)  # Visual Studio 18 2026 generator requires 
 set(CMAKE_SYSTEM_VERSION "10.0.26100.0" CACHE STRING "Windows SDK version" FORCE)
 
 project(LightHost
-    VERSION 4.0.2
+    VERSION 4.0.3
     DESCRIPTION "Lightweight VST/AU/VST3 Audio Plugin Host"
     HOMEPAGE_URL "https://github.com/BigFNj"
     LANGUAGES C CXX

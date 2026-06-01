@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "CMakeLists.txt",
-  "sha1": "7cbd7a7f90062e68f46dbb81b031f09132bfea55",
+  "sha1": "f3f6bffd3e0648711d0a360b3044b9de4981d176",
   "purpose": "Top-level build definition. Adds the vendored JUCE under lib/juce, defines the 'Light Host' GUI app target via juce_add_gui_app, links the required JUCE modules, compiles the four Source/*.cpp translation units, generates BinaryData from Resources/MicrophoneIcon.png, and applies Windows + MSVC-specific flags.",
   "exports": [],
   "imports": [
@@ -36,7 +36,7 @@
     "CMAKE_SYSTEM_VERSION must be set BEFORE project() so the VS generator picks up WindowsTargetPlatformVersion correctly. Pinned to Win11 26100.",
     "LANGUAGES C CXX is required because JUCE pulls in C translation units (notably juce_graphics_Sheenbidi.c) on Linux. Removing C makes Linux configure fail at CMAKE_C_COMPILE_OBJECT.",
     "C++ standard is fixed to C++23, REQUIRED ON, EXTENSIONS OFF.",
-    "Project VERSION (currently 4.0.2) is the single source of truth — propagated to JUCE_APPLICATION_VERSION_STRING via generator expression and to the GitHub Release zip filename via CI.",
+    "Project VERSION (currently 4.0.3) is the single source of truth — propagated to JUCE_APPLICATION_VERSION_STRING via generator expression and to the GitHub Release zip filename via CI.",
     "JUCE_PLUGINHOST_VST3 / VST / AU = 1 are required for the host to load plugins; HostStartup.cpp has a #error guarding this.",
     "JUCE_DIR override (-DJUCE_DIR=<path>) is supported but the default points at the vendored lib/juce.",
     "The 'Light Host' display name comes from juce_add_gui_app's PRODUCT_NAME — the CMake target itself is named LightHost; release artefact paths key off PRODUCT_NAME (e.g. 'Light Host.exe')."

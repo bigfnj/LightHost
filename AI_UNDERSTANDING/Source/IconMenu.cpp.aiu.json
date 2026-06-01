@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "Source/IconMenu.cpp",
-  "sha1": "8da6e5a1b611139c173f1315b81acfe5f346012c",
+  "sha1": "e7e3293635c56cdff0699fcae68b406a7c43e68c",
   "purpose": "Implementation of IconMenu — the application's central component. Owns the audio device manager + processor graph + player, the known-vs-active plugin lists, settings persistence keyed by getKey(), background plugin loading via PluginLoadThread, the right-click action menu, the Preferences window lifetime, and the per-lane PDC graph reconnection. Also contains the nested PluginListWindow (with an AugmentedPluginListComponent that adds a 'Scan Custom Folder' option) and Windows-only Run-at-Startup shell-shortcut helpers.",
   "exports": [
     "IconMenu (ctor/dtor/all members)",
@@ -44,7 +44,7 @@
   ],
   "invariants": [
     "Destructor ordering matters: deviceManager.removeAudioCallback(&player) MUST be called before player and graph are destroyed. deviceManager outlives them (declared first → destroyed last); without the explicit removeAudioCallback the realtime thread keeps invoking the dying player during shutdown. This was a real shutdown crash.",
-    "pluginLoadGeneration is the cancellation token for in-flight background plugin loads. Every onPluginInstanceReady / onAllPluginsLoaded callback first checks generation != current and discards stale results. Incremented in loadActivePlugins and cancelPluginLoading. Per backlog Fix #1, this should be std::atomic<int> — currently a plain int (still functional under JUCE's threading model because IconMenu reads/writes only happen on the message thread, but the backlog requires atomic for explicit cross-thread visibility safety).",
+    "pluginLoadGeneration is the cancellation token for in-flight background plugin loads. Every onPluginInstanceReady / onAllPluginsLoaded callback first checks generation != current and discards stale results. Incremented in loadActivePlugins and cancelPluginLoading. Type is std::atomic<int> (v4.0.3) — the std::atomic operator++ and implicit conversion-to-int keep all existing read/write/compare sites working unchanged.",
     "Settings key namespace is constructed by getKey() as 'plugin-<type-lowercase>-<name><version><pluginFormatName>'. The known categories are: order, bypass, state, nodeid, lane. Changing this format breaks all persisted plugin state for existing users.",
     "Node IDs: 1'000'000 = audio input, 1'000'001 = audio output, 1..N reserved for plugin instances allocated from settings->getIntValue(\"nextPluginNodeId\") — never reuse a freed ID (the IDs are monotonically increasing across the install lifetime).",
     "Menu action ID partitioning (kEditOffset/kBypassOffset/kDeleteOffset/kMoveUpOffset/kMoveDownOffset = 1M/2M/3M/4M/5M) plus fixed IDs 1..5 (Preferences/Edit Plugins/Quit/Delete Plugin States/Run at Startup). Reserved IDs must not overlap.",
@@ -54,7 +54,7 @@
     "PreferencesWindow lifetime: showPreferences constructs the unique_ptr; the onClose lambda persists device state then defers `preferencesWindow.reset()` via callAsync so the std::function isn't destroyed while still executing inside it."
   ],
   "gotchas": [
-    "Backlog status (verified 2026-06-01): Fix #1 (atomic generation) NOT DONE. Fix #2 (try-catch around saveIfNeeded in savePluginStates at line 951) NOT DONE — only getStateInformation is currently wrapped. Fix #3 (try-catch around activePluginList.addType/removeType in applyPluginChain at lines 1151, 1170) NOT DONE. Fix #6 (writeToLog) DONE but DBG also remains at line 215 — dual-log in debug builds, acceptable. Fix #5 (PluginWindow null check) and the GitHub Actions backlog (Part 2) are DONE.",
+    "Production-hardening backlog CLOSED in v4.0.3. savePluginStates wraps both the per-plugin getStateInformation AND the trailing settings->saveIfNeeded(). applyPluginChain wraps both the early-loop activePluginList.removeType and the new-plugin activePluginList.addType. handleDeletePlugin also wraps its activePluginList.removeType call. The stale DBG line in PluginLoadThread::run was removed (writeToLog is the sole log path now). All catch handlers log via juce::Logger::writeToLog.",
     "PluginLoadThread captures the IconMenu via Component::SafePointer — if IconMenu is destroyed while the worker is mid-flight, the queued callAsync lambdas no-op cleanly. The raw AudioProcessor pointer in the lambda capture is wrapped in unique_ptr on entry so leaks are avoided in both paths.",
     "onPluginInstanceReady scans activePluginList.getTypes() to verify the nodeId is still wanted before addNode-ing. If a plugin was deleted while loading, the unique_ptr's destructor cleans it up — there's no addNode-then-remove fallback.",
     "reconnectGraph's stereo wiring uses `if (!graph.addConnection(channelTwo)) graph.addConnection(channelOne→channelTwo)` to fall back to mono→stereo duplication when a plugin only exposes one input channel. Reordering these calls breaks mono-plugin support.",

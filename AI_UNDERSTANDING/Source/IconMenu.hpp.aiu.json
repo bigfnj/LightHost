@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "Source/IconMenu.hpp",
-  "sha1": "df657fcebf3b9e924359f27f3c5d19e0ec419397",
+  "sha1": "f9762d1154f558d2434d6d48511606d78f5aeff2",
   "purpose": "Header for IconMenu, the central app component. Owns the AudioDeviceManager, AudioPluginFormatManager, two KnownPluginLists (known vs active), the realtime AudioProcessorGraph, the AudioProcessorPlayer driving it, and the PreferencesWindow lifetime. Subclasses SystemTrayIconComponent + Timer + ChangeListener so it can render the tray icon, run periodic UI refresh, and listen for KnownPluginList changes.",
   "exports": [
     "IconMenu"
@@ -9,6 +9,7 @@
   "imports": [
     "juce_audio_utils/juce_audio_utils.h",
     "juce_gui_extra/juce_gui_extra.h",
+    "<atomic>",
     "<vector>"
   ],
   "called_by": [
@@ -20,7 +21,7 @@
     "Menu action ID offsets (kEditOffset=1M, kBypassOffset=2M, kDeleteOffset=3M, kMoveUpOffset=4M, kMoveDownOffset=5M) partition the popup-menu ID space into five non-overlapping 1M-entry ranges. Up to 1M plugins per action category — practically unbounded.",
     "Forward-declares PreferencesWindow rather than including PreferencesWindow.h to break a header cycle; the .cpp file pulls the full type when constructing the window.",
     "PluginLoadThread is a private nested class, forward-declared and unique_ptr-owned so the public header stays free of std::thread/JUCE Thread includes.",
-    "pluginLoadGeneration (currently plain int) tracks in-flight async plugin loads. Per the backlog this should be std::atomic<int> — the message thread writes it, the worker thread reads it on every instance-ready callback.",
+    "pluginLoadGeneration is std::atomic<int> (v4.0.3). The counter cancels in-flight background plugin loads when the user reloads or changes the chain. IconMenu's reads/writes happen on the message thread, but PluginLoadThread captures the value at start; the atomic type makes the cross-thread semantics explicit and guards future callers.",
     "JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR — IconMenu is single-instance, owned by PluginHostApp, never copied.",
     "Windows-only members getStartupShortcutPath / isStartupEnabled / setStartupEnabled are guarded by JUCE_WINDOWS — not present on macOS/Linux ABI."
   ],

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "path": "Source/PreferencesWindow.cpp",
-  "sha1": "b1640c6ddd65ce63eda5afedcc601333d85a583c",
+  "sha1": "eadb2a7e9c64d754cf0e1c93c9d95ae4b54c70fc",
   "purpose": "Implementation of PreferencesWindow plus three file-local helper classes: SectionLabel (header bar), AudioChainListComponent (paint-driven plugin-chain list with drag-reorder, checkbox bypass, Edit / Lane / Delete affordances), and PreferencesContentComponent (the actual layout — INPUT → AUDIO CHAIN → OUTPUT → DEVICE SETTINGS). Device combos are kept in sync via ChangeListener on AudioDeviceManager; plugin chain + device changes are staged until Apply.",
   "exports": [
     "PreferencesWindow (ctor/dtor)",
@@ -38,7 +38,7 @@
     "DocumentWindow::closeButtonPressed delegates to onCloseFn — IconMenu uses this to persist device state and release the unique_ptr; do not delete `this` here, the owner manages lifetime."
   ],
   "gotchas": [
-    "Backlog Fix #4 status (verified 2026-06-01): dm.setCurrentAudioDeviceType at line 704 and dm.setAudioDeviceSetup at line 743 are NOT wrapped in try-catch. setAudioDeviceSetup's *returned error string* is logged, but no exception protection exists. Per the backlog, both should be wrapped and Apply re-enabled on exception (the unconditional re-enable at line 750-751 is correct, but the catch path is missing).",
+    "Backlog Fix #4 CLOSED in v4.0.3: both dm.setCurrentAudioDeviceType and dm.setAudioDeviceSetup are wrapped in try-catch with juce::Logger::writeToLog on the exception path. setAudioDeviceSetup's returned error string is still logged (JUCE's non-throwing failure channel). The unconditional Apply re-enable at the tail of the lambda already covered the UI-recovery half of the fix.",
     "AudioChainListComponent draws the entire list manually (no juce::ListBox). Adding columns means updating five things in lockstep: paint(), getNameArea(), getEditButtonArea(), getLaneButtonArea(), and the mouseDown hit-tests.",
     "Drag insertion math uses (e.y + kRowHeight/2) / kRowHeight so the snap line is between rows. Edge case: `insertAt == dragSourceRow + 1` is also a no-op (line 263) — drop directly below source = no movement.",
     "showAddPluginMenu groups plugins by manufacturer using a single 'subMenu' variable reset between groups. Plugins must be pre-sorted by manufacturer for the grouping to work (it is — line 793).",
@@ -47,7 +47,7 @@
     "v4.0.0 added the third (laneStates) parameter to refreshPluginChain — the dynamic_cast<PreferencesContentComponent*> at line 886 will return nullptr if some future caller passes a different content type."
   ],
   "key_functions": [
-    {"name": "commitAllSettings", "summary": "Apply handler. Snapshots all combo state, hops to the next message-thread tick via callAsync, applies device type + setup + plugin chain in that order, then re-enables the Apply button. Per backlog Fix #4 the two device-manager calls still need try-catch wrapping."},
+    {"name": "commitAllSettings", "summary": "Apply handler. Snapshots all combo state, hops to the next message-thread tick via callAsync, applies device type + setup + plugin chain in that order, then re-enables the Apply button. Both AudioDeviceManager calls are wrapped in try-catch (v4.0.3)."},
     {"name": "AudioChainListComponent::mouseDown", "summary": "All chain-row interaction lives here. Routes by hit-test region: right-click → delete popup, Lane button → Lane 0-3 popup, Checkbox → toggle bypass, Edit button → onEditClicked, anywhere else → begin drag-reorder."},
     {"name": "showAddPluginMenu", "summary": "Builds a manufacturer-grouped popup from KnownPluginList::getTypes(). Already-staged plugins (matched by fileOrIdentifier+formatName+name composite key) are greyed out. Callback appends the chosen PluginDescription to the staged chain."}
   ]

@@ -700,8 +700,20 @@ private:
                 juce::Logger::writeToLog ("Preferences: Apply pressed");
 
                 // 1. Device API type (may change which devices are available)
-                if (typeName.isNotEmpty() && typeName != dm.getCurrentAudioDeviceType())
-                    dm.setCurrentAudioDeviceType (typeName, true);
+                try
+                {
+                    if (typeName.isNotEmpty() && typeName != dm.getCurrentAudioDeviceType())
+                        dm.setCurrentAudioDeviceType (typeName, true);
+                }
+                catch (const std::exception& e)
+                {
+                    juce::Logger::writeToLog ("Preferences: setCurrentAudioDeviceType threw std::exception: "
+                                              + juce::String (e.what()));
+                }
+                catch (...)
+                {
+                    juce::Logger::writeToLog ("Preferences: setCurrentAudioDeviceType threw unknown exception");
+                }
 
                 // 2. Input / output device names + sample rate + buffer size in one call
                 auto setup = dm.getAudioDeviceSetup();
@@ -740,8 +752,20 @@ private:
                 }
                 setup.useDefaultInputChannels  = true;
                 setup.useDefaultOutputChannels = true;
-                if (auto error = dm.setAudioDeviceSetup (setup, true); error.isNotEmpty())
-                    juce::Logger::writeToLog ("Preferences: setAudioDeviceSetup error: " + error);
+                try
+                {
+                    if (auto error = dm.setAudioDeviceSetup (setup, true); error.isNotEmpty())
+                        juce::Logger::writeToLog ("Preferences: setAudioDeviceSetup error: " + error);
+                }
+                catch (const std::exception& e)
+                {
+                    juce::Logger::writeToLog ("Preferences: setAudioDeviceSetup threw std::exception: "
+                                              + juce::String (e.what()));
+                }
+                catch (...)
+                {
+                    juce::Logger::writeToLog ("Preferences: setAudioDeviceSetup threw unknown exception");
+                }
 
                 // 3. Plugin chain + bypass states
                 if (safe->onApplyFn) safe->onApplyFn (chain, bypass, safe->chainList.lanes);

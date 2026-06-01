@@ -2,6 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
+#include <atomic>
 #include <vector>
 
 juce::ApplicationProperties& getAppProperties();
@@ -81,7 +82,7 @@ private:
     // marshalled back to the message thread one at a time via callAsync.
     class PluginLoadThread;
     std::unique_ptr<PluginLoadThread> pluginLoadThread;
-    int pluginLoadGeneration = 0;
+    std::atomic<int> pluginLoadGeneration { 0 };
 
     void onPluginInstanceReady (std::unique_ptr<juce::AudioProcessor> instance,
                                 juce::AudioProcessorGraph::NodeID nodeId,
