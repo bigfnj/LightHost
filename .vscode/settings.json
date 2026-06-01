@@ -1,0 +1,23 @@
+{
+  "// Why these excludes": "lib/ is vendored JUCE + VST SDK; build/ is generated; .vs/ is VS local cache. None of them are LightHost source, but the C/C++ extension was indexing ~27K files from them and slowing things down. These three excludes scope IntelliSense, the file watcher, and global search to project code only. Files remain visible in the Explorer tree.",
+
+  "C_Cpp.files.exclude": {
+    "**/lib/**": true,
+    "**/build/**": true,
+    "**/.vs/**": true
+  },
+
+  "files.watcherExclude": {
+    "**/lib/**": true,
+    "**/build/**": true,
+    "**/.vs/**": true,
+    "**/.git/objects/**": true
+  },
+
+  "search.exclude": {
+    "**/lib/**": true,
+    "**/build/**": true,
+    "**/.vs/**": true,
+    "**/AI_UNDERSTANDING.md": true
+  }
+}
