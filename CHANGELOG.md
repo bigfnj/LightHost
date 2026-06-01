@@ -6,6 +6,45 @@
 
 ---
 
+## [4.0.3] — 2026-06-01
+
+### Production hardening — exception safety around long-lived state
+
+Closes the v4.0.0 production-hardening backlog: four defensive fixes wrapping
+calls that cross trust boundaries (third-party plugin code, JUCE settings
+serialisation, audio device drivers) so a single throwing call no longer
+takes down the host.
+
+- **`pluginLoadGeneration` is now `std::atomic<int>`** in `IconMenu.hpp`. The
+  counter cancels in-flight background plugin loads when the user reloads or
+  changes the chain. Although IconMenu's reads/writes were already
+  message-thread-only, making the type explicit matches its cross-thread
+  semantics (the worker thread captures the value at start) and protects
+  against any future code that might read it from a non-message thread.
+- **`savePluginStates()`** now wraps the trailing `settings->saveIfNeeded()`
+  in try-catch. The inner `getStateInformation` call (the throwing call —
+  plugins can implement it badly) was already protected; wrapping
+  `saveIfNeeded` itself is symmetric and cheap.
+- **`activePluginList.addType/removeType`** are wrapped at all three
+  callsites — `handleDeletePlugin`, and both branches of `applyPluginChain`.
+  These trigger a `ChangeListener` callback that writes the XML plugin list
+  to disk; protecting against any I/O- or XML-related throw avoids leaving
+  the active list in a half-mutated state.
+- **`dm.setCurrentAudioDeviceType` and `dm.setAudioDeviceSetup`** in the
+  Preferences Apply path are wrapped in try-catch. ASIO and WASAPI drivers
+  occasionally throw on device-switch race conditions; the existing
+  unconditional Apply re-enable at the end of the lambda already covered
+  the UI-recovery half of the fix, but exception protection was missing.
+- **Cleanup**: removed a leftover `DBG(...)` line in `PluginLoadThread::run`
+  that duplicated the canonical `juce::Logger::writeToLog` call. DBG is a
+  debug-only no-op so this is a release-build noop.
+
+All exception handlers log via `juce::Logger::writeToLog`, so failures show
+up in the date-stamped LightHost log file rather than silently corrupting
+state or crashing the host.
+
+---
+
 ## [4.0.2] — 2026-05-30
 
 ### Bugfix — Lane Changes Silently Discarded by Apply
