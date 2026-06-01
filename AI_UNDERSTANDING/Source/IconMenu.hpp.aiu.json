@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "path": "Source/IconMenu.hpp",
+  "sha1": "df657fcebf3b9e924359f27f3c5d19e0ec419397",
+  "purpose": "Header for IconMenu, the central app component. Owns the AudioDeviceManager, AudioPluginFormatManager, two KnownPluginLists (known vs active), the realtime AudioProcessorGraph, the AudioProcessorPlayer driving it, and the PreferencesWindow lifetime. Subclasses SystemTrayIconComponent + Timer + ChangeListener so it can render the tray icon, run periodic UI refresh, and listen for KnownPluginList changes.",
+  "exports": [
+    "IconMenu"
+  ],
+  "imports": [
+    "juce_audio_utils/juce_audio_utils.h",
+    "juce_gui_extra/juce_gui_extra.h",
+    "<vector>"
+  ],
+  "called_by": [
+    "Source/HostStartup.cpp",
+    "Source/PreferencesWindow.cpp (via std::function callbacks)"
+  ],
+  "calls_out_to": [],
+  "invariants": [
+    "Menu action ID offsets (kEditOffset=1M, kBypassOffset=2M, kDeleteOffset=3M, kMoveUpOffset=4M, kMoveDownOffset=5M) partition the popup-menu ID space into five non-overlapping 1M-entry ranges. Up to 1M plugins per action category — practically unbounded.",
+    "Forward-declares PreferencesWindow rather than including PreferencesWindow.h to break a header cycle; the .cpp file pulls the full type when constructing the window.",
+    "PluginLoadThread is a private nested class, forward-declared and unique_ptr-owned so the public header stays free of std::thread/JUCE Thread includes.",
+    "pluginLoadGeneration (currently plain int) tracks in-flight async plugin loads. Per the backlog this should be std::atomic<int> — the message thread writes it, the worker thread reads it on every instance-ready callback.",
+    "JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR — IconMenu is single-instance, owned by PluginHostApp, never copied.",
+    "Windows-only members getStartupShortcutPath / isStartupEnabled / setStartupEnabled are guarded by JUCE_WINDOWS — not present on macOS/Linux ABI."
+  ],
+  "gotchas": [
+    "sortedPluginCache + sortedCacheDirty are 'mutable' so const accessors can lazily rebuild the cache. Any code that mutates the active plugin list MUST set sortedCacheDirty=true or callers will see stale ordering.",
+    "isHandlingDeviceChange guards against re-entry in changeListenerCallback during the device-type / device-setup mutation paths; do not bypass it.",
+    "preferencesWindow is a unique_ptr — calling showPreferences while one already exists must check for null and reuse rather than reconstruct.",
+    "inputNodeId / outputNodeId are the graph's audio I/O processor node IDs, established once at construction. Don't rebuild them on every reconnect; reconnectGraph relies on their stability."
+  ]
+}

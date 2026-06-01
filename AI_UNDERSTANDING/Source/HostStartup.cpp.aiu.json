@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "path": "Source/HostStartup.cpp",
+  "sha1": "bf218d11171bff2462d5cadcd254986d28ba25cd",
+  "purpose": "JUCE application entry point. Defines PluginHostApp (subclass of juce::JUCEApplication) which on initialise() sets up ApplicationProperties, a date-stamped FileLogger, the default LookAndFeel, and constructs the single IconMenu instance. Owns appProperties and fileLogger for the rest of the process lifetime; exposes getAppProperties() free function consumed by IconMenu.",
+  "exports": [
+    "getAppProperties",
+    "START_JUCE_APPLICATION (macro instantiates PluginHostApp)"
+  ],
+  "imports": [
+    "juce_gui_extra/juce_gui_extra.h",
+    "juce_audio_utils/juce_audio_utils.h",
+    "Source/IconMenu.hpp"
+  ],
+  "called_by": [
+    "CMakeLists.txt (compilation unit)"
+  ],
+  "calls_out_to": [
+    "juce::PropertiesFile::Options",
+    "juce::ApplicationProperties",
+    "juce::FileLogger::createDateStampedLogger",
+    "juce::Logger::setCurrentLogger",
+    "juce::LookAndFeel::setDefaultLookAndFeel",
+    "juce::Process::setDockIconVisible (macOS only)",
+    "juce::JUCEApplication"
+  ],
+  "invariants": [
+    "Application name 'Light Host' is the source of truth — used by getApplicationName(), the PropertiesFile suffix, the FileLogger prefix, and propagated to JUCE_APPLICATION_NAME_STRING via CMake.",
+    "JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU must be 1 — guarded by a #error at file top; CMake currently enables all three (VST/VST3/AU).",
+    "iconMenu is constructed in initialise() and reset in shutdown(). It must not be constructed before applyMultiInstanceSuffix and the FileLogger setup — IconMenu's constructor immediately reads getAppProperties() and writes to the logger.",
+    "Multi-instance mode: command-line flag '-multi-instance=<name>' makes moreThanOneInstanceAllowed() return true AND prefixes the settings filename with <name>., so each instance has its own persisted state.",
+    "macOS hides the Dock icon (setDockIconVisible(false)) so the app is menu-bar-only; on Windows the app is tray-only and there is no equivalent call."
+  ],
+  "gotchas": [
+    "getAppProperties() does a dynamic_cast<PluginHostApp*> on JUCEApplication::getInstance() — calling it before initialise() or after shutdown() will crash. IconMenu must never store a stale reference.",
+    "FileLogger is created lazily-on-the-spot in initialise() and explicitly cleared (setCurrentLogger(nullptr)) before fileLogger.reset() in shutdown(). Reordering these lines causes use-after-free during teardown.",
+    "Multi-instance suffix only takes effect when the command-line flag is present at launch; switching instances at runtime is not supported.",
+    "[[maybe_unused]] on commandLine is intentional — JUCE delivers it, we only use getCommandLineParameterArray() instead because it handles quoting/escaping for us."
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "project": "LightHost",
+  "last_audit_commit": "",
+  "last_audit_at": "",
+  "generator": "manual-bootstrap/1.0.0",
+  "overview": "Lightweight desktop audio plugin host built on JUCE 8.0.13. Lives in the system tray (Windows) / menu bar (macOS) with no main window; audio flows through a realtime AudioProcessorGraph that supports up to 4 parallel processing lanes with automatic Plugin Delay Compensation (PDC). Hosts VST/VST3/AU plugins. Settings — device choice, plugin chain, lane assignments, per-plugin state — persist via PropertiesFile. Current version 4.0.2. Forked from Rolando Islas (2015), GPLv2+.",
+  "frameworks": [
+    {"name": "JUCE", "version": "8.0.13"},
+    {"name": "C++23"},
+    {"name": "CMake", "version": ">=4.2"},
+    {"name": "Steinberg VST2.4 SDK", "version": "vendored under lib/"}
+  ],
+  "test_command": "",
+  "tracked_globs": {
+    "include": [
+      "Source/**/*.cpp",
+      "Source/**/*.hpp",
+      "Source/**/*.h",
+      "CMakeLists.txt",
+      "CMakePresets.json",
+      ".github/workflows/*.yml"
+    ],
+    "exclude": [
+      "build/**",
+      "lib/**",
+      "Resources/**",
+      "Utilities/**",
+      "fix_*.py",
+      "patch_*.py",
+      "force_patch*.py",
+      "rewrite_*.py",
+      "refactor_*.py",
+      "make_pref_clean.py",
+      "AI_UNDERSTANDING.md",
+      "**/*.png",
+      "**/*.jpg",
+      "**/*.jpeg",
+      "**/*.gif",
+      "**/*.svg",
+      "**/*.ico",
+      "**/*.woff",
+      "**/*.woff2",
+      "**/*.ttf",
+      "**/*.eot",
+      ".vs/**",
+      ".vscode/**",
+      ".git/**"
+    ]
+  },
+  "graph": "HostStartup.cpp -> JUCEApplication entry; creates IconMenu in initialise()\nIconMenu (.hpp/.cpp) -> central state: holds AudioDeviceManager, AudioProcessorGraph, plugin list, PropertiesFile; renders SystemTrayIconComponent + right-click PopupMenu; owns the load-active-plugins background pipeline; rebuilds the graph (reconnect()) on every chain/device/lane change with auto-PDC via DelayProcessor\nIconMenu -> PreferencesWindow (left-click): unified settings UI — audio device tab + plugin chain tab (per-row lane combo)\nIconMenu -> PluginWindow (per-plugin edit): single-window-per-plugin lookup keyed by node id\nDelayProcessor (header-only) -> AudioProcessor that delays by N samples; auto-inserted on shorter lanes during reconnect to match max-lane latency\nCMakeLists.txt + CMakePresets.json -> build config; JUCE is vendored under lib/JUCE and added via add_subdirectory; juce_add_gui_app produces 'Light Host'\n.github/workflows/ci.yml -> Windows+Linux build on push/PR\n.github/workflows/release.yml -> tag v* triggers parallel builds + zipped artefacts attached to a GitHub Release"
+}

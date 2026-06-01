@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "path": ".github/workflows/release.yml",
+  "sha1": "75eebf0945bc25fd6eae04dc4db8fe93fa1fcd81",
+  "purpose": "Tag-triggered release pipeline. On any tag matching v[0-9]*: builds release on Windows + Linux in parallel, zips/tars the binaries (with the tag name in the filename), extracts the matching CHANGELOG section, and publishes a GitHub Release with both artefacts attached.",
+  "exports": [],
+  "imports": [
+    "CMakeLists.txt",
+    "CMakePresets.json",
+    "CHANGELOG.md"
+  ],
+  "called_by": [],
+  "calls_out_to": [
+    "actions/checkout@v4",
+    "actions/upload-artifact@v4",
+    "actions/download-artifact@v4",
+    "lukka/get-cmake@latest",
+    "softprops/action-gh-release@v2"
+  ],
+  "invariants": [
+    "Tag pattern is v[0-9]* — any tag starting with v followed by a digit triggers a release. Renaming to a non-matching pattern (e.g. just '1.0.0') silently no-ops.",
+    "Windows artifact path: build/release/LightHost_artefacts/Release/Light Host.exe — set by JUCE's juce_add_gui_app + the VS2026 multi-config generator. Note the literal space in 'Light Host.exe'.",
+    "Linux artifact path: build/ninja-release/LightHost_artefacts/Release/Light Host — JUCE places the binary under <artefacts>/Release/ even for single-config Ninja (this was a fix in commit 95c84d8 after the original path was wrong).",
+    "Release notes are extracted from CHANGELOG.md via awk slicing between '## [<version>]' headers — the tag is v-prefixed but the CHANGELOG entry is not, so VER strips the leading v before grepping.",
+    "create-release job needs `permissions: contents: write` to create a GitHub Release; without it softprops/action-gh-release@v2 fails with a 403."
+  ],
+  "gotchas": [
+    "Windows ZIP contains only `Light Host.exe` — no licence, no README, no resources. The exe is self-contained but users won't see docs inside the archive.",
+    "Linux tarball wraps the binary without surrounding files for the same reason; the binary has a literal space in its name which can confuse some shell pipelines on the consumer side.",
+    "If CHANGELOG.md has no matching '## [<version>]' header for the tag, release_notes.md is empty and the GitHub Release is published with an empty body. Verify the CHANGELOG before tagging.",
+    "Artifact retention is 1 day — the GitHub Release itself retains them permanently, but the intermediate upload-artifact entries used for the cross-job handoff disappear quickly. Re-running the workflow without re-tagging requires re-uploads."
+  ]
+}

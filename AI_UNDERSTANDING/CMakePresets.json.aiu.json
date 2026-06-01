@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "path": "CMakePresets.json",
+  "sha1": "9a3c82f5258724dd3841dba72def37b54a0f4847",
+  "purpose": "Build preset matrix — eight configurations spanning Visual Studio 2026 (default/release), Ninja (debug/release/relwithdebinfo), Clang+Ninja (debug/release), and MinGW-w64 cross-compile from WSL. Each writes its build tree under build/<presetName>/.",
+  "exports": [],
+  "imports": [],
+  "called_by": [
+    "CMakeLists.txt",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release.yml"
+  ],
+  "calls_out_to": [],
+  "invariants": [
+    "cmakeMinimumRequired here is 3.28 — older than CMakeLists.txt's 4.2. The effective minimum is whichever is higher (CMake will refuse if neither is met). Keep this loose or in sync; the CI install pinned CMake >=4.2.",
+    "binaryDir is always ${sourceDir}/build/${presetName}; CI workflows assume this path when locating compiled binaries.",
+    "VS generator name 'Visual Studio 18 2026' must match the VS2026 generator string exactly — typos cause 'unknown generator' at configure.",
+    "MinGW preset sets CMAKE_SYSTEM_NAME=Windows to enable cross-compile detection in JUCE."
+  ],
+  "gotchas": [
+    "Adding a new preset requires also adding a matching buildPresets entry, otherwise `cmake --build --preset=<name>` fails with 'no build preset named <name>'.",
+    "CI uses --preset=release on Windows and --preset=ninja-release on Linux; renaming these preset names without updating both workflow YAMLs breaks releases."
+  ]
+}

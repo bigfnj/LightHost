@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "path": "Source/PreferencesWindow.cpp",
+  "sha1": "b1640c6ddd65ce63eda5afedcc601333d85a583c",
+  "purpose": "Implementation of PreferencesWindow plus three file-local helper classes: SectionLabel (header bar), AudioChainListComponent (paint-driven plugin-chain list with drag-reorder, checkbox bypass, Edit / Lane / Delete affordances), and PreferencesContentComponent (the actual layout — INPUT → AUDIO CHAIN → OUTPUT → DEVICE SETTINGS). Device combos are kept in sync via ChangeListener on AudioDeviceManager; plugin chain + device changes are staged until Apply.",
+  "exports": [
+    "PreferencesWindow (ctor/dtor)",
+    "PreferencesWindow::closeButtonPressed",
+    "PreferencesWindow::refreshPluginChain",
+    "SectionLabel (file-local)",
+    "AudioChainListComponent (file-local)",
+    "PreferencesContentComponent (file-local)"
+  ],
+  "imports": [
+    "Source/PreferencesWindow.h",
+    "<set>"
+  ],
+  "called_by": [
+    "Source/IconMenu.cpp"
+  ],
+  "calls_out_to": [
+    "juce::DocumentWindow",
+    "juce::AudioDeviceManager",
+    "juce::KnownPluginList::getTypes",
+    "juce::Component::SafePointer",
+    "juce::MessageManager::callAsync",
+    "juce::Logger::writeToLog",
+    "juce::PopupMenu::showMenuAsync",
+    "juce::JUCEApplication::getInstance"
+  ],
+  "invariants": [
+    "Three parallel vectors — chainList.items, chainList.bypassed, chainList.lanes — must stay length-matched at every mutation point. AudioChainListComponent::syncBypassedSize() and mouseUp / right-click-delete / add-plugin paths each guarantee this.",
+    "Lane values must be in [0, 3] — popup options 1..4 in mouseDown are translated via `result - 1`. The graph in IconMenu also caps at 4 lanes.",
+    "commitAllSettings (Apply handler) snapshots ALL combo state BEFORE the callAsync hop. The combos may be rebuilt during device restarts, so reading them inside the lambda would yield stale data.",
+    "Apply is disabled at the start of commitAllSettings and re-enabled at the end of the async lambda. Any early-return path inside the lambda MUST also re-enable applyButton or the UI deadlocks.",
+    "rebuildDeviceCombos uses dontSendNotification on every setSelectedId — without it, the ComboBox change handlers would fire during the rebuild and cascade into another rebuild.",
+    "ChangeListener on AudioDeviceManager calls rebuildDeviceCombos on every external device event. Removed in dtor; not removed → use-after-free when the window dies but the AudioDeviceManager lives on.",
+    "DocumentWindow::closeButtonPressed delegates to onCloseFn — IconMenu uses this to persist device state and release the unique_ptr; do not delete `this` here, the owner manages lifetime."
+  ],
+  "gotchas": [
+    "Backlog Fix #4 status (verified 2026-06-01): dm.setCurrentAudioDeviceType at line 704 and dm.setAudioDeviceSetup at line 743 are NOT wrapped in try-catch. setAudioDeviceSetup's *returned error string* is logged, but no exception protection exists. Per the backlog, both should be wrapped and Apply re-enabled on exception (the unconditional re-enable at line 750-751 is correct, but the catch path is missing).",
+    "AudioChainListComponent draws the entire list manually (no juce::ListBox). Adding columns means updating five things in lockstep: paint(), getNameArea(), getEditButtonArea(), getLaneButtonArea(), and the mouseDown hit-tests.",
+    "Drag insertion math uses (e.y + kRowHeight/2) / kRowHeight so the snap line is between rows. Edge case: `insertAt == dragSourceRow + 1` is also a no-op (line 263) — drop directly below source = no movement.",
+    "showAddPluginMenu groups plugins by manufacturer using a single 'subMenu' variable reset between groups. Plugins must be pre-sorted by manufacturer for the grouping to work (it is — line 793).",
+    "Right-click delete uses SafePointer + showMenuAsync — the popup is asynchronous, so by the time the callback fires the row index may be invalid. The `row >= items.size()` guard at line 191 protects against this.",
+    "Channel labels clamp the displayed channel count at 2 (line 759-760) so the label always reads 'Mono (Ch 1)' or 'Stereo (Ch 1-2)' regardless of actual device width — LightHost always operates on stereo internally.",
+    "v4.0.0 added the third (laneStates) parameter to refreshPluginChain — the dynamic_cast<PreferencesContentComponent*> at line 886 will return nullptr if some future caller passes a different content type."
+  ],
+  "key_functions": [
+    {"name": "commitAllSettings", "summary": "Apply handler. Snapshots all combo state, hops to the next message-thread tick via callAsync, applies device type + setup + plugin chain in that order, then re-enables the Apply button. Per backlog Fix #4 the two device-manager calls still need try-catch wrapping."},
+    {"name": "AudioChainListComponent::mouseDown", "summary": "All chain-row interaction lives here. Routes by hit-test region: right-click → delete popup, Lane button → Lane 0-3 popup, Checkbox → toggle bypass, Edit button → onEditClicked, anywhere else → begin drag-reorder."},
+    {"name": "showAddPluginMenu", "summary": "Builds a manufacturer-grouped popup from KnownPluginList::getTypes(). Already-staged plugins (matched by fileOrIdentifier+formatName+name composite key) are greyed out. Callback appends the chosen PluginDescription to the staged chain."}
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "path": "Source/IconMenu.cpp",
+  "sha1": "8da6e5a1b611139c173f1315b81acfe5f346012c",
+  "purpose": "Implementation of IconMenu — the application's central component. Owns the audio device manager + processor graph + player, the known-vs-active plugin lists, settings persistence keyed by getKey(), background plugin loading via PluginLoadThread, the right-click action menu, the Preferences window lifetime, and the per-lane PDC graph reconnection. Also contains the nested PluginListWindow (with an AugmentedPluginListComponent that adds a 'Scan Custom Folder' option) and Windows-only Run-at-Startup shell-shortcut helpers.",
+  "exports": [
+    "IconMenu (ctor/dtor/all members)",
+    "IconMenu::getKey",
+    "IconMenu::PluginListWindow (file-local)",
+    "IconMenu::PluginLoadThread (file-local)"
+  ],
+  "imports": [
+    "Source/IconMenu.hpp",
+    "Source/DelayProcessor.hpp",
+    "Source/PluginWindow.h",
+    "Source/PreferencesWindow.h",
+    "BinaryData.h",
+    "<algorithm>",
+    "<ctime>",
+    "<exception>",
+    "<windows.h> + <shlobj.h> (JUCE_WINDOWS only)"
+  ],
+  "called_by": [
+    "Source/HostStartup.cpp"
+  ],
+  "calls_out_to": [
+    "juce::AudioDeviceManager",
+    "juce::AudioProcessorGraph",
+    "juce::AudioProcessorPlayer",
+    "juce::AudioPluginFormatManager",
+    "juce::KnownPluginList",
+    "juce::PluginDirectoryScanner",
+    "juce::FileChooser",
+    "juce::ThreadWithProgressWindow",
+    "juce::Thread",
+    "juce::MessageManager::callAsync",
+    "juce::Component::SafePointer",
+    "juce::ScopedValueSetter",
+    "juce::Logger::writeToLog",
+    "DelayProcessor (Source/DelayProcessor.hpp)",
+    "PluginWindow (Source/PluginWindow.h)",
+    "PreferencesWindow (Source/PreferencesWindow.h)",
+    "SHGetKnownFolderPath / CoCreateInstance / IShellLinkW (JUCE_WINDOWS)"
+  ],
+  "invariants": [
+    "Destructor ordering matters: deviceManager.removeAudioCallback(&player) MUST be called before player and graph are destroyed. deviceManager outlives them (declared first → destroyed last); without the explicit removeAudioCallback the realtime thread keeps invoking the dying player during shutdown. This was a real shutdown crash.",
+    "pluginLoadGeneration is the cancellation token for in-flight background plugin loads. Every onPluginInstanceReady / onAllPluginsLoaded callback first checks generation != current and discards stale results. Incremented in loadActivePlugins and cancelPluginLoading. Per backlog Fix #1, this should be std::atomic<int> — currently a plain int (still functional under JUCE's threading model because IconMenu reads/writes only happen on the message thread, but the backlog requires atomic for explicit cross-thread visibility safety).",
+    "Settings key namespace is constructed by getKey() as 'plugin-<type-lowercase>-<name><version><pluginFormatName>'. The known categories are: order, bypass, state, nodeid, lane. Changing this format breaks all persisted plugin state for existing users.",
+    "Node IDs: 1'000'000 = audio input, 1'000'001 = audio output, 1..N reserved for plugin instances allocated from settings->getIntValue(\"nextPluginNodeId\") — never reuse a freed ID (the IDs are monotonically increasing across the install lifetime).",
+    "Menu action ID partitioning (kEditOffset/kBypassOffset/kDeleteOffset/kMoveUpOffset/kMoveDownOffset = 1M/2M/3M/4M/5M) plus fixed IDs 1..5 (Preferences/Edit Plugins/Quit/Delete Plugin States/Run at Startup). Reserved IDs must not overlap.",
+    "DelayProcessor nodes are graph-managed PDC delay processors auto-inserted on shorter lanes during reconnectGraph(). They are identified by dynamic_cast<DelayProcessor*> on graph nodes and stripped before each rebuild — never persist their IDs, never reuse them across rebuilds.",
+    "JUCE 8 transition: addDefaultFormats() removed from AudioPluginFormatManager — must use free function addDefaultFormatsToManager(formatManager). The header includes are also slightly different from JUCE 7.",
+    "ScopedValueSetter on isHandlingDeviceChange prevents re-entry of the deviceManager change callback while reconnectGraph + autoMatchSampleRate are running. Using a manual `flag = true; ...; flag = false;` would leak the flag set if reconnectGraph threw.",
+    "PreferencesWindow lifetime: showPreferences constructs the unique_ptr; the onClose lambda persists device state then defers `preferencesWindow.reset()` via callAsync so the std::function isn't destroyed while still executing inside it."
+  ],
+  "gotchas": [
+    "Backlog status (verified 2026-06-01): Fix #1 (atomic generation) NOT DONE. Fix #2 (try-catch around saveIfNeeded in savePluginStates at line 951) NOT DONE — only getStateInformation is currently wrapped. Fix #3 (try-catch around activePluginList.addType/removeType in applyPluginChain at lines 1151, 1170) NOT DONE. Fix #6 (writeToLog) DONE but DBG also remains at line 215 — dual-log in debug builds, acceptable. Fix #5 (PluginWindow null check) and the GitHub Actions backlog (Part 2) are DONE.",
+    "PluginLoadThread captures the IconMenu via Component::SafePointer — if IconMenu is destroyed while the worker is mid-flight, the queued callAsync lambdas no-op cleanly. The raw AudioProcessor pointer in the lambda capture is wrapped in unique_ptr on entry so leaks are avoided in both paths.",
+    "onPluginInstanceReady scans activePluginList.getTypes() to verify the nodeId is still wanted before addNode-ing. If a plugin was deleted while loading, the unique_ptr's destructor cleans it up — there's no addNode-then-remove fallback.",
+    "reconnectGraph's stereo wiring uses `if (!graph.addConnection(channelTwo)) graph.addConnection(channelOne→channelTwo)` to fall back to mono→stereo duplication when a plugin only exposes one input channel. Reordering these calls breaks mono-plugin support.",
+    "Lane assignment: lanesData is a std::map<int, LaneInfo>, NOT a vector — so missing lane numbers (e.g. only Lane 0 and Lane 2 used) iterate cleanly. Max-lane latency is computed across the actually-used lanes, not all four.",
+    "Bypassed plugins are excluded from per-lane latency accumulation (line 531). This matches DAW convention (PDC tracks the active processing path) but means toggling bypass on a high-latency plugin can cause an audible click on the next reconnect as the PDC delay snaps.",
+    "applyPluginChain has an identicalChain short-circuit (lines 1078-1104) — Apply is a no-op if neither plugins, bypass states, NOR lanes have changed. The lane check at line 1094-1097 was the v4.0.2 fix (commit f187e8e); without it, lane-only edits were silently discarded.",
+    "Time-based order values (std::time(nullptr) + i at line 1176) are an O(1) ordering trick — adding a plugin is just baseTime + newIndex, no rewrite of existing entries. The downside: order values grow unboundedly and require int width across decades of use; uses 32-bit signed time_t cast so wraps in 2038.",
+    "getKey is NOT injective if two plugins happen to share the same name+version+format (e.g. a 32-bit and 64-bit build of the same plugin). The composite is empirically unique for normally-distributed plugin libraries but is not a hard guarantee.",
+    "Right-click menu uses POINT/GetCursorPos on Windows (line 745) — JUCE's native MAC/LINUX path uses withTargetComponent(this). The Windows path was added because tray icons don't have stable component geometry there.",
+    "removePluginsLackingInputOutput is called from PluginListWindow::closeButtonPressed — it strips known-list entries with <2 in/out channels. Users won't see these in 'Add Plugin' but they remain on disk; rescanning re-discovers them. The 2-channel floor is the stereo-only design choice.",
+    "Windows Run-at-Startup uses SHGetKnownFolderPath(FOLDERID_Startup) + IShellLinkW to write a literal `.lnk` shortcut in the user's Startup folder — not a registry RunKey entry. Users can disable via Windows' built-in Startup Apps manager without going through this code path.",
+    "AugmentedPluginListComponent::browseAndScan uses ThreadWithProgressWindow's modal progress UI — JUCE_MODAL_LOOPS_PERMITTED must be 1 in CMake or this crashes."
+  ],
+  "key_functions": [
+    {"name": "loadActivePlugins", "summary": "Resets the graph, recreates I/O nodes, ensures all active plugins have NodeIDs assigned (allocating new ones if missing), then hands off to PluginLoadThread to instantiate plugins on a worker thread. Cancels any in-flight load by incrementing pluginLoadGeneration first."},
+    {"name": "reconnectGraph", "summary": "The PDC heart of the app. Strips all existing DelayProcessor nodes + all connections; groups remaining plugin nodes by lane; chains them in series within each lane; computes max-lane latency; inserts a DelayProcessor on each shorter lane to match; sums lane outputs at the graph's output node. No-op edge cases short-circuit to a direct input→output wire."},
+    {"name": "applyPluginChain", "summary": "PreferencesWindow Apply handler. Diffs newChain vs current via stable identity string; short-circuits when identical (including lane equality); removes plugins no longer present (with state/window cleanup); assigns NodeIDs for new plugins; writes time-based order values + bypass/lane settings; loadActivePlugins() if new instances need DLL loads, else reconnectGraph() only."},
+    {"name": "PluginLoadThread::run", "summary": "Worker thread. Iterates LoadSpec list, calls formatManager.createPluginInstance for each, marshals the unique_ptr back to the message thread via callAsync targeting onPluginInstanceReady. Issues a final callAsync to onAllPluginsLoaded when done. Captures IconMenu via SafePointer for safe no-op on shutdown."},
+    {"name": "changeListenerCallback", "summary": "Multiplexer for three sources: knownPluginList → persist pluginList XML; activePluginList → persist pluginListActive XML; deviceManager → reentrancy-guarded reconnectGraph + autoMatchSampleRate + persist audioDeviceState XML. JUCE_ASSERT_MESSAGE_THREAD enforces the assumption that JUCE marshals these callbacks."},
+    {"name": "getKey", "summary": "Stable settings-key generator: 'plugin-' + lowercase(type) + plugin.name + plugin.version + plugin.pluginFormatName. The single source of truth for how every per-plugin setting is named on disk. Changing it invalidates all persisted state."}
+  ]
+}
