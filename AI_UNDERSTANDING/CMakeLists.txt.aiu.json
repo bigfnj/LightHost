@@ -1,50 +1,37 @@
 {
   "schema": 1,
   "path": "CMakeLists.txt",
-  "sha1": "f3f6bffd3e0648711d0a360b3044b9de4981d176",
-  "purpose": "Top-level build definition. Adds the vendored JUCE under lib/juce, defines the 'Light Host' GUI app target via juce_add_gui_app, links the required JUCE modules, compiles the four Source/*.cpp translation units, generates BinaryData from Resources/MicrophoneIcon.png, and applies Windows + MSVC-specific flags.",
-  "exports": [],
+  "sha1": "b928a63eb1d81fd4e7ace203b836dcbc271162d3",
+  "purpose": "Top-level build definition. Declares the LightHost JUCE GUI app target, embeds the microphone tray icon as a binary-data target, links JUCE 8 modules, sets per-platform compile/link options, and exposes plugin-host flags (VST/VST3/AU) for HostStartup.cpp's static_assert.",
+  "exports": [
+    "LightHost (juce_add_gui_app target)",
+    "LightHostData (juce_add_binary_data target)"
+  ],
   "imports": [
     "lib/juce (add_subdirectory)",
-    "lib/vstsdk2.4 (include path)",
-    "Source/HostStartup.cpp",
-    "Source/IconMenu.cpp",
-    "Source/PluginWindow.cpp",
-    "Source/PreferencesWindow.cpp",
-    "Source/DelayProcessor.hpp",
-    "Resources/MicrophoneIcon.png",
-    "Resources/icon.png"
+    "lib/vstsdk2.4 (target_include_directories)"
   ],
   "called_by": [
-    "CMakePresets.json",
-    ".github/workflows/ci.yml",
-    ".github/workflows/release.yml"
+    "CMakePresets.json"
   ],
   "calls_out_to": [
     "juce_add_gui_app",
     "juce_add_binary_data",
-    "add_subdirectory",
-    "target_sources",
     "target_link_libraries",
     "target_compile_definitions",
     "target_compile_options",
-    "target_link_options",
-    "target_include_directories"
+    "target_link_options"
   ],
   "invariants": [
-    "cmake_minimum_required is 4.2 — required by the Visual Studio 18 2026 generator. Raising the floor is fine; lowering it breaks the VS2026 build.",
-    "CMAKE_SYSTEM_VERSION must be set BEFORE project() so the VS generator picks up WindowsTargetPlatformVersion correctly. Pinned to Win11 26100.",
-    "LANGUAGES C CXX is required because JUCE pulls in C translation units (notably juce_graphics_Sheenbidi.c) on Linux. Removing C makes Linux configure fail at CMAKE_C_COMPILE_OBJECT.",
-    "C++ standard is fixed to C++23, REQUIRED ON, EXTENSIONS OFF.",
-    "Project VERSION (currently 4.0.3) is the single source of truth — propagated to JUCE_APPLICATION_VERSION_STRING via generator expression and to the GitHub Release zip filename via CI.",
-    "JUCE_PLUGINHOST_VST3 / VST / AU = 1 are required for the host to load plugins; HostStartup.cpp has a #error guarding this.",
-    "JUCE_DIR override (-DJUCE_DIR=<path>) is supported but the default points at the vendored lib/juce.",
-    "The 'Light Host' display name comes from juce_add_gui_app's PRODUCT_NAME — the CMake target itself is named LightHost; release artefact paths key off PRODUCT_NAME (e.g. 'Light Host.exe')."
+    "project(LightHost VERSION 3.8.1) is the single source of truth for the app version — JUCE_APPLICATION_VERSION_STRING is derived from $<TARGET_PROPERTY:LightHost,JUCE_VERSION>.",
+    "CMAKE_CXX_STANDARD must remain 23 (or higher) — Source/ uses C++23 features.",
+    "JUCE_PLUGINHOST_VST3 / JUCE_PLUGINHOST_AU / JUCE_PLUGINHOST_VST must stay defined as 1 — HostStartup.cpp has a static_assert that fails the build otherwise.",
+    "CMAKE_SYSTEM_VERSION is forced to 10.0.26100.0 BEFORE project() so the VS generator picks it up as WindowsTargetPlatformVersion."
   ],
   "gotchas": [
-    "DelayProcessor.hpp appears in target_sources even though it's header-only — IDEs (VS2026 in particular) need this to show the file in the solution. Removing it does NOT break the build but hides the file in the IDE tree.",
-    "JUCE 8.0.13+ moved to createEditorAndMakeActive() — this CMakeLists is fine, but PluginWindow.cpp has a version-specific note that depends on the JUCE version pinned in lib/juce.",
-    "ASIO=1 is enabled but lib/ does not vendor the ASIO SDK — Windows builds rely on JUCE's stub headers; full ASIO support requires Steinberg's separately-licensed SDK at build time.",
-    "/wd5105 suppresses a warning from JUCE's bundled HarfBuzz; do not enable C5105 elsewhere or unrelated warnings will be hidden too."
+    "NEEDS_CURL=FALSE and NEEDS_WEB_BROWSER=FALSE keep the Linux binary independent of libcurl/webkit2gtk-4.0; configure-time warnings about those missing packages on WSL are expected and benign.",
+    "VST2 SDK include path is hard-coded to lib/vstsdk2.4 — VST2 is forbidden on Windows by Steinberg, so the include is effectively macOS/Linux-only even though it's set unconditionally.",
+    "/wd5105 (MSVC) silences a C5105 warning that originates from JUCE's bundled HarfBuzz preprocessor macros — it does NOT suppress warnings in LightHost source.",
+    "The default and release presets in CMakePresets.json use the Visual Studio 18 2026 generator and fail on Linux/macOS; use ninja-* or clang-* presets there."
   ]
 }

@@ -2,11 +2,11 @@
   "schema": 1,
   "path": "Source/PluginWindow.h",
   "sha1": "d8042ff1cfd1e467f4699402da113e8852ca5ea4",
-  "purpose": "Header for PluginWindow, a DocumentWindow subclass that displays a plugin's editor (or a generic fallback) in its own top-level window. Provides static lookup (getWindowFor) by AudioProcessorGraph::Node — one window per (node, format type) pair — plus bulk-close helpers. Free helpers map a WindowFormatType to PropertiesFile keys for restoring last position / open state.",
+  "purpose": "Public header for PluginWindow — a JUCE DocumentWindow that hosts a plugin's editor (native, generic, programs, or parameters view) with per-plugin persistent position via owner->properties.",
   "exports": [
     "PluginWindow",
     "PluginWindow::WindowFormatType",
-    "toString",
+    "toString (WindowFormatType)",
     "getLastXProp",
     "getLastYProp",
     "getOpenProp"
@@ -16,19 +16,15 @@
     "juce_gui_extra/juce_gui_extra.h"
   ],
   "called_by": [
-    "Source/IconMenu.cpp",
-    "Source/PluginWindow.cpp"
+    "Source/PluginWindow.cpp",
+    "Source/IconMenu.cpp"
   ],
   "calls_out_to": [],
   "invariants": [
-    "WindowFormatType enum: Normal, Generic, Programs, Parameters, NumTypes. NumTypes is the sentinel — never use it as an actual format.",
-    "getDesktopScaleFactor() is overridden to return 1.0f — JUCE will otherwise scale plugin editors per the system DPI and many plugins render incorrectly under scaling.",
-    "PropertiesFile keys ('uiLastX_' + type, 'uiLastY_' + type, 'uiopen_' + type) embed the WindowFormatType name. Renaming any toString() return value invalidates persisted window state for that format.",
-    "Static getActiveWindows() returns a singleton Array<PluginWindow*>; no copies, all PluginWindow instances are tracked via raw pointers in this array.",
-    "JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR — PluginWindow has identity (the Node::Ptr it owns); copying is meaningless."
+    "WindowFormatType enum order is load-bearing: Normal=0 (preferred), then Generic/Programs/Parameters; NumTypes is the count sentinel.",
+    "getDesktopScaleFactor() is hard-overridden to 1.0f to prevent JUCE from double-scaling plugin editors on high-DPI displays."
   ],
   "gotchas": [
-    "Window pointers in getActiveWindows() are raw — they are added in the constructor and removed in the destructor. Forgetting to construct via 'new PluginWindow(...)' or destruct via 'delete' will leak or double-free the list entry.",
-    "closeButtonPressed() does `delete this;` — the standard JUCE pattern for owned DocumentWindows. Don't keep PluginWindow* in a stack/value container that might also try to free them."
+    "Property keys (uiLastX_/uiLastY_/uiopen_) are stringified per WindowFormatType — changing toString() output silently invalidates persisted plugin window positions for all users."
   ]
 }

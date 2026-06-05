@@ -1,34 +1,34 @@
 {
   "schema": 1,
   "path": "Source/IconMenu.hpp",
-  "sha1": "e78b443a9d39ab0c711eeb2ed0ce58b3a5dc1f0f",
-  "purpose": "Header for IconMenu, the central app component. Owns the AudioDeviceManager, AudioPluginFormatManager, two KnownPluginLists (known vs active), the realtime AudioProcessorGraph, the AudioProcessorPlayer driving it, and the PreferencesWindow lifetime. Subclasses SystemTrayIconComponent + Timer + ChangeListener so it can render the tray icon, run periodic UI refresh, and listen for KnownPluginList changes.",
+  "sha1": "82bae673d91b624407078a65e68e441c703e3146",
+  "purpose": "Public header for IconMenu — the SystemTrayIconComponent that owns the AudioDeviceManager, AudioProcessorGraph, AudioProcessorPlayer, plugin lists, the background plugin loader, and the Preferences/PluginList windows.",
   "exports": [
-    "IconMenu"
+    "IconMenu",
+    "getAppProperties (forward declaration)",
+    "IconMenu::kEditOffset",
+    "IconMenu::kBypassOffset",
+    "IconMenu::kDeleteOffset",
+    "IconMenu::kMoveUpOffset",
+    "IconMenu::kMoveDownOffset"
   ],
   "imports": [
     "juce_audio_utils/juce_audio_utils.h",
     "juce_gui_extra/juce_gui_extra.h",
-    "<atomic>",
     "<vector>"
   ],
   "called_by": [
     "Source/HostStartup.cpp",
-    "Source/PreferencesWindow.cpp (via std::function callbacks)"
+    "Source/IconMenu.cpp"
   ],
   "calls_out_to": [],
   "invariants": [
-    "Menu action ID offsets (kEditOffset=1M, kBypassOffset=2M, kDeleteOffset=3M, kMoveUpOffset=4M, kMoveDownOffset=5M) partition the popup-menu ID space into five non-overlapping 1M-entry ranges. Up to 1M plugins per action category — practically unbounded.",
-    "Forward-declares PreferencesWindow rather than including PreferencesWindow.h to break a header cycle; the .cpp file pulls the full type when constructing the window.",
-    "PluginLoadThread is a private nested class, forward-declared and unique_ptr-owned so the public header stays free of std::thread/JUCE Thread includes.",
-    "pluginLoadGeneration is std::atomic<int> (v4.0.3). The counter cancels in-flight background plugin loads when the user reloads or changes the chain. IconMenu's reads/writes happen on the message thread, but PluginLoadThread captures the value at start; the atomic type makes the cross-thread semantics explicit and guards future callers.",
-    "JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR — IconMenu is single-instance, owned by PluginHostApp, never copied.",
-    "Windows-only members getStartupShortcutPath / isStartupEnabled / setStartupEnabled are guarded by JUCE_WINDOWS — not present on macOS/Linux ABI."
+    "Menu ID offsets kEditOffset..kMoveDownOffset are spaced exactly 1_000_000 apart; menuInvocationCallback range checks rely on this spacing.",
+    "Member declaration order matters: deviceManager is declared before player/graph so it destructs after them — the destructor must manually detach the audio callback FIRST to avoid use-after-free on the realtime thread.",
+    "PluginLoadThread and PluginListWindow are forward-declared as nested class names; their definitions live in IconMenu.cpp."
   ],
   "gotchas": [
-    "sortedPluginCache + sortedCacheDirty are 'mutable' so const accessors can lazily rebuild the cache. Any code that mutates the active plugin list MUST set sortedCacheDirty=true or callers will see stale ordering.",
-    "isHandlingDeviceChange guards against re-entry in changeListenerCallback during the device-type / device-setup mutation paths; do not bypass it.",
-    "preferencesWindow is a unique_ptr — calling showPreferences while one already exists must check for null and reuse rather than reconstruct.",
-    "inputNodeId / outputNodeId are the graph's audio I/O processor node IDs, established once at construction. Don't rebuild them on every reconnect; reconnectGraph relies on their stability."
+    "PreferencesWindow is forward-declared, so IconMenu.cpp must include PreferencesWindow.h to call any of its methods.",
+    "sortedPluginCache and sortedCacheDirty are mutable so getTimeSortedList() can stay const; any code path that changes plugin order/membership must set sortedCacheDirty = true."
   ]
 }

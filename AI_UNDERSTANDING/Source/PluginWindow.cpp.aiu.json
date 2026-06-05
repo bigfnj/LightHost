@@ -1,18 +1,17 @@
 {
   "schema": 1,
   "path": "Source/PluginWindow.cpp",
-  "sha1": "fbde91155ec7ab184777807e20f2fa65bf083493",
-  "purpose": "Implementation of PluginWindow. Owns a singleton Array<PluginWindow*> tracking every open editor; factories one window per (node, format type) lazily via getWindowFor — falling back from Normal → Generic when the plugin has no native editor. Restores last X/Y position from the node's properties and persists 'uiopen_<type>' state.",
+  "sha1": "ace5728beef54a3d223e00bb03cb0862c1ac97b4",
+  "purpose": "Implementation of PluginWindow. Maintains a static registry of currently-open editor windows and constructs the appropriate AudioProcessorEditor (native via createEditorIfNeeded, GenericAudioProcessorEditor, or ProgramAudioProcessorEditor) on demand.",
   "exports": [
-    "PluginWindow (ctor/dtor/members)",
+    "PluginWindow::PluginWindow",
+    "PluginWindow::~PluginWindow",
     "PluginWindow::getWindowFor",
     "PluginWindow::closeCurrentlyOpenWindowsFor",
     "PluginWindow::closeAllCurrentlyOpenWindows",
     "PluginWindow::containsActiveWindows",
     "PluginWindow::moved",
-    "PluginWindow::closeButtonPressed",
-    "ProgramPropertyComponent (file-local)",
-    "ProgramAudioProcessorEditor (file-local)"
+    "PluginWindow::closeButtonPressed"
   ],
   "imports": [
     "Source/PluginWindow.h",
@@ -22,25 +21,20 @@
     "Source/IconMenu.cpp"
   ],
   "calls_out_to": [
-    "juce::DocumentWindow",
-    "juce::AudioProcessor::createEditorAndMakeActive",
+    "juce::AudioProcessor::createEditorIfNeeded",
     "juce::GenericAudioProcessorEditor",
-    "juce::Logger::writeToLog",
-    "juce::Random::getSystemRandom",
-    "juce::AudioProcessorGraph::Node::properties",
-    "juce::MessageManager::getInstance"
+    "juce::PropertyPanel",
+    "juce::AudioProcessorGraph::Node",
+    "juce::MessageManager (runDispatchLoopUntil)"
   ],
   "invariants": [
-    "Normal-type lookups also match an existing Generic window for the same node — see comment at PluginWindow.cpp:137. This avoids creating two duplicate Generic windows when 'Edit' is invoked twice on a plugin that has no native editor.",
-    "Editor construction is wrapped in try-catch (std::exception + ...). Failures log and return nullptr; the graph node stays alive but no window opens. This guards against plugins whose UI throws on first paint.",
-    "JUCE 8.0.13+ uses createEditorAndMakeActive() (not createEditorIfNeeded() — the comment at line 155 calls this out). The method also registers the editor on the AudioProcessor so getActiveEditor() returns it.",
-    "getWindowFor returns nullptr in three cases: (1) node->getProcessor() returns nullptr — early-exit guard per backlog Fix #5; (2) editor creation throws; (3) all three editor factories produce nullptr.",
-    "closeButtonPressed sets the 'uiopen_<type>' property to false then deletes 'this' — the standard JUCE pattern. The destructor removes the pointer from getActiveWindows() so no dangling entries remain."
+    "getActiveWindows() is a function-local static Array — accessed from the message thread only. The constructor adds `this` and the destructor removes it; every PluginWindow instance must follow that contract.",
+    "Editor creation is wrapped in try/catch — a plugin editor that throws must not bring down the host process."
   ],
   "gotchas": [
-    "createEditorAndMakeActive() can return nullptr for plugins with no native UI — when this happens for a Normal request, type is reassigned to Generic in the same call (line 160) and a GenericAudioProcessorEditor is constructed instead. The PluginWindow that gets stored therefore has type=Generic for such plugins, which is why the lookup at line 141 treats Normal/Generic as interchangeable.",
-    "ProgramAudioProcessorEditor's ProgramPropertyComponent::refresh() is a no-op — the program list is built once in the constructor. Plugin program-name changes after the window opens will not propagate; close and reopen the window to see them.",
-    "closeAllCurrentlyOpenWindows runs a 50ms modal dispatch loop only if JUCE_MODAL_LOOPS_PERMITTED is defined (it is, via CMake). The loop drains pending UI events so destroyed windows fully tear down before the caller continues.",
-    "dynamic_cast<AudioPluginInstance*> at line 184 is what gives the editor its plugin name in the title bar; DelayProcessor (the auto-inserted PDC node) is NOT an AudioPluginInstance — but it also has hasEditor()==false so getWindowFor will already return nullptr before reaching that line."
+    "getWindowFor returns an existing Generic window for a Normal request when the plugin has no native editor — otherwise clicking Edit twice on such a plugin would spawn two duplicate Generic windows.",
+    "closeAllCurrentlyOpenWindows pumps a 50ms dispatch loop under a dummy modal Component (only when JUCE_MODAL_LOOPS_PERMITTED) to flush deferred deletes before returning.",
+    "closeButtonPressed calls `delete this` — the window must have been heap-allocated, which getWindowFor guarantees. Stack-allocating a PluginWindow would crash here.",
+    "ProgramAudioProcessorEditor uses PropertyComponent::refresh() as a no-op — it's a static list of program names, not a live editor."
   ]
 }

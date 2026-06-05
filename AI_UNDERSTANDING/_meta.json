@@ -1,63 +1,34 @@
 {
   "schema": 1,
-  "project": "LightHost",
-  "last_audit_commit": "7e676b1",
-  "last_audit_at": "2026-06-01T19:52:25Z",
-  "generator": "manual-bootstrap/1.0.0",
-  "overview": "Lightweight desktop audio plugin host built on JUCE 8.0.13. Lives in the system tray (Windows) / menu bar (macOS) with no main window; audio flows through a realtime AudioProcessorGraph that supports up to 4 parallel processing lanes with automatic Plugin Delay Compensation (PDC). Hosts VST/VST3/AU plugins. Settings — device choice, plugin chain, lane assignments, per-plugin state — persist via PropertiesFile. Current version 4.0.3. Forked from Rolando Islas (2015), GPLv2+.",
+  "project": "lighthost",
+  "last_audit_commit": "77ab17b",
+  "last_audit_at": "2026-05-13T06:05:08Z",
+  "generator": "ai-context-runner/4.1.2",
+  "overview": "Lightweight JUCE-based audio plugin host. Lives in the system tray (Windows) or menu bar (macOS/Linux), runs VST/VST3/AU plugins in series through a JUCE AudioProcessorGraph, persists chain order + plugin state + audio device settings between launches. No permanent main window — all interaction is through the tray icon and an on-demand Preferences window.",
   "frameworks": [
-    {
-      "name": "JUCE",
-      "version": "8.0.13"
-    },
-    {
-      "name": "C++23"
-    },
-    {
-      "name": "CMake",
-      "version": ">=4.2"
-    },
-    {
-      "name": "Steinberg VST2.4 SDK",
-      "version": "vendored under lib/"
-    }
+    {"name": "JUCE", "version": "8.0.12+"},
+    {"name": "C++23"},
+    {"name": "CMake", "version": "3.28+"}
   ],
-  "test_command": "",
   "tracked_globs": {
     "include": [
-      "Source/**/*.cpp",
-      "Source/**/*.hpp",
-      "Source/**/*.h",
+      "Source/**",
       "CMakeLists.txt",
-      "CMakePresets.json",
-      ".github/workflows/*.yml"
+      "CMakePresets.json"
     ],
     "exclude": [
-      "build/**",
       "lib/**",
+      "build/**",
       "Resources/**",
       "Utilities/**",
-      "fix_*.py",
-      "patch_*.py",
-      "force_patch*.py",
-      "rewrite_*.py",
-      "refactor_*.py",
-      "make_pref_clean.py",
-      "AI_UNDERSTANDING.md",
+      "AI_UNDERSTANDING/**",
+      ".git/**",
       "**/*.png",
       "**/*.jpg",
       "**/*.jpeg",
-      "**/*.gif",
-      "**/*.svg",
       "**/*.ico",
-      "**/*.woff",
-      "**/*.woff2",
-      "**/*.ttf",
-      "**/*.eot",
-      ".vs/**",
-      ".vscode/**",
-      ".git/**"
+      "**/*.log"
     ]
   },
-  "graph": "HostStartup.cpp -> JUCEApplication entry; creates IconMenu in initialise()\nIconMenu (.hpp/.cpp) -> central state: holds AudioDeviceManager, AudioProcessorGraph, plugin list, PropertiesFile; renders SystemTrayIconComponent + right-click PopupMenu; owns the load-active-plugins background pipeline; rebuilds the graph (reconnect()) on every chain/device/lane change with auto-PDC via DelayProcessor\nIconMenu -> PreferencesWindow (left-click): unified settings UI — audio device tab + plugin chain tab (per-row lane combo)\nIconMenu -> PluginWindow (per-plugin edit): single-window-per-plugin lookup keyed by node id\nDelayProcessor (header-only) -> AudioProcessor that delays by N samples; auto-inserted on shorter lanes during reconnect to match max-lane latency\nCMakeLists.txt + CMakePresets.json -> build config; JUCE is vendored under lib/JUCE and added via add_subdirectory; juce_add_gui_app produces 'Light Host'\n.github/workflows/ci.yml -> Windows+Linux build on push/PR\n.github/workflows/release.yml -> tag v* triggers parallel builds + zipped artefacts attached to a GitHub Release"
+  "graph": "HostStartup.cpp -> IconMenu (owns single instance for app lifetime)\nIconMenu -> PluginWindow (opens/closes plugin editor windows)\nIconMenu -> PreferencesWindow (settings UI; staged-then-Apply)\nIconMenu -> AudioProcessorGraph + AudioDeviceManager + AudioProcessorPlayer (realtime audio chain)\nIconMenu::PluginLoadThread -> AudioPluginFormatManager (background plugin instantiation, marshalled back via MessageManager::callAsync)\nPreferencesWindow content -> AudioChainListComponent (paint-based drag-reorder + bypass + Edit list)\nPreferencesWindow content -> onApply callback -> IconMenu::applyPluginChain\nCMakeLists.txt -> lib/juce (vendored JUCE 8) + lib/vstsdk2.4 (VST2 SDK, non-Windows)"
 }

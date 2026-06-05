@@ -1,10 +1,11 @@
 {
   "schema": 1,
   "path": "Source/PreferencesWindow.h",
-  "sha1": "f2989360ee2046c87492c1e8cfaa732615a17995",
-  "purpose": "Header for PreferencesWindow — the single unified settings window with a top-to-bottom 'signal flow' layout (INPUT → AUDIO CHAIN → OUTPUT → DEVICE SETTINGS). Plugin chain edits, bypass, and lane assignments are staged locally and committed via the onApply std::function callback; closing fires onClose so the owner (IconMenu) can persist device state and release the unique_ptr.",
+  "sha1": "2e61f5959a34ab9beb7352a3097fad9793d787dc",
+  "purpose": "Public header for PreferencesWindow — DocumentWindow that hosts the unified signal-flow editor (INPUT → AUDIO CHAIN → OUTPUT → DEVICE SETTINGS). Plugin chain changes are staged locally until the user clicks Apply.",
   "exports": [
-    "PreferencesWindow"
+    "PreferencesWindow",
+    "PreferencesWindow::refreshPluginChain"
   ],
   "imports": [
     "juce_audio_utils/juce_audio_utils.h",
@@ -13,18 +14,16 @@
     "<vector>"
   ],
   "called_by": [
-    "Source/IconMenu.cpp",
-    "Source/PreferencesWindow.cpp"
+    "Source/PreferencesWindow.cpp",
+    "Source/IconMenu.cpp"
   ],
   "calls_out_to": [],
   "invariants": [
-    "Constructor takes three parallel vectors — activeChain (PluginDescription), bypassStates (bool), laneStates (int) — and onApply receives the same three. Sizes must match: chain[i], bypass[i], lane[i] all describe plugin i.",
-    "Apply commits changes and keeps the window open (per the header comment). Close-button triggers onClose regardless of whether Apply was ever clicked.",
-    "refreshPluginChain is called by the owner to update the UI after an external chain change (e.g. background load completed) — the window owner must hold the window alive across these refreshes.",
-    "JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR — std::function callbacks capture by-value and the window has identity, so copying is unsafe."
+    "onApply is called with the final {chain, bypass} pair only when the user clicks Apply; the constructor argument values are the initial state, not authoritative through the window's lifetime.",
+    "onClose must release the owning IconMenu's preferencesWindow pointer — failing to do so leaks the window and prevents reopening.",
+    "refreshPluginChain pushes external chain changes into the staged UI; it does NOT trigger onApply."
   ],
   "gotchas": [
-    "onApply / onEditPlugin / onClose are std::function — captured by-value at construction. Any heap state captured by IconMenu must outlive the PreferencesWindow (it does, since IconMenu owns the unique_ptr).",
-    "The onApply signature changed when lanes were added in v4.0.0 (third laneStates vector). Older callers that constructed the window with the two-vector form will not compile against this header."
+    "Both the DocumentWindow and its content component (PreferencesContentComponent, file-private in .cpp) listen to AudioDeviceManager; the cast in refreshPluginChain is the documented API for IconMenu to talk to the content component."
   ]
 }
