@@ -60,3 +60,6 @@ AGENTS.md
 .windsurfrules
 SESSION_LOG*.md
 SESSION_HANDOFF*.md
+
+.codex/
+SESSION_*
