@@ -1,0 +1,4 @@
+# Vendored third-party libraries (JUCE, VST SDK) — mirror upstream verbatim.
+# Do NOT lint or auto-format these; reverted an accidental markdownlint
+# reformatting sweep here on 2026-06-19 and added this marker to prevent recurrence.
+lib/
