@@ -6,13 +6,14 @@ on:
       - develop
       - bugfix/**
       - feature/**
+      - juce9
 jobs:
   juce-private-push-trigger:
     if: github.repository == 'juce-framework/JUCE-dev'
     name: JUCE Push Trigger
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v6.0.2
         with:
           sparse-checkout: ./.github/workflows
       - name: Trigger a private build using the GitHub API

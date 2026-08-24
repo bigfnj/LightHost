@@ -16,7 +16,7 @@
    framework to you, and you must discontinue the installation or download
    process and cease use of the JUCE framework.
 
-   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-9-licence/
    JUCE Privacy Policy: https://juce.com/juce-privacy-policy
    JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
@@ -1258,7 +1258,16 @@ public:
             {
                 auto chunkType = input->readInt();
                 auto length = (uint32) input->readInt();
-                auto chunkEnd = input->getPosition() + length + (length & 1);
+                auto snappedLength = (int64) length + (int64) (length & 1);
+                const auto numBytesAvailable = input->getNumBytesRemaining();
+
+                if (numBytesAvailable >= 0 && snappedLength > numBytesAvailable)
+                {
+                    // Malformed chunk, its length is longer than the stream itself
+                    return;
+                }
+
+                auto chunkEnd = input->getPosition() + snappedLength;
 
                 if (chunkType == chunkName ("fmt "))
                 {
@@ -1352,6 +1361,10 @@ public:
 
                     HeapBlock<BWAVChunk> bwav;
                     bwav.calloc (jmax ((size_t) length + 1, sizeof (BWAVChunk)), 1);
+
+                    if (bwav.getData() == nullptr)
+                        break;
+
                     input->read (bwav, (int) length);
                     bwav->copyTo (dict, (int) length);
                 }
@@ -1359,6 +1372,10 @@ public:
                 {
                     HeapBlock<SMPLChunk> smpl;
                     smpl.calloc (jmax ((size_t) length + 1, sizeof (SMPLChunk)), 1);
+
+                    if (smpl.getData() == nullptr)
+                        break;
+
                     input->read (smpl, (int) length);
                     smpl->copyTo (dict, (int) length);
                 }
@@ -1366,6 +1383,10 @@ public:
                 {
                     HeapBlock<InstChunk> inst;
                     inst.calloc (jmax ((size_t) length + 1, sizeof (InstChunk)), 1);
+
+                    if (inst.getData() == nullptr)
+                        break;
+
                     input->read (inst, (int) length);
                     inst->copyTo (dict);
                 }
@@ -1373,6 +1394,10 @@ public:
                 {
                     HeapBlock<CueChunk> cue;
                     cue.calloc (jmax ((size_t) length + 1, sizeof (CueChunk)), 1);
+
+                    if (cue.getData() == nullptr)
+                        break;
+
                     input->read (cue, (int) length);
                     cue->copyTo (dict, (int) length);
                 }

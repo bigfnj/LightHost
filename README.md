@@ -1,6 +1,6 @@
 # Light Host
 
-Light Host is a lightweight desktop audio plugin host built with **JUCE 8.0.13**. It is designed to live in the system tray on Windows or the menu bar on macOS, with no permanent main window. Audio flows through a realtime `AudioProcessorGraph` with support for parallel processing lanes and automatic delay compensation. Plugins can be added, removed, reordered, bypassed, edited, and assigned to lanes from the tray/menu UI and the Preferences window.
+Light Host is a lightweight desktop audio plugin host built with **JUCE 9.0.1**. It is designed to live in the system tray on Windows or the menu bar on macOS, with no permanent main window. Audio flows through a realtime `AudioProcessorGraph` with support for parallel processing lanes and automatic delay compensation. Plugins can be added, removed, reordered, bypassed, edited, and assigned to lanes from the tray/menu UI and the Preferences window.
 
 Current version: **4.0.3** — see [CHANGELOG.md](CHANGELOG.md).
 

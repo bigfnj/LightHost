@@ -8,9 +8,9 @@ Website: Bogdan Rosu (http://www.bogdanrosu.com)
           www.flaticon.com
 License: CC BY 3.0
 
-JUCE 8.0.13  (vendored at lib/juce)
+JUCE 9.0.1  (vendored at lib/juce)
 Website: http://www.juce.com
-License: AGPLv3 OR commercial JUCE 8 licence. Light Host holds no commercial
+License: AGPLv3 OR commercial JUCE 9 licence. Light Host holds no commercial
          licence and therefore uses JUCE under AGPLv3.
          See lib/juce/LICENSE.md.
 
@@ -31,14 +31,17 @@ License: Steinberg VST 2.4 Plug-In SDK Licensing Agreement. Not
 
 Libraries bundled inside JUCE and linked into the binary:
 
-  HarfBuzz    text shaping        "Old MIT"
+  HarfBuzz    14.2.1  text shaping        "Old MIT"
               lib/juce/modules/juce_graphics/fonts/harfbuzz/COPYING
-  libpng      PNG decoding        PNG Reference Library License v2
+  libpng      1.6.58  PNG decoding        PNG Reference Library License v2
               lib/juce/modules/juce_graphics/image_formats/pnglib/LICENSE
-  SheenBidi   bidirectional text  Apache-2.0
-              lib/juce/modules/juce_graphics/unicode/sheenbidi/LICENSE
-  zlib        compression         zlib licence (stated in the source headers)
+  zlib        1.3.2   compression         zlib licence (stated in the source headers)
               lib/juce/modules/juce_core/zip/zlib/
+  SheenBidi           bidirectional text  Apache-2.0
+              lib/juce/modules/juce_graphics/unicode/sheenbidi/LICENSE
+  lunasvg             SVG rendering       MIT
+  plutovg             2D vector backend   MIT (bundled inside lunasvg)
+              lib/juce/modules/juce_graphics/drawables/lunasvg/LICENSE
 
 Not compiled into Light Host (disabled in CMakeLists.txt): FLAC, Ogg Vorbis,
 libjpeg, curl, and the web browser component.

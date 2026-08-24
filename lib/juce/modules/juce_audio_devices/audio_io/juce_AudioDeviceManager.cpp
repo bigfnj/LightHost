@@ -16,7 +16,7 @@
    framework to you, and you must discontinue the installation or download
    process and cease use of the JUCE framework.
 
-   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-9-licence/
    JUCE Privacy Policy: https://juce.com/juce-privacy-policy
    JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
@@ -206,6 +206,7 @@ AudioDeviceManager::AudioDeviceManager()
 
 AudioDeviceManager::~AudioDeviceManager()
 {
+    enabledMidiInputs.clear();
     currentAudioDevice.reset();
     defaultMidiOutput.reset();
 }
@@ -271,7 +272,7 @@ void AudioDeviceManager::audioDeviceListChanged()
 {
     if (currentAudioDevice != nullptr)
     {
-        auto currentDeviceStillAvailable = [&]
+        auto currentDeviceStillAvailable = std::invoke ([&]
         {
             auto currentTypeName = currentAudioDevice->getTypeName();
             auto currentDeviceName = currentAudioDevice->getName();
@@ -291,7 +292,7 @@ void AudioDeviceManager::audioDeviceListChanged()
             }
 
             return false;
-        }();
+        });
 
         if (! currentDeviceStillAvailable)
         {
@@ -882,13 +883,28 @@ String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup
         return {};
     }
 
-    currentSetup.sampleRate = chooseBestSampleRate (currentSetup.sampleRate);
-    currentSetup.bufferSize = chooseBestBufferSize (currentSetup.bufferSize);
+    const auto sampleRate = findNearestValue (Span { currentAudioDevice->getAvailableSampleRates() }, currentSetup.sampleRate);
+    const auto preBufferSize = findNearestValue (Span { currentAudioDevice->getAvailableBufferSizes() }, currentSetup.bufferSize);
 
     error = currentAudioDevice->open (currentSetup.inputChannels,
                                       currentSetup.outputChannels,
-                                      currentSetup.sampleRate,
-                                      currentSetup.bufferSize);
+                                      sampleRate,
+                                      preBufferSize);
+
+    if (error.isEmpty())
+    {
+        // The available buffer sizes may have changed, if the sample rate has
+        // changed. If so we'll need to reconfigure with a different buffer size.
+        const auto postBufferSize = findNearestValue (Span { currentAudioDevice->getAvailableBufferSizes() }, currentSetup.bufferSize);
+
+        if (preBufferSize != postBufferSize)
+        {
+            error = currentAudioDevice->open (currentSetup.inputChannels,
+                                              currentSetup.outputChannels,
+                                              currentSetup.sampleRate,
+                                              postBufferSize);
+        }
+    }
 
     if (error.isEmpty())
     {
@@ -916,46 +932,6 @@ String AudioDeviceManager::setAudioDeviceSetup (const AudioDeviceSetup& newSetup
     }
 
     return error;
-}
-
-double AudioDeviceManager::chooseBestSampleRate (double rate) const
-{
-    jassert (currentAudioDevice != nullptr);
-
-    auto rates = currentAudioDevice->getAvailableSampleRates();
-
-    if (rate > 0 && rates.contains (rate))
-        return rate;
-
-    rate = currentAudioDevice->getCurrentSampleRate();
-
-    if (rate > 0 && rates.contains (rate))
-        return rate;
-
-    double lowestAbove44 = 0.0;
-
-    for (int i = rates.size(); --i >= 0;)
-    {
-        auto sr = rates[i];
-
-        if (sr >= 44100.0 && (lowestAbove44 < 1.0 || sr < lowestAbove44))
-            lowestAbove44 = sr;
-    }
-
-    if (lowestAbove44 > 0.0)
-        return lowestAbove44;
-
-    return rates[0];
-}
-
-int AudioDeviceManager::chooseBestBufferSize (int bufferSize) const
-{
-    jassert (currentAudioDevice != nullptr);
-
-    if (bufferSize > 0 && currentAudioDevice->getAvailableBufferSizes().contains (bufferSize))
-        return bufferSize;
-
-    return currentAudioDevice->getDefaultBufferSize();
 }
 
 void AudioDeviceManager::stopDevice()

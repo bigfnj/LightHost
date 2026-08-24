@@ -16,7 +16,7 @@
    framework to you, and you must discontinue the installation or download
    process and cease use of the JUCE framework.
 
-   JUCE End User Licence Agreement: https://juce.com/legal/juce-8-licence/
+   JUCE End User Licence Agreement: https://juce.com/legal/juce-9-licence/
    JUCE Privacy Policy: https://juce.com/juce-privacy-policy
    JUCE Website Terms of Service: https://juce.com/juce-website-terms-of-service/
 
@@ -218,7 +218,8 @@ ProjectExporter::ProjectExporter (Project& p, const ValueTree& state)
       extraPPDefsValue           (settings, Ids::extraDefs,                 getUndoManager()),
       paceProtectionValue        (settings, Ids::paceProtectionEnabled,     getUndoManager()),
       paceConfigurationFileValue (settings, Ids::paceConfigurationLocation, getUndoManager(), "pacefusion.toml"),
-      paceBuildSourceRootValue   (settings, Ids::paceBuildSourceRootFolder, getUndoManager(), ".")
+      paceBuildSourceRootValue   (settings, Ids::paceBuildSourceRootFolder, getUndoManager(), "."),
+      paceUseSharableTargetNames (settings, Ids::paceUsingSharableTargetNames,     getUndoManager())
 {
     projectCompilerFlagSchemesValue = project.getProjectValue (Ids::compilerFlagSchemes);
     projectCompilerFlagSchemesValue.addListener (this);
