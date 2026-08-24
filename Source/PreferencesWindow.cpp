@@ -348,6 +348,31 @@ public:
         addAndMakeVisible (inputSectionLabel);
         addAndMakeVisible (inputDeviceCombo);
         addAndMakeVisible (inputChannelLabel);
+
+        #if JUCE_WINDOWS
+        // Windows offers no way to capture another application's playback, and
+        // JUCE's WASAPI backend has no loopback mode, so processing system audio
+        // requires a third-party virtual input device. Say so instead of leaving
+        // the user staring at a silent host. Hidden once one is installed.
+        virtualInputHint.setText ("No virtual input found. Processing audio from other "
+                                  "apps needs one.",
+                                  juce::dontSendNotification);
+        virtualInputHint.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
+        virtualInputHint.setColour (juce::Label::textColourId,
+                                    juce::LookAndFeel::getDefaultLookAndFeel()
+                                        .findColour (juce::Label::textColourId)
+                                        .withAlpha (0.60f));
+        addChildComponent (virtualInputHint);
+
+        getCableButton.setButtonText ("Get VB-CABLE");
+        getCableButton.setTooltip ("Opens vb-audio.com in your browser. Light Host does not "
+                                   "bundle or install VB-CABLE.");
+        getCableButton.onClick = []
+        {
+            juce::URL ("https://vb-audio.com/Cable/").launchInDefaultBrowser();
+        };
+        addChildComponent (getCableButton);
+        #endif
         inputChannelLabel.setText ("", juce::dontSendNotification);  // set by rebuildDeviceCombos
         inputChannelLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (12.0f)));
         inputChannelLabel.setJustificationType (juce::Justification::centredRight);
@@ -444,11 +469,19 @@ public:
         constexpr int kBtnH   = 40;
         constexpr int kMinChainH = 80;
 
+        // The virtual-input hint only takes up space while it is visible.
+        #if JUCE_WINDOWS
+        const int kHintH = virtualInputHint.isVisible() ? kRowH + kGap : 0;
+        #else
+        const int kHintH = 0;
+        #endif
+
         // Fixed-height sections below/above the chain viewport
-        constexpr int kFixedAboveChain = kPad
+        const int kFixedAboveChain = kPad
             + kSectH + kGap + kRowH + kGap     // INPUT
+            + kHintH                            // virtual-input hint, when shown
             + kSectH + kGap;                    // AUDIO CHAIN label
-        constexpr int kFixedBelowChain = kGap + kRowH + kGap           // Add Plugin row
+        const int kFixedBelowChain = kGap + kRowH + kGap           // Add Plugin row
             + kSectH + kGap + kRowH + kGap                          // OUTPUT
             + kSectH + kGap + kRowH + kGap + kRowH + kGap + kRowH + kGap  // DEVICE SETTINGS (API + rate + buffer)
             + kBtnH + kPad;
@@ -468,6 +501,16 @@ public:
             inputDeviceCombo.setBounds  (row.reduced (0, 2));
         }
         area.removeFromTop (kGap);
+
+        #if JUCE_WINDOWS
+        if (virtualInputHint.isVisible())
+        {
+            auto row = area.removeFromTop (kRowH);
+            getCableButton.setBounds   (row.removeFromRight (110).reduced (0, 3));
+            virtualInputHint.setBounds (row.reduced (2, 0));
+            area.removeFromTop (kGap);
+        }
+        #endif
 
         // ── AUDIO CHAIN ────────────────────────────────────────────────────────
         chainSectionLabel.setBounds (area.removeFromTop (kSectH));
@@ -535,6 +578,11 @@ private:
     SectionLabel   inputSectionLabel   { "  INPUT" };
     juce::ComboBox inputDeviceCombo;
     juce::Label    inputChannelLabel;
+
+    #if JUCE_WINDOWS
+    juce::Label      virtualInputHint;
+    juce::TextButton getCableButton;
+    #endif
 
     // AUDIO CHAIN
     SectionLabel            chainSectionLabel  { "  AUDIO CHAIN" };
@@ -614,6 +662,52 @@ private:
         rebuildSampleRateCombo();
         rebuildBufferSizeCombo();
         updateChannelLabels();
+        updateVirtualInputHint (inputNames);
+    }
+
+    /** Shows the "get a virtual input" hint only when no virtual input device is
+        installed. Once the user has one, this never appears again.
+
+        Matching is by device-name substring because there is no API that reports
+        "this endpoint is virtual". Kept to the drivers people actually use; a
+        false negative just means the hint stays visible, which is harmless.
+    */
+    void updateVirtualInputHint ([[maybe_unused]] const juce::StringArray& inputNames)
+    {
+        #if JUCE_WINDOWS
+        static constexpr const char* kVirtualInputMarkers[] = {
+            "CABLE Output",      // VB-CABLE
+            "VB-Audio",          // VB-CABLE A/B, Hi-Fi Cable
+            "VoiceMeeter Out",   // VoiceMeeter
+            "Virtual Cable"
+        };
+
+        bool foundVirtualInput = false;
+
+        for (const auto& name : inputNames)
+        {
+            for (const auto* marker : kVirtualInputMarkers)
+            {
+                if (name.containsIgnoreCase (marker))
+                {
+                    foundVirtualInput = true;
+                    break;
+                }
+            }
+
+            if (foundVirtualInput)
+                break;
+        }
+
+        const bool shouldShow = ! foundVirtualInput;
+
+        if (shouldShow != virtualInputHint.isVisible())
+        {
+            virtualInputHint.setVisible (shouldShow);
+            getCableButton.setVisible   (shouldShow);
+            resized();   // the hint occupies a layout row only while visible
+        }
+        #endif
     }
 
     void rebuildSampleRateCombo()
