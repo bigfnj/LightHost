@@ -1,5 +1,6 @@
 #include "IconMenu.hpp"
 #include "DelayProcessor.hpp"
+#include "PdcLayout.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
 #include <BinaryData.h>
@@ -542,10 +543,13 @@ void IconMenu::reconnectGraph()
         return;
     }
 
-    double maxLatency = 0.0;
+    // PDC arithmetic lives in PdcLayout.hpp so it can be unit tested on its own.
+    // At most four lanes, so building the intermediate map costs nothing.
+    std::map<int, double> perLaneLatency;
     for (const auto& [lane, info] : lanesData)
-        if (info.latencySamples > maxLatency)
-            maxLatency = info.latencySamples;
+        perLaneLatency[lane] = info.latencySamples;
+
+    const auto laneDelays = lighthost::pdc::computeLaneDelays (perLaneLatency);
 
     for (auto& [lane, info] : lanesData)
     {
@@ -569,7 +573,7 @@ void IconMenu::reconnectGraph()
             lastActiveNodeId = nodeId;
         }
 
-        const int latencyDiff = static_cast<int>(maxLatency - info.latencySamples);
+        const int latencyDiff = laneDelays.at (lane);
         if (latencyDiff > 0)
         {
             auto delayNodeId = graph.addNode(std::make_unique<DelayProcessor>(latencyDiff))->nodeID;
