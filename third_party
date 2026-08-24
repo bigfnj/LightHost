@@ -1,14 +1,44 @@
-The following are third-party tools used in Light Host.
+The following are third-party components used in Light Host.
+
+See `license` for how these combine, and for the VST2 exception.
+
 
 Plug Icon
-Website: Bogdan Rosu (http://www.bogdanrosu.com) 
-	  www.flaticon.com
+Website: Bogdan Rosu (http://www.bogdanrosu.com)
+          www.flaticon.com
 License: CC BY 3.0
 
-JUCE
+JUCE 8.0.13  (vendored at lib/juce)
 Website: http://www.juce.com
-License: GPLv3
+License: AGPLv3 OR commercial JUCE 8 licence. Light Host holds no commercial
+         licence and therefore uses JUCE under AGPLv3.
+         See lib/juce/LICENSE.md.
 
-Steinberg VST Plug-In SDK
+Steinberg ASIO SDK  (bundled inside JUCE, enabled via JUCE_ASIO=1)
 Website: http://www.steinberg.net/en/company/developers.html
-License: Steinberg VST Plug-In SDK Licensing Agreement
+License: Steinberg ASIO License OR GPLv3. Light Host uses it under GPLv3.
+         See lib/juce/modules/juce_audio_devices/native/asio/LICENSE.txt.
+
+Steinberg VST 3 SDK  (bundled inside JUCE)
+Website: http://www.steinberg.net/en/company/developers.html
+License: MIT (SDK 3.8.0 and later, as bundled with JUCE)
+
+Steinberg VST 2.4 Plug-In SDK  (vendored at lib/vstsdk2.4)
+Website: no longer distributed; Steinberg ended VST2 licensing in 2018
+License: Steinberg VST 2.4 SDK Licensing Agreement.
+         NOT GPL-compatible and NOT redistributable. This is an explicit
+         exception to Light Host's licence grant; see `license`.
+
+Libraries bundled inside JUCE and linked into the binary:
+
+  HarfBuzz    text shaping        "Old MIT"
+              lib/juce/modules/juce_graphics/fonts/harfbuzz/COPYING
+  libpng      PNG decoding        PNG Reference Library License v2
+              lib/juce/modules/juce_graphics/image_formats/pnglib/LICENSE
+  SheenBidi   bidirectional text  Apache-2.0
+              lib/juce/modules/juce_graphics/unicode/sheenbidi/LICENSE
+  zlib        compression         zlib licence (stated in the source headers)
+              lib/juce/modules/juce_core/zip/zlib/
+
+Not compiled into Light Host (disabled in CMakeLists.txt): FLAC, Ogg Vorbis,
+libjpeg, curl, and the web browser component.
