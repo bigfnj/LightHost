@@ -6,6 +6,17 @@ on:
   pull_request:
     branches: [main]
 
+# NOTE: no job caches its CMake build directory.
+# A CMakeCache.txt stores CMAKE_MAKE_PROGRAM, the compiler and CMAKE_COMMAND as
+# ABSOLUTE paths. Restoring one into a runner whose toolchain lives somewhere
+# else fails at project() with "no such file or directory". That is exactly what
+# broke the Linux job from 2026-06-19 onwards: lukka/get-cmake installs its ninja
+# under a per-run temp directory, and restore-keys handed every later run a cache
+# pointing at a path that no longer existed. The Windows job carries the same
+# latent fault via its MSVC paths whenever the runner image updates.
+# If build caching is wanted, use ccache/sccache — they key on file content, not
+# on absolute paths.
+
 jobs:
   build-windows:
     name: Windows (MSVC / VS 2026)
@@ -13,14 +24,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Cache CMake build
-        uses: actions/cache@v4
-        with:
-          path: build/release
-          key: windows-release-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-          restore-keys: windows-release-
+        uses: actions/checkout@v7
 
       - name: Configure (VS 2026 Release preset)
         run: cmake --preset release
@@ -37,13 +41,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup CMake (>= 4.2)
-        uses: lukka/get-cmake@latest
-        # ubuntu-24.04 ships CMake 3.31; we require 4.2+ for the VS 2026 generator.
-        # Linux uses Ninja so the generator itself doesn't matter here, but
-        # cmake_minimum_required(4.2) is enforced regardless.
+      - name: Setup CMake + Ninja
+        # Pinned rather than @latest: this is a third-party action in the build
+        # path, and a floating branch can move under us.
+        uses: lukka/get-cmake@v4.4.2
 
       - name: Install JUCE Linux dependencies
         run: |
@@ -64,23 +67,33 @@ jobs:
             libglu1-mesa-dev \
             mesa-common-dev
 
-      # NOTE: deliberately NOT caching build/ninja-release.
-      # A cached CMakeCache.txt stores CMAKE_MAKE_PROGRAM as an absolute path.
-      # lukka/get-cmake installs its ninja under a per-run temp directory
-      # (/home/runner/work/_temp/<random>/ninja), so a restored cache pointed at
-      # a path that no longer existed and every configure failed with
-      # "no such file or directory" at project(). Broke CI 2026-06-19; the
-      # Release workflow stayed green precisely because it has no such cache.
-      # If build-time caching is wanted later, use ccache — it caches compiler
-      # output rather than a build tree full of absolute paths.
-
       - name: Configure (Ninja Release preset)
         # Pin the make program to the stable apt path so the generator can never
-        # latch onto get-cmake's temp-dir ninja again.
+        # latch onto get-cmake's temp-dir ninja.
         run: cmake --preset ninja-release -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja
 
       - name: Build
         run: cmake --build build/ninja-release -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build/ninja-release --output-on-failure
+
+  build-macos:
+    name: macOS (Clang / Ninja)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup CMake + Ninja
+        uses: lukka/get-cmake@v4.4.2
+
+      - name: Configure (Ninja Release preset)
+        run: cmake --preset ninja-release
+
+      - name: Build
+        run: cmake --build build/ninja-release -j$(sysctl -n hw.ncpu)
 
       - name: Test
         run: ctest --test-dir build/ninja-release --output-on-failure
