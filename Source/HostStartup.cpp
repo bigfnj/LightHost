@@ -1,6 +1,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "IconMenu.hpp"
+#include "SelfTest.hpp"
 
 #if ! (JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
  #error "If you're building the audio plugin host, you probably want to enable VST3 and/or AU support"
@@ -13,12 +14,22 @@ public:
 
     void initialise ([[maybe_unused]] const juce::String& commandLine) override
     {
+        selfTest = lighthost::selftest::isRequested (getCommandLineParameterArray());
+
         juce::PropertiesFile::Options options;
         options.applicationName     = getApplicationName();
         options.filenameSuffix      = "settings";
         options.osxLibrarySubFolder = "Preferences";
 
         applyMultiInstanceSuffix (options);
+
+        // A self-test must never read or overwrite the user's real configuration,
+        // so it gets a settings folder unique to the run. folderName is honoured
+        // on all three platforms, unlike environment redirection: on Windows the
+        // settings root comes from CSIDL_APPDATA, which does not reliably follow
+        // %APPDATA%.
+        if (selfTest)
+            options.folderName = lighthost::selftest::makeRunFolderName();
 
         appProperties = std::make_unique<juce::ApplicationProperties>();
         appProperties->setStorageParameters (options);
@@ -29,8 +40,13 @@ public:
         // number of sessions. Welcome banner makes sessions visually separable
         // inside the rotated file.
         constexpr juce::int64 kMaxLogBytes = 256 * 1024;
-        const auto logDir = juce::FileLogger::getSystemLogFileFolder()
-                                .getChildFile (getApplicationName());
+
+        // In self-test mode the log lives beside the throwaway settings file, so a
+        // single folder holds everything the run produced.
+        const auto logDir = selfTest
+                                ? appProperties->getUserSettings()->getFile().getParentDirectory()
+                                : juce::FileLogger::getSystemLogFileFolder()
+                                      .getChildFile (getApplicationName());
         logDir.createDirectory();
 
         const auto banner = "\n==== Light Host " + getApplicationVersion()
@@ -38,9 +54,9 @@ public:
                           + juce::Time::getCurrentTime().toString (true, true)
                           + " ====";
 
-        fileLogger.reset (new juce::FileLogger (logDir.getChildFile ("LightHost.log"),
-                                                banner,
-                                                kMaxLogBytes));
+        logFile = logDir.getChildFile ("LightHost.log");
+
+        fileLogger.reset (new juce::FileLogger (logFile, banner, kMaxLogBytes));
         juce::Logger::setCurrentLogger (fileLogger.get());
         juce::Logger::writeToLog ("PluginHostApp: initialise");
 
@@ -51,16 +67,27 @@ public:
         #if JUCE_MAC
             juce::Process::setDockIconVisible (false);
         #endif
+
+        if (selfTest)
+            scheduleSelfTestCheck();
     }
 
     void shutdown() override
     {
         juce::Logger::writeToLog ("PluginHostApp: shutdown");
         iconMenu.reset();
+
+        const auto settingsFile = appProperties != nullptr
+                                      ? appProperties->getUserSettings()->getFile()
+                                      : juce::File();
+
         appProperties.reset();
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
         juce::Logger::setCurrentLogger (nullptr);
-        fileLogger.reset();
+        fileLogger.reset();   // closes the log so it can be read back
+
+        if (selfTest)
+            finishSelfTest (settingsFile);
     }
 
     void systemRequestedQuit() override
@@ -73,7 +100,11 @@ public:
 
     bool moreThanOneInstanceAllowed() override
     {
-        return getMultiInstanceName().isNotEmpty();
+        // A second instance normally hands off to the running one and quits. In
+        // self-test mode that would exit 0 having done nothing, which is a false
+        // pass — the worst kind of test result — so a self-test always runs.
+        return lighthost::selftest::isRequested (getCommandLineParameterArray())
+            || getMultiInstanceName().isNotEmpty();
     }
 
     std::unique_ptr<juce::ApplicationProperties> appProperties;
@@ -82,6 +113,10 @@ public:
 
 private:
     std::unique_ptr<IconMenu> iconMenu;
+
+    bool selfTest = false;
+    juce::File logFile;
+    juce::StringArray selfTestFailures;
 
     [[nodiscard]] juce::String getMultiInstanceName() const
     {
@@ -97,6 +132,33 @@ private:
     {
         if (auto instanceName = getMultiInstanceName(); instanceName.isNotEmpty())
             options.filenameSuffix = instanceName + "." + options.filenameSuffix;
+    }
+
+    /** Lets initialise() return so the real message loop runs, then checks and
+        quits. Calling quit() from inside initialise() would skip the dispatch
+        loop entirely, leaving the timer, the change listeners and the async
+        plugin-load marshalling untested.
+    */
+    void scheduleSelfTestCheck()
+    {
+        constexpr int kDwellMs = 1500;
+
+        juce::Timer::callAfterDelay (kDwellMs, [this]
+        {
+            selfTestFailures.addArray (
+                lighthost::selftest::checkAfterStartup (
+                    logFile, appProperties->getUserSettings()->getFile()));
+
+            quit();
+        });
+    }
+
+    void finishSelfTest (const juce::File& settingsFile)
+    {
+        selfTestFailures.addArray (lighthost::selftest::checkAfterShutdown (logFile));
+
+        setApplicationReturnValue (
+            lighthost::selftest::report (selfTestFailures, settingsFile.getParentDirectory()));
     }
 };
 
