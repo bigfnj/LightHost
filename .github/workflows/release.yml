@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configure
         run: cmake --preset release
@@ -33,7 +33,7 @@ jobs:
           Compress-Archive -Path "$exeDir\Light Host.exe" -DestinationPath $zipName
 
       - name: Upload Windows zip
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-release
           path: LightHost-${{ github.ref_name }}-windows-x64.zip
@@ -45,11 +45,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Setup CMake (>= 4.2)
-        uses: lukka/get-cmake@latest
-        # ubuntu-24.04 ships CMake 3.31; we require 4.2+ per cmake_minimum_required.
+      - name: Setup CMake + Ninja
+        # ubuntu-24.04 packages CMake 3.28.3, below the floor the VS 2026
+        # generator forces on this project. Pinned, not @latest: a third-party
+        # action in the release path should not float.
+        uses: lukka/get-cmake@v4.4.2
 
       - name: Install JUCE Linux dependencies
         run: |
@@ -71,7 +73,8 @@ jobs:
             mesa-common-dev
 
       - name: Configure
-        run: cmake --preset ninja-release
+        # Pin the make program to the stable apt path, matching ci.yml.
+        run: cmake --preset ninja-release -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja
 
       - name: Build
         run: cmake --build build/ninja-release -j$(nproc)
@@ -90,7 +93,7 @@ jobs:
           tar -czf "$TAR_NAME" -C "$BIN_DIR" "Light Host"
 
       - name: Upload Linux tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-release
           path: LightHost-${{ github.ref_name }}-linux-x64.tar.gz
@@ -105,10 +108,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
 
