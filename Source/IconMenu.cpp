@@ -1,6 +1,4 @@
 #include "IconMenu.hpp"
-#include "DelayProcessor.hpp"
-#include "PdcLayout.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
 #include <BinaryData.h>
@@ -479,19 +477,27 @@ void IconMenu::reconnectGraph()
 {
     static constexpr int kChannelOne = 0;
     static constexpr int kChannelTwo = 1;
+    static constexpr int kMaxLane    = 3;   // Lane 0-3, matching the Preferences UI
 
-    // Sweep any leftover PDC delay nodes from the previous wiring — they will be
-    // re-created below sized to the current per-lane latency.  Collect IDs first
-    // because graph.getNodes() returns a ReferenceCountedArray and mutating it
-    // during iteration is unsafe.  removeNode() also removes the node's connections.
-    {
-        std::vector<NodeID> stale;
-        for (auto* node : graph.getNodes())
-            if (dynamic_cast<DelayProcessor*> (node->getProcessor()) != nullptr)
-                stale.push_back (node->nodeID);
-        for (auto id : stale)
-            graph.removeNode (id);
-    }
+    // NOTE ON PLUGIN DELAY COMPENSATION
+    //
+    // There is deliberately none here. juce::AudioProcessorGraph already performs
+    // inter-lane latency compensation when it builds its render sequence: it
+    // accumulates each node's getLatencySamples() along every path, takes the max
+    // across the paths feeding a node, and inserts a delay op on every shorter
+    // path (see RenderSequenceBuilder in juce_AudioProcessorGraph.cpp).
+    //
+    // Versions up to 4.0.3 also inserted their own DelayProcessor on shorter lanes.
+    // Because that processor delayed audio without reporting the delay via
+    // setLatencySamples, the graph still saw a zero-latency lane and padded it a
+    // SECOND time. Measured: two lanes with 512 samples of latency difference
+    // produced impulses at 512 and 1024 instead of one at 512. The compensation
+    // caused exactly the misalignment it existed to prevent, so the host was worse
+    // off than with no PDC at all. Tests/GraphRenderTests.cpp pins the correct
+    // behaviour through the real graph.
+    //
+    // Do not reintroduce manual padding here without first making the padding node
+    // report its own latency, and then checking whether it is needed at all.
 
     for (auto& c : graph.getConnections())
         graph.removeConnection (c);
@@ -500,11 +506,7 @@ void IconMenu::reconnectGraph()
     const auto numPlugins = static_cast<int> (sorted.size());
 
     auto* settings = getAppProperties().getUserSettings();
-    struct LaneInfo {
-        std::vector<NodeID> nodes;
-        double latencySamples = 0.0;
-    };
-    std::map<int, LaneInfo> lanesData;
+    std::map<int, std::vector<NodeID>> lanesData;
 
     if (numPlugins == 0)
     {
@@ -523,15 +525,13 @@ void IconMenu::reconnectGraph()
 
         if (auto* node = graph.getNodeForId (nodeId))
         {
-            const bool bypassed = settings->getBoolValue (getKey ("bypass", pd), false);
-            node->setBypassed (bypassed);
-            int lane = settings->getIntValue (getKey ("lane", pd), 0);
-            
-            lanesData[lane].nodes.push_back(nodeId);
-            // Bypassed plugins contribute zero latency by design (DAW convention) —
-            // PDC compensates the active processing path only.
-            if (!bypassed && node->getProcessor())
-                lanesData[lane].latencySamples += node->getProcessor()->getLatencySamples();
+            node->setBypassed (settings->getBoolValue (getKey ("bypass", pd), false));
+
+            // Clamp: nothing else validates what came out of the settings file.
+            const int lane = juce::jlimit (0, kMaxLane,
+                                           settings->getIntValue (getKey ("lane", pd), 0));
+
+            lanesData[lane].push_back (nodeId);
         }
     }
 
@@ -543,20 +543,10 @@ void IconMenu::reconnectGraph()
         return;
     }
 
-    // PDC arithmetic lives in PdcLayout.hpp so it can be unit tested on its own.
-    // At most four lanes, so building the intermediate map costs nothing.
-    std::map<int, double> perLaneLatency;
-    for (const auto& [lane, info] : lanesData)
-        perLaneLatency[lane] = info.latencySamples;
-
-    const auto laneDelays = lighthost::pdc::computeLaneDelays (perLaneLatency);
-
-    for (auto& [lane, info] : lanesData)
+    for (const auto& [lane, laneNodes] : lanesData)
     {
-        if (info.nodes.empty()) continue;
-
         NodeID lastActiveNodeId {};
-        for (const auto& nodeId : info.nodes)
+        for (const auto& nodeId : laneNodes)
         {
             if (lastActiveNodeId.uid == 0)
             {
@@ -573,16 +563,8 @@ void IconMenu::reconnectGraph()
             lastActiveNodeId = nodeId;
         }
 
-        const int latencyDiff = laneDelays.at (lane);
-        if (latencyDiff > 0)
-        {
-            auto delayNodeId = graph.addNode(std::make_unique<DelayProcessor>(latencyDiff))->nodeID;
-            graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { delayNodeId, kChannelOne } });
-            if (! graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { delayNodeId, kChannelTwo } }))
-                graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { delayNodeId, kChannelTwo } });
-            lastActiveNodeId = delayNodeId;
-        }
-
+        // The graph inserts whatever delay this lane needs to stay aligned with
+        // the others; see the note at the top of this function.
         graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { outputNodeId, kChannelOne } });
         if (! graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { outputNodeId, kChannelTwo } }))
             graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { outputNodeId, kChannelTwo } });

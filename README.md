@@ -65,8 +65,8 @@ and other virtual audio drivers work equally well.
 - Right-click tray icon: opens the action menu
 - Plugins on the same lane are connected in series through a JUCE `AudioProcessorGraph`
 - Lanes run in parallel; their outputs sum automatically at the graph's output node
-- An internal `DelayProcessor` is auto-inserted on shorter lanes so all lanes
-  remain sample-aligned (Plugin Delay Compensation)
+- Shorter lanes are delayed automatically so all lanes remain sample-aligned
+  (Plugin Delay Compensation, performed by JUCE's `AudioProcessorGraph`)
 - If all plugins are bypassed, input is wired directly to output
 
 ## Lanes and PDC
@@ -75,11 +75,23 @@ Each plugin row in the Preferences chain list has a **Lane** dropdown (Lane 0–
 Plugins on the same lane are chained in order; lanes are processed in parallel
 and summed at the output. Lane assignments persist between launches.
 
-Plugin Delay Compensation is automatic: on every graph reconnect, LightHost
-sums each lane's `getLatencySamples()`, finds the maximum across lanes, and
-inserts a transparent delay processor on every shorter lane so the summing
-point stays phase-aligned. Bypassed plugins contribute zero latency, matching
-standard DAW convention.
+Plugin Delay Compensation is automatic and is performed by JUCE's
+`AudioProcessorGraph`. When the graph builds its render sequence it accumulates
+each node's reported `getLatencySamples()` along every path, takes the maximum
+across the paths feeding a node, and inserts a delay on the shorter ones. All
+lanes therefore reach the summing point sample-aligned, and the host reports the
+slowest lane as its own latency.
+
+Bypassed plugins keep their latency, which is the correct behaviour: a plugin
+that reports latency is required to produce the same latency when bypassed, so
+bypassing one does not shift its lane in time.
+
+Versions up to 4.0.3 also inserted their own delay processor on shorter lanes.
+Because that processor delayed audio without reporting the delay, the graph saw a
+zero-latency lane and compensated a second time, so lanes ended up misaligned by
+the very amount the compensation was meant to remove. That code has been removed.
+`Tests/GraphRenderTests.cpp` now renders impulses through a real graph and asserts
+alignment, so a regression here fails the build.
 
 ## Project Layout
 
@@ -102,7 +114,7 @@ standard DAW convention.
 
 - Visual Studio 2026
 - Windows SDK `10.0.26100.0`
-- CMake `4.2+`
+- CMake `4.2+` (required by the Visual Studio 18 2026 generator)
 
 Recommended presets:
 
@@ -113,7 +125,7 @@ Recommended presets:
 
 - GCC or Clang
 - Ninja
-- CMake `4.2+`
+- CMake `3.28+`
 - `pkg-config`
 - ALSA/X11/font development packages
 
@@ -183,11 +195,16 @@ cmake --build --preset release --target LightHostTests
 ctest --test-dir build/release -C Release --output-on-failure
 ```
 
-Current coverage is Plugin Delay Compensation: `DelayProcessor`'s impulse
-response (including delays that cross block boundaries), the lane-delay
-arithmetic in `Source/PdcLayout.hpp`, and an end-to-end check that parallel lanes
-with differing plugin latency arrive on the same sample. CI runs these on every
-push, and the Release workflow runs them before publishing an artifact.
+Current coverage is parallel lane alignment, rendered through a real
+`AudioProcessorGraph` with stub processors that declare latency: passthrough,
+a single lane, two lanes of differing latency, four lanes of chained plugins
+with latencies that cross block boundaries, equal-latency lanes, and a bypassed
+lane. Each asserts that all lanes sum into one impulse on the same sample and
+that the host reports the slowest lane as its latency.
+
+No audio device and no real plugin are needed, so these run identically on every
+platform. CI runs them on every push, and the Release workflow runs them before
+publishing an artifact.
 
 ## Output
 
