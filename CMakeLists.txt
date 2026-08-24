@@ -131,5 +131,52 @@ if(MSVC)
     )
 endif()
 
+# ── Unit tests ──────────────────────────────────────────────────────────────────
+# Console app driven by juce::UnitTestRunner — no third-party test framework, as
+# JUCE is already vendored. Build and run with:
+#   cmake --build --preset release --target LightHostTests
+#   ctest --test-dir build/release -C Release --output-on-failure
+option(LIGHTHOST_BUILD_TESTS "Build the LightHost unit tests" ON)
+
+if(LIGHTHOST_BUILD_TESTS)
+    enable_testing()
+
+    juce_add_console_app(LightHostTests
+        PRODUCT_NAME "LightHostTests"
+        NEEDS_CURL        FALSE
+        NEEDS_WEB_BROWSER FALSE
+    )
+
+    target_sources(LightHostTests PRIVATE
+        Tests/TestMain.cpp
+        Tests/PdcTests.cpp
+    )
+
+    target_compile_definitions(LightHostTests PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_USE_FLAC=0
+        JUCE_USE_OGGVORBIS=0
+        JUCE_USE_CDBURNER=0
+        JUCE_USE_CDREADER=0
+        # Deliberately NOT defining JUCE_UNIT_TESTS=1: that compiles in JUCE's own
+        # internal test suite (~60M assertions, and its failures are not ours).
+        # juce::UnitTest itself is always available.
+        JUCE_APPLICATION_NAME_STRING="LightHostTests"
+        JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
+    )
+
+    target_link_libraries(LightHostTests PRIVATE
+        juce::juce_audio_basics
+        juce::juce_audio_processors
+        juce::juce_core
+        juce::juce_events
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+    )
+
+    add_test(NAME pdc COMMAND LightHostTests)
+endif()
+
 # ── CMake presets integration ───────────────────────────────────────────────────
 # Use cmake --preset=default to build, or cmake --preset=release for optimised
