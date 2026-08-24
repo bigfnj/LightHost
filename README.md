@@ -29,6 +29,36 @@ Platform support depends on the build target and available SDK support:
 - macOS: VST, VST3, AU
 - Linux: VST, VST3
 
+## Audio Input on Windows (Important)
+
+Light Host processes an **input** device. If you want to run plugins on a
+microphone or an instrument plugged into an audio interface, everything works out
+of the box: pick that interface as the input and you are done.
+
+Running plugins on **audio coming from other applications** (a browser, a game, a
+media player) needs one extra piece. Windows provides no way for an application
+to capture another application's playback, and JUCE's WASAPI backend has no
+loopback mode, so Light Host cannot do it alone. You need a virtual audio device
+that presents a playback endpoint to other apps and a matching capture endpoint
+to Light Host.
+
+The usual choice is **VB-CABLE** from VB-Audio:
+
+1. Install [VB-CABLE](https://vb-audio.com/Cable/) (donationware; needs admin
+   rights and a reboot).
+2. In Windows Sound settings, set **CABLE Input** as the system playback device,
+   or set it per-application under Volume Mixer.
+3. In Light Host, choose **CABLE Output** as the input device and your real
+   speakers or headphones as the output.
+
+Audio then flows: application → CABLE Input → Light Host → your plugins → your
+speakers.
+
+Light Host does **not** bundle, download, or install VB-CABLE. It only detects
+whether a virtual input is present, and if none is, shows a **Get VB-CABLE**
+button in Preferences that opens the vendor's page in your browser. VoiceMeeter
+and other virtual audio drivers work equally well.
+
 ## Key Behavior
 
 - Left-click tray icon: opens Preferences
@@ -56,13 +86,13 @@ standard DAW convention.
 ```text
 .
 ├── Source/                 Application source
+├── Tests/                  Unit tests (juce::UnitTestRunner)
 ├── Resources/              Icons and binary resources
 ├── Utilities/              Helper scripts
 ├── lib/                    Vendored JUCE + VST2 SDK
 ├── CMakeLists.txt          Main build definition
 ├── CMakePresets.json       Build presets
 ├── CHANGELOG.md            Change history
-├── AI_UNDERSTANDING.md     Deep machine-readable project notes
 └── README.md               This file
 ```
 
@@ -72,7 +102,7 @@ standard DAW convention.
 
 - Visual Studio 2026
 - Windows SDK `10.0.26100.0`
-- CMake `3.28+`
+- CMake `4.2+`
 
 Recommended presets:
 
@@ -83,7 +113,7 @@ Recommended presets:
 
 - GCC or Clang
 - Ninja
-- CMake `3.28+`
+- CMake `4.2+`
 - `pkg-config`
 - ALSA/X11/font development packages
 
@@ -142,6 +172,23 @@ cmake --preset ninja-release
 cmake --build build/ninja-release -j2
 ```
 
+## Tests
+
+Unit tests are built by default (`-DLIGHTHOST_BUILD_TESTS=OFF` to skip) and run
+via CTest. They use `juce::UnitTestRunner`, so there is no third-party test
+dependency.
+
+```bash
+cmake --build --preset release --target LightHostTests
+ctest --test-dir build/release -C Release --output-on-failure
+```
+
+Current coverage is Plugin Delay Compensation: `DelayProcessor`'s impulse
+response (including delays that cross block boundaries), the lane-delay
+arithmetic in `Source/PdcLayout.hpp`, and an end-to-end check that parallel lanes
+with differing plugin latency arrive on the same sample. CI runs these on every
+push, and the Release workflow runs them before publishing an artifact.
+
 ## Output
 
 Typical app output locations:
@@ -199,10 +246,24 @@ All exception handlers log via `juce::Logger::writeToLog` so failures land in th
 
 ## License
 
-Light Host is distributed under GPLv2+.
+Light Host's own source code is GPLv2-or-later, inherited from Rolando Islas's
+original Light Host.
+
+**The application as a whole is conveyed under AGPLv3.** Light Host links JUCE,
+which is AGPLv3 unless you hold a commercial JUCE licence, and this project does
+not. It also uses the Steinberg ASIO SDK under its GPLv3 option. GPLv2-or-later
+can be taken up to GPLv3, and GPLv3 and AGPLv3 code may be combined, so the
+result is distributable, but anyone receiving a Light Host binary receives
+AGPLv3 terms.
+
+One exception: the Steinberg VST 2.4 SDK headers in `lib/vstsdk2.4` are not
+GPL-compatible and not redistributable. VST2 hosting is on by default
+(`JUCE_PLUGINHOST_VST=1`); building with it off and removing that directory
+gives a tree with no exception.
 
 See:
 
-- `license`
-- `gpl.txt`
-- `third_party`
+- `license` — the full picture, including the VST2 exception
+- `agpl-3.0.txt` — AGPLv3, the licence the built application is conveyed under
+- `gpl.txt` — GPLv2, for Light Host's own source
+- `third_party` — every bundled component and its licence
