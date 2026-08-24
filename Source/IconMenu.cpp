@@ -340,8 +340,16 @@ void IconMenu::cancelPluginLoading()
 //==============================================================================
 void IconMenu::setIcon()
 {
-    const auto icon = ImageFileFormat::loadFrom (BinaryData::MicrophoneIcon_png, BinaryData::MicrophoneIcon_pngSize);
-    setIconImage (icon, icon);
+    // setIconImage takes (colourImage, templateImage). The second is used only on
+    // macOS, where the menu bar wants a monochrome template the OS can invert for
+    // light and dark appearance. Versions up to 4.0.3 passed the colour art for
+    // both, which put a full-size colour app icon in the macOS menu bar.
+    const auto colourIcon = ImageFileFormat::loadFrom (BinaryData::TrayIcon_png,
+                                                       BinaryData::TrayIcon_pngSize);
+    const auto templateIcon = ImageFileFormat::loadFrom (BinaryData::TrayIconTemplate_png,
+                                                         BinaryData::TrayIconTemplate_pngSize);
+
+    setIconImage (colourIcon, templateIcon);
 }
 
 //==============================================================================

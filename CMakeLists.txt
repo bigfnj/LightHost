@@ -60,7 +60,8 @@ target_sources(LightHost PRIVATE
 
 # ── Binary resources ────────────────────────────────────────────────────────────
 juce_add_binary_data(LightHostData SOURCES
-    Resources/MicrophoneIcon.png
+    Resources/TrayIcon.png
+    Resources/TrayIconTemplate.png
 )
 
 target_link_libraries(LightHost PRIVATE LightHostData)
