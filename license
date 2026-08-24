@@ -50,17 +50,14 @@ EXCEPTION: THE VST2 SDK IS NOT COVERED BY THE ABOVE
 ---------------------------------------------------------------------------
 
 `lib/vstsdk2.4/` contains headers from the Steinberg VST 2.4 Plug-In SDK.
-They are NOT part of the license grant above, are NOT under a GPL-compatible
-licence, and are NOT redistributable: the Steinberg VST2 SDK licence prohibits
-redistribution, and Steinberg stopped licensing the VST2 SDK in 2018.
-
-Consequently this repository cannot supply complete corresponding source for
-the VST2 hosting path under GPL/AGPL terms, and those headers are present here
-without a licence permitting their redistribution.
+These are governed by the Steinberg VST 2.4 Plug-In SDK Licensing Agreement,
+not by the licence grant above. That agreement is not GPL-compatible, and its
+terms, including any restrictions on redistribution, are set by Steinberg.
+Steinberg ceased licensing the VST2 SDK in 2018.
 
 VST2 hosting is compiled in via `JUCE_PLUGINHOST_VST=1` in CMakeLists.txt.
 Building with `JUCE_PLUGINHOST_VST=0` and removing `lib/vstsdk2.4/` produces a
-tree with no such exception.
+tree without this exception.
 
 
 OTHER BUNDLED THIRD-PARTY CODE

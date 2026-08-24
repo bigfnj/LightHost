@@ -25,9 +25,9 @@ License: MIT (SDK 3.8.0 and later, as bundled with JUCE)
 
 Steinberg VST 2.4 Plug-In SDK  (vendored at lib/vstsdk2.4)
 Website: no longer distributed; Steinberg ended VST2 licensing in 2018
-License: Steinberg VST 2.4 SDK Licensing Agreement.
-         NOT GPL-compatible and NOT redistributable. This is an explicit
-         exception to Light Host's licence grant; see `license`.
+License: Steinberg VST 2.4 Plug-In SDK Licensing Agreement. Not
+         GPL-compatible, and not covered by Light Host's licence grant.
+         See `license`.
 
 Libraries bundled inside JUCE and linked into the binary:
 
