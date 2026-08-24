@@ -28,7 +28,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ── JUCE ────────────────────────────────────────────────────────────────────────
-# Expects JUCE 8.0.12+ at lib/juce (or override via -DJUCE_DIR=<path>)
+# Expects JUCE 9.0.x at lib/juce (or override via -DJUCE_DIR=<path>)
 if(NOT DEFINED JUCE_DIR)
     set(JUCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/juce")
 endif()
@@ -129,7 +129,6 @@ if(WIN32)
         /Zc:__cplusplus # Report correct __cplusplus value
         /Zc:preprocessor # Conforming preprocessor
         /utf-8          # Source and execution charset UTF-8
-        /wd5105         # Suppress C5105 from JUCE's bundled HarfBuzz ('defined' in macro expansion)
     )
 
     # Link Windows 11 APIs

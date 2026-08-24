@@ -3,6 +3,41 @@
 This file lists the more notable headline features. For more detailed info
 about changes and bugfixes please see the git log and BREAKING_CHANGES.md.
 
+## Version 9.0.1
+
+  - Added a new TypeScript npm package for WebView integrarion
+  - Added protection against malformed AudioFormat input
+  - Fixed iOS builds with Xcode 12.4
+  - Fixed Freetype compilation on older Linux distros
+  - Fixed missing macOS icons for associated documents
+  - Fixed unresponsive Linux GUIs
+  - Fixed a macOS CoreAudio compilation issue
+
+## Version 9.0.0
+
+  - Added a new SVG parser
+  - Added support for variable fonts
+  - Added a new macOS CoreAudio implementation
+  - Improved the performance of the software renderer
+  - Added OpenGL ES support to Linux
+  - Improved multi-touch support on Linux and Windows
+  - Improved the CMake build system for headless environments
+
+## Version 8.0.15
+
+  - Fixed the behaviour of loadFromHexString
+  - Fixed multiple Windows GUI scaling issues
+  - Updated Oboe to 1.10.0
+  - Improved handling of OpenGL textures
+  - Fixed a DropShadow issue with a tiny radius
+
+## Version 8.0.14
+
+  - Reduced the build tree depth to avoid Windows limits
+  - Fixed some MIDI issues
+  - Fixed some Projucer macOS code signing issues
+  - Fixed an iOS sample rate testing issue
+
 ## Version 8.0.13
 
   - Improved the compile time of the juce_gui_basics module
