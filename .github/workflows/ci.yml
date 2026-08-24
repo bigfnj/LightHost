@@ -28,6 +28,9 @@ jobs:
       - name: Build
         run: cmake --build --preset release
 
+      - name: Test
+        run: ctest --test-dir build/release -C Release --output-on-failure
+
   build-linux:
     name: Linux (GCC / Ninja)
     runs-on: ubuntu-24.04
@@ -61,15 +64,23 @@ jobs:
             libglu1-mesa-dev \
             mesa-common-dev
 
-      - name: Cache CMake build
-        uses: actions/cache@v4
-        with:
-          path: build/ninja-release
-          key: linux-ninja-release-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json') }}
-          restore-keys: linux-ninja-release-
+      # NOTE: deliberately NOT caching build/ninja-release.
+      # A cached CMakeCache.txt stores CMAKE_MAKE_PROGRAM as an absolute path.
+      # lukka/get-cmake installs its ninja under a per-run temp directory
+      # (/home/runner/work/_temp/<random>/ninja), so a restored cache pointed at
+      # a path that no longer existed and every configure failed with
+      # "no such file or directory" at project(). Broke CI 2026-06-19; the
+      # Release workflow stayed green precisely because it has no such cache.
+      # If build-time caching is wanted later, use ccache — it caches compiler
+      # output rather than a build tree full of absolute paths.
 
       - name: Configure (Ninja Release preset)
-        run: cmake --preset ninja-release
+        # Pin the make program to the stable apt path so the generator can never
+        # latch onto get-cmake's temp-dir ninja again.
+        run: cmake --preset ninja-release -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja
 
       - name: Build
         run: cmake --build build/ninja-release -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build/ninja-release --output-on-failure
