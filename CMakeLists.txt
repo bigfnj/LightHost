@@ -52,6 +52,7 @@ juce_add_gui_app(LightHost
 # ── Source files ────────────────────────────────────────────────────────────────
 target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
+    Source/SelfTest.hpp
     Source/IconMenu.cpp
     Source/PluginWindow.cpp
     Source/PreferencesWindow.cpp
@@ -82,6 +83,12 @@ target_compile_definitions(LightHost PRIVATE
     JUCE_ASIO=1
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LightHost,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LightHost,JUCE_VERSION>"
+
+    # Route jassert failures into the log file, in release builds too.
+    # Without this they are invisible outside a debugger: jassertfalse only breaks
+    # when one is attached, so on CI an assertion would pass silently. Also means
+    # field reports carry assertion sites in LightHost.log.
+    JUCE_LOG_ASSERTIONS=1
 )
 
 # ── VST2 SDK include path ───────────────────────────────────────────────────────
@@ -187,6 +194,52 @@ if(LIGHTHOST_BUILD_TESTS)
     )
 
     add_test(NAME graphrender COMMAND LightHostTests)
+    set_tests_properties(graphrender PROPERTIES LABELS unit TIMEOUT 120)
+
+    # ── Headless startup/shutdown smoke test ────────────────────────────────────
+    # Runs the real app: real device manager, real graph, real tray icon, real
+    # message loop, real teardown. It inspects its own log and exits non-zero on
+    # any problem, so CTest needs only the exit code. Notably this is the only
+    # automated exercise of IconMenu's destructor ordering.
+    #
+    # Linux needs a display. Without one JUCE does not degrade gracefully: the
+    # tray icon path dereferences a null X display and the process segfaults. So
+    # the test is registered only when xvfb-run is available, and says so when it
+    # is not, rather than being silently skipped.
+    set(LIGHTHOST_SMOKE_LAUNCHER "")
+    set(LIGHTHOST_SMOKE_AVAILABLE TRUE)
+
+    if(UNIX AND NOT APPLE)
+        find_program(XVFB_RUN xvfb-run)
+        if(XVFB_RUN)
+            set(LIGHTHOST_SMOKE_LAUNCHER ${XVFB_RUN} -a "--server-args=-screen 0 1280x1024x24")
+        else()
+            set(LIGHTHOST_SMOKE_AVAILABLE FALSE)
+            message(WARNING
+                "xvfb-run not found: the startup smoke test will not be registered. "
+                "Install xvfb to enable it (the app needs an X display to create its tray icon).")
+        endif()
+    endif()
+
+    if(LIGHTHOST_SMOKE_AVAILABLE)
+        add_test(NAME smoke-startup
+                 COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHost> -self-test)
+        set_tests_properties(smoke-startup PROPERTIES LABELS smoke TIMEOUT 90)
+
+        # Second run against the settings the first one wrote, exercising the
+        # restore path rather than only first-launch behaviour.
+        add_test(NAME smoke-restore
+                 COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHost> -self-test)
+        set_tests_properties(smoke-restore PROPERTIES LABELS smoke TIMEOUT 90
+                             DEPENDS smoke-startup)
+
+        # The multi-instance flag suffixes the settings filename; check it does not
+        # break startup.
+        add_test(NAME smoke-multi-instance
+                 COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHost>
+                         -self-test -multi-instance=selftest)
+        set_tests_properties(smoke-multi-instance PROPERTIES LABELS smoke TIMEOUT 90)
+    endif()
 endif()
 
 # ── CMake presets integration ───────────────────────────────────────────────────

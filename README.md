@@ -206,6 +206,30 @@ No audio device and no real plugin are needed, so these run identically on every
 platform. CI runs them on every push, and the Release workflow runs them before
 publishing an artifact.
 
+### Startup smoke test
+
+`Light Host -self-test` runs the real application (real device manager, real
+graph, real tray icon, real message loop, real teardown), inspects its own log,
+prints `SELF-TEST PASS` or a list of failures, and exits non-zero on any problem.
+Settings and log go to a throwaway folder unique to the run, so a self-test can
+never read or overwrite your real configuration. The folder is deleted on success
+and kept on failure.
+
+CTest registers three of these: a clean first run, a second run against the
+settings the first wrote, and one with `-multi-instance=`. They are labelled
+`smoke`, so `ctest -L unit` and `ctest -L smoke` can be run separately.
+
+This is the only automated check that exercises the destructor ordering in
+`~IconMenu` that prevents a shutdown crash. It is not a substitute for testing
+that by hand: on a machine with no audio device no callback thread ever starts,
+so the race the ordering guards against cannot occur. The smoke test proves the
+ordering code runs cleanly, not that the race is fixed.
+
+On Linux this needs a display. JUCE does not degrade gracefully without one —
+the tray icon path dereferences a null X display and the process crashes — so
+CMake registers the smoke tests only when `xvfb-run` is present, and warns when
+it is not.
+
 ## Output
 
 Typical app output locations:
