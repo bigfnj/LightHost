@@ -14,16 +14,39 @@
 // Exits non-zero if any test failed, and names every failing test so a CI log is
 // readable without re-running locally.
 //==============================================================================
+namespace
+{
+    /** Routes juce::Logger output to stdout.
+
+        Without this, UnitTest::logMessage goes to Logger::outputDebugString,
+        which on Windows is OutputDebugString and therefore invisible in a
+        terminal or a CI log. Diagnostics that cannot be read are not
+        diagnostics.
+    */
+    class ConsoleLogger final : public juce::Logger
+    {
+    public:
+        void logMessage (const juce::String& message) override
+        {
+            std::printf ("%s\n", message.toRawUTF8());
+            std::fflush (stdout);
+        }
+    };
+}
+
 int main()
 {
     // Brings up the MessageManager. Nothing here posts messages, but JUCE
     // subsystems and the leak detector expect an initialised environment.
     const juce::ScopedJuceInitialiser_GUI juceInit;
 
+    ConsoleLogger consoleLogger;
+    juce::Logger::setCurrentLogger (&consoleLogger);
+
     juce::UnitTestRunner runner;
     runner.setAssertOnFailure (false);   // let the run finish and report every failure
 
-    runner.runTestsInCategory ("PDC");
+    runner.runTestsInCategory ("GraphRender");
 
     int totalFailures = 0;
     int totalPasses   = 0;
@@ -52,6 +75,8 @@ int main()
     }
 
     std::printf ("\n==== %d passed, %d failed ====\n", totalPasses, totalFailures);
+
+    juce::Logger::setCurrentLogger (nullptr);
 
     return totalFailures == 0 ? 0 : 1;
 }

@@ -1,4 +1,15 @@
-cmake_minimum_required(VERSION 4.2)  # Visual Studio 18 2026 generator requires CMake 4.2+
+# 3.28 is the project's real floor (CMakePresets v6; JUCE itself asks for 3.22).
+# Only the "Visual Studio 18 2026" generator needs 4.2, so require it there rather
+# than locking out every Ninja/Clang/MinGW contributor. Ubuntu 24.04 packages
+# CMake 3.28.3, which configures this project fine with Ninja.
+cmake_minimum_required(VERSION 3.28)
+
+if(CMAKE_GENERATOR MATCHES "Visual Studio 18 2026" AND CMAKE_VERSION VERSION_LESS 4.2)
+    message(FATAL_ERROR
+        "The Visual Studio 18 2026 generator requires CMake 4.2 or newer, "
+        "but this is CMake ${CMAKE_VERSION}. Either upgrade CMake or use one of "
+        "the Ninja presets.")
+endif()
 
 # ── Windows SDK version (Windows 11 26100) ──────────────────────────────────────
 # Must be set before project() so the VS generator picks it up for WindowsTargetPlatformVersion.
@@ -41,7 +52,6 @@ juce_add_gui_app(LightHost
 # ── Source files ────────────────────────────────────────────────────────────────
 target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
-    Source/DelayProcessor.hpp
     Source/IconMenu.cpp
     Source/PluginWindow.cpp
     Source/PreferencesWindow.cpp
@@ -149,7 +159,8 @@ if(LIGHTHOST_BUILD_TESTS)
 
     target_sources(LightHostTests PRIVATE
         Tests/TestMain.cpp
-        Tests/PdcTests.cpp
+        Tests/GraphRenderTests.cpp
+        Tests/StubProcessors.hpp
     )
 
     target_compile_definitions(LightHostTests PRIVATE
@@ -175,7 +186,7 @@ if(LIGHTHOST_BUILD_TESTS)
         juce::juce_recommended_warning_flags
     )
 
-    add_test(NAME pdc COMMAND LightHostTests)
+    add_test(NAME graphrender COMMAND LightHostTests)
 endif()
 
 # ── CMake presets integration ───────────────────────────────────────────────────
