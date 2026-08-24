@@ -256,10 +256,11 @@ can be taken up to GPLv3, and GPLv3 and AGPLv3 code may be combined, so the
 result is distributable, but anyone receiving a Light Host binary receives
 AGPLv3 terms.
 
-One exception: the Steinberg VST 2.4 SDK headers in `lib/vstsdk2.4` are not
-GPL-compatible and not redistributable. VST2 hosting is on by default
+One exception: the Steinberg VST 2.4 SDK headers in `lib/vstsdk2.4` are governed
+by Steinberg's own SDK licensing agreement, which is not GPL-compatible and is
+not covered by the grant above. VST2 hosting is on by default
 (`JUCE_PLUGINHOST_VST=1`); building with it off and removing that directory
-gives a tree with no exception.
+gives a tree without the exception.
 
 See:
 
