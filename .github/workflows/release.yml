@@ -20,6 +20,10 @@ jobs:
       - name: Build
         run: cmake --build --preset release
 
+      # Do not publish a release that fails its own tests.
+      - name: Test
+        run: ctest --test-dir build/release -C Release --output-on-failure
+
       - name: Package Windows artifact
         shell: pwsh
         run: |
@@ -71,6 +75,10 @@ jobs:
 
       - name: Build
         run: cmake --build build/ninja-release -j$(nproc)
+
+      # Do not publish a release that fails its own tests.
+      - name: Test
+        run: ctest --test-dir build/ninja-release --output-on-failure
 
       - name: Package Linux artifact
         run: |
