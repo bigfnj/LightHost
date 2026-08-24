@@ -3,10 +3,14 @@ Copyright (C) 2026 BigFN'j
 
 This file is part of Light Host.
 
-Light Host is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 2 of the License, or
-(at your option) any later version.
+
+LIGHT HOST'S OWN SOURCE CODE
+---------------------------------------------------------------------------
+
+The code in Source/ and Tests/ is free software: you can redistribute it
+and/or modify it under the terms of the GNU General Public License as
+published by the Free Software Foundation, either version 2 of the License,
+or (at your option) any later version.
 
 Light Host is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,3 +19,51 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with Light Host.  If not, see <http://www.gnu.org/licenses/>.
+
+The GPL version 2 text is in `gpl.txt`.
+
+
+THE APPLICATION AS A WHOLE IS CONVEYED UNDER AGPLv3
+---------------------------------------------------------------------------
+
+Light Host links the JUCE framework, which is dual-licensed under AGPLv3 or
+a commercial JUCE licence (see `lib/juce/LICENSE.md`). This project does not
+hold a commercial JUCE licence, so it uses JUCE under AGPLv3.
+
+It also builds against the Steinberg ASIO SDK bundled with JUCE, which is
+licensed under either the proprietary Steinberg ASIO License or GPL version 3
+(see `lib/juce/modules/juce_audio_devices/native/asio/LICENSE.txt`). This
+project uses it under GPLv3.
+
+Light Host's own code being GPLv2-*or-later* is what makes this combination
+work: it can be taken up to GPLv3, and GPLv3 and AGPLv3 code may be combined.
+
+The practical consequence: while Light Host's own source stays GPLv2-or-later,
+any binary distribution of Light Host as a whole is conveyed under the terms of
+the GNU Affero General Public License version 3, and recipients of a binary
+receive AGPLv3 terms, including its source-availability requirements.
+
+The AGPL version 3 text is in `agpl-3.0.txt`.
+
+
+EXCEPTION: THE VST2 SDK IS NOT COVERED BY THE ABOVE
+---------------------------------------------------------------------------
+
+`lib/vstsdk2.4/` contains headers from the Steinberg VST 2.4 Plug-In SDK.
+They are NOT part of the license grant above, are NOT under a GPL-compatible
+licence, and are NOT redistributable: the Steinberg VST2 SDK licence prohibits
+redistribution, and Steinberg stopped licensing the VST2 SDK in 2018.
+
+Consequently this repository cannot supply complete corresponding source for
+the VST2 hosting path under GPL/AGPL terms, and those headers are present here
+without a licence permitting their redistribution.
+
+VST2 hosting is compiled in via `JUCE_PLUGINHOST_VST=1` in CMakeLists.txt.
+Building with `JUCE_PLUGINHOST_VST=0` and removing `lib/vstsdk2.4/` produces a
+tree with no such exception.
+
+
+OTHER BUNDLED THIRD-PARTY CODE
+---------------------------------------------------------------------------
+
+See `third_party` for the remaining components and their licences.
