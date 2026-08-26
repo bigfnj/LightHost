@@ -241,6 +241,10 @@ IconMenu::~IconMenu()
     deviceManager.removeAudioCallback (&player);
     player.setProcessor (nullptr);
 
+    // A plugin may have reported a latency change moments ago. Nothing should
+    // rewire the graph while it is being torn down.
+    cancelPendingUpdate();
+
     // Abandon any in-flight load before saving. Bumping the generation makes the
     // pending createPluginInstanceAsync callbacks no-op when they arrive. Their
     // captured SafePointer already guards against this object being gone; the
@@ -420,6 +424,10 @@ void IconMenu::onPluginInstanceReady (std::unique_ptr<AudioProcessor> instance,
             if (auto node = graph.addNode (std::move (instance), nodeId))
             {
                 restorePluginState (*node, nodeId, savedState);
+
+                if (auto* processor = node->getProcessor())
+                    listenTo (*processor);
+
                 juce::Logger::writeToLog ("IconMenu: plugin instance ready for node "
                                           + juce::String ((int) nodeId.uid));
             }
@@ -467,6 +475,40 @@ void IconMenu::restorePluginState (AudioProcessorGraph::Node& node,
     }
 }
 
+//==============================================================================
+void IconMenu::listenTo (AudioProcessor& processor)
+{
+    processor.addListener (this);
+}
+
+void IconMenu::stopListeningTo (NodeID nodeId)
+{
+    if (auto* node = graph.getNodeForId (nodeId))
+        if (auto* processor = node->getProcessor())
+            processor->removeListener (this);
+}
+
+void IconMenu::audioProcessorChanged (AudioProcessor*, const ChangeDetails& details)
+{
+    // Only latency matters for routing. A parameter or program change does not
+    // move audio in time, so it needs no rewire.
+    if (details.latencyChanged)
+        triggerAsyncUpdate();
+}
+
+void IconMenu::audioProcessorParameterChanged (AudioProcessor*, int, float)
+{
+    // Deliberately empty. This fires for every automated parameter change, often
+    // from the audio thread, and none of it affects how the graph is wired.
+}
+
+void IconMenu::handleAsyncUpdate()
+{
+    juce::Logger::writeToLog ("IconMenu: a plugin changed its reported latency; rewiring");
+    reconnectGraph();
+}
+
+//==============================================================================
 void IconMenu::onAllPluginsLoaded (int generation)
 {
     if (generation != pluginLoadGeneration)
@@ -878,6 +920,7 @@ void IconMenu::handleDeletePlugin (int index)
     if (nodeIdVal != 0)
     {
         const NodeID nodeId { static_cast<uint32> (nodeIdVal) };
+        stopListeningTo (nodeId);
         PluginWindow::closeCurrentlyOpenWindowsFor (nodeId);  // close UI first
         graph.removeNode (nodeId);                             // destroy only this instance
     }
@@ -1277,6 +1320,7 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
             continue;
 
         const NodeID nodeId { static_cast<uint32> (plugin.nodeId) };
+        stopListeningTo (nodeId);
         PluginWindow::closeCurrentlyOpenWindowsFor (nodeId);
         graph.removeNode (nodeId);
     }
