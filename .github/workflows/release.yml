@@ -1,5 +1,7 @@
 name: Release
 
+# Fires on a version tag. A tag carrying a prerelease suffix (v5.0.0-rc1) produces
+# a draft marked prerelease; a clean tag (v5.0.0) publishes. See RELEASING.md.
 on:
   push:
     tags:
@@ -29,8 +31,16 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}"
           $exeDir  = "build\release\LightHost_artefacts\Release"
-          $zipName = "LightHost-${version}-windows-x64.zip"
-          Compress-Archive -Path "$exeDir\Light Host.exe" -DestinationPath $zipName
+          $staging = "staging\LightHost-$version"
+
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item "$exeDir\Light Host.exe" -Destination $staging
+
+          # The application is conveyed under AGPLv3, so the licence travels with
+          # the binary rather than being left behind in the repository.
+          Copy-Item license, agpl-3.0.txt, gpl.txt, third_party, README.md -Destination $staging
+
+          Compress-Archive -Path $staging -DestinationPath "LightHost-$version-windows-x64.zip"
 
       - name: Upload Windows zip
         uses: actions/upload-artifact@v7
@@ -90,9 +100,13 @@ jobs:
           VERSION="${{ github.ref_name }}"
           # JUCE places the binary under <artefacts>/Release/ even for single-config Ninja
           BIN_DIR="build/ninja-release/LightHost_artefacts/Release"
-          TAR_NAME="LightHost-${VERSION}-linux-x64.tar.gz"
-          ls -la "$BIN_DIR"
-          tar -czf "$TAR_NAME" -C "$BIN_DIR" "Light Host"
+          STAGING="staging/LightHost-${VERSION}"
+
+          mkdir -p "$STAGING"
+          cp "$BIN_DIR/Light Host" "$STAGING/"
+          cp license agpl-3.0.txt gpl.txt third_party README.md "$STAGING/"
+
+          tar -czf "LightHost-${VERSION}-linux-x64.tar.gz" -C staging "LightHost-${VERSION}"
 
       - name: Upload Linux tarball
         uses: actions/upload-artifact@v7
@@ -101,10 +115,53 @@ jobs:
           path: LightHost-${{ github.ref_name }}-linux-x64.tar.gz
           retention-days: 1
 
+  build-macos:
+    name: Build macOS Release
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup CMake + Ninja
+        uses: lukka/get-cmake@v4.4.2
+
+      - name: Configure
+        run: cmake --preset ninja-release
+
+      - name: Build
+        run: cmake --build build/ninja-release -j$(sysctl -n hw.ncpu)
+
+      # Do not publish a release that fails its own tests.
+      - name: Test
+        run: ctest --test-dir build/ninja-release --output-on-failure
+
+      - name: Package macOS artifact
+        run: |
+          VERSION="${{ github.ref_name }}"
+          APP_DIR="build/ninja-release/LightHost_artefacts/Release"
+          STAGING="staging/LightHost-${VERSION}"
+
+          mkdir -p "$STAGING"
+          # ditto rather than cp -r or zip: it is the only tool that reliably
+          # preserves a bundle's symlinks and permissions.
+          ditto "$APP_DIR/Light Host.app" "$STAGING/Light Host.app"
+          cp license agpl-3.0.txt gpl.txt third_party README.md "$STAGING/"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+                "$STAGING" "LightHost-${VERSION}-macos-universal.zip"
+
+      - name: Upload macOS zip
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-release
+          path: LightHost-${{ github.ref_name }}-macos-universal.zip
+          retention-days: 1
+
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-24.04
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     permissions:
       contents: write
 
@@ -117,15 +174,55 @@ jobs:
         with:
           path: dist
 
+      - name: Classify the tag
+        id: tag
+        run: |
+          TAG="${{ github.ref_name }}"
+
+          # A prerelease suffix (v5.0.0-rc1) means a draft marked prerelease, so a
+          # candidate can be inspected without ever becoming the Latest release.
+          if [[ "$TAG" == *-* ]]; then
+            echo "draft=true"      >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "This is a release candidate: it will be created as a draft."
+          else
+            echo "draft=false"      >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # The changelog is keyed on the released version, so a candidate reads
+          # the section of the version it is a candidate for.
+          VERSION="${TAG#v}"
+          echo "version=${VERSION%%-*}" >> "$GITHUB_OUTPUT"
+
       - name: Extract release notes from CHANGELOG.md
         run: |
-          VERSION="${{ github.ref_name }}"
-          VER="${VERSION#v}"
+          VER="${{ steps.tag.outputs.version }}"
+
           awk "/^## \[${VER}\]/{found=1; next} found && /^## \[/{exit} found{print}" \
               CHANGELOG.md > release_notes.md
+
+          # Empty notes used to publish an empty release body and say nothing about
+          # it. The usual cause is tagging before renaming the [Unreleased] heading.
+          if [ ! -s release_notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## [${VER}]' section. Rename the [Unreleased] heading before tagging."
+            exit 1
+          fi
+
           echo "----- Release notes preview -----"
           cat release_notes.md
           echo "----- end -----"
+
+      - name: Collect artifacts and checksum them
+        run: |
+          mkdir -p release-files
+          find dist -type f \( -name '*.zip' -o -name '*.tar.gz' \) -exec cp {} release-files/ \;
+
+          cd release-files
+          # Named explicitly: a bare * would include SHA256SUMS itself, which the
+          # redirect has already created by the time the glob expands.
+          sha256sum LightHost-* > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -133,8 +230,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: LightHost ${{ github.ref_name }}
           body_path: release_notes.md
-          draft: false
-          prerelease: false
-          files: |
-            dist/windows-release/*.zip
-            dist/linux-release/*.tar.gz
+          draft: ${{ steps.tag.outputs.draft }}
+          prerelease: ${{ steps.tag.outputs.prerelease }}
+          fail_on_unmatched_files: true
+          files: release-files/*

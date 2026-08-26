@@ -27,6 +27,22 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ── Windows runtime library ─────────────────────────────────────────────────────
+# Statically linked, so the shipped executable needs no Visual C++ redistributable.
+# Light Host is distributed as a single .exe in a zip, and an installer whose only
+# job would be to place one file is not worth having; a redistributable the user
+# has to find first is worse.
+#
+# Set before add_subdirectory so JUCE's targets are created with it too. Mixing
+# runtimes across targets that link together is a linker error at best.
+#
+# Plugins load with whatever runtime they were built against, which is normal for a
+# host: each module owns its own CRT state, and nothing allocated on one side is
+# freed on the other.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # ── JUCE ────────────────────────────────────────────────────────────────────────
 # Expects JUCE 9.0.x at lib/juce (or override via -DJUCE_DIR=<path>)
 if(NOT DEFINED JUCE_DIR)

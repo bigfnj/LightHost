@@ -186,6 +186,38 @@ correctness.
   halves disagreeing about the chain. Settings writes are staged and rolled back
   if the list mutation throws.
 
+### Changed — the Windows build no longer needs a redistributable
+
+The Visual C++ runtime is linked statically, so the shipped executable depends
+only on DLLs Windows already has. Confirmed with `dumpbin /dependents`: no
+`VCRUNTIME140`, no `MSVCP140`, no `api-ms-win-crt-*`. Light Host is distributed as
+a single file in a zip, and a redistributable the user has to go and find first is
+a poor first impression. Costs about 400 KB.
+
+### Changed — the release pipeline
+
+The workflow has never run, so this is preparation rather than a fix, but the gaps
+were real:
+
+- **macOS is built and published**, not just tested in CI. It was absent
+  entirely, while the README advertised menu bar and AU support.
+- **The licence ships with the binary.** Archives held a bare executable; the
+  application is conveyed under AGPLv3, which requires the licence to accompany
+  it. `license`, `agpl-3.0.txt`, `gpl.txt`, `third_party` and `README.md` are now
+  in every archive.
+- **A prerelease tag produces a draft.** The tag pattern matches `v5.0.0-rc1`, and
+  the job published unconditionally as a full, non-prerelease release, so a
+  candidate would have taken the Latest badge. Suffixed tags now produce a draft
+  marked prerelease.
+- **Empty release notes fail the job.** Notes are extracted by matching a
+  `## [X.Y.Z]` heading, so tagging before renaming `[Unreleased]` published an
+  empty body and said nothing. It now fails with the reason. A candidate reads the
+  section of the version it is a candidate for.
+- **`SHA256SUMS` accompanies the artifacts.**
+
+`RELEASING.md` documents the sequence, including what the pipeline deliberately
+does not do (no signing, no installer, no update check).
+
 ### Changed — dependencies and licensing
 
 - **JUCE 8.0.13 to 9.0.1.** No source change was needed. This retires six libpng

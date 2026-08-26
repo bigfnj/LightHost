@@ -92,8 +92,15 @@ Phase numbers refer to the 5.0.0 plan.
   Callers hold it across a rebuild that clears it. The tray-menu handlers copy
   defensively now, which is a patch and not a fix; return a snapshot
   (`shared_ptr<const std::vector<...>>`) instead.
-- **Phase 8: version bump, changelog heading, tag, release.** Confirm the release
-  workflow produces both artifacts with tests gating publication.
+- **Phase 8: version bump, changelog heading, tag, release.** The procedure is
+  written down in [RELEASING.md](RELEASING.md). The pipeline itself is ready:
+  three platforms, tests gating publication, licence files in every archive,
+  checksums, and prerelease tags producing drafts. It has never run end to end,
+  so budget for the first candidate exposing something.
+- **Code signing, if macOS or Windows downloads are to be first-class.** macOS
+  refuses an unsigned app until the quarantine attribute is cleared by hand, and
+  Windows shows a SmartScreen warning on every new binary. Certificates cost money
+  and are worth it only if the download counts justify them.
 
 ## Deferred
 
