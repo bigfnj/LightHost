@@ -4,7 +4,8 @@ Light Host is a lightweight desktop audio plugin host built with **JUCE 9.0.1**.
 
 Released version: **4.0.3**. `main` carries unreleased work towards 5.0.0, listed
 in [CHANGELOG.md](CHANGELOG.md); what is left before that release is in
-[BACKLOG.md](BACKLOG.md).
+[BACKLOG.md](BACKLOG.md), and how a release is cut is in
+[RELEASING.md](RELEASING.md).
 
 ## What It Does
 
@@ -146,6 +147,23 @@ Recommended presets:
 - `default` for VS Debug
 - `release` for VS Release
 
+The C runtime is linked statically, so the resulting executable needs no Visual
+C++ redistributable and can be copied to another machine as a single file.
+
+### macOS
+
+- Xcode command line tools
+- Ninja
+- CMake `3.28+`
+
+Builds universal (`arm64;x86_64`) with a macOS 11 floor by default, so one binary
+runs on Apple Silicon and Intel. Override with `-DCMAKE_OSX_ARCHITECTURES=arm64`
+for a faster local build.
+
+Nothing here is code-signed. A locally built or downloaded app is quarantined by
+macOS until you either right-click and choose Open, or run
+`xattr -dr com.apple.quarantine "Light Host.app"`.
+
 ### WSL / Linux / Native Ninja Builds
 
 - GCC or Clang
@@ -161,6 +179,8 @@ Known required Linux packages for native configure/build:
 - `libfreetype6-dev`
 - `libxcomposite-dev`
 - `libxcursor-dev`
+- `libxi-dev` (JUCE 9 added this; without it the build fails on
+  `X11/extensions/XInput2.h`)
 - `libxinerama-dev`
 - `libxkbcommon-dev`
 - `libxrandr-dev`
