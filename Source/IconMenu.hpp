@@ -2,7 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
-#include <atomic>
+#include <set>
 #include <vector>
 
 juce::ApplicationProperties& getAppProperties();
@@ -79,16 +79,39 @@ private:
     mutable bool sortedCacheDirty = true;
     bool isHandlingDeviceChange = false;
 
-    // Background plugin loading — instances created on a worker thread,
-    // marshalled back to the message thread one at a time via callAsync.
-    class PluginLoadThread;
-    std::unique_ptr<PluginLoadThread> pluginLoadThread;
-    std::atomic<int> pluginLoadGeneration { 0 };
+    // Background plugin loading. Plugin instantiation must happen on the message
+    // thread — JUCE loads the DLL and calls the plugin factory there no matter
+    // which thread asks — so this is a message-thread chain: load one plugin, and
+    // on its async completion callback start the next. There is no worker thread,
+    // so nothing can deadlock when a load is cancelled mid-flight.
+    //
+    // Cancellation is a generation bump: a callback from a superseded load sees a
+    // newer generation and drops its result. Everything here is message-thread
+    // only, so no atomics are needed.
+    struct LoadSpec
+    {
+        juce::PluginDescription description;
+        juce::String            savedState;
+        juce::uint32            nodeId;
+    };
 
+    std::vector<LoadSpec> pendingLoads;
+    size_t                nextLoadIndex = 0;
+    int                   pluginLoadGeneration = 0;
+
+    // NodeIDs whose saved state threw or decoded to nothing while restoring.
+    // savePluginStates() skips these, so a one-off restore failure cannot
+    // overwrite a good saved blob with the plugin's factory defaults.
+    std::set<juce::uint32> statesNotRestored;
+
+    void loadNextPlugin();
     void onPluginInstanceReady (std::unique_ptr<juce::AudioProcessor> instance,
                                 juce::AudioProcessorGraph::NodeID nodeId,
                                 int generation,
-                                juce::String savedState);
+                                const juce::String& savedState);
+    void restorePluginState (juce::AudioProcessorGraph::Node& node,
+                             juce::AudioProcessorGraph::NodeID nodeId,
+                             const juce::String& savedState);
     void onAllPluginsLoaded (int generation);
 
     class PluginListWindow;

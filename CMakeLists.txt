@@ -167,6 +167,7 @@ if(LIGHTHOST_BUILD_TESTS)
     target_sources(LightHostTests PRIVATE
         Tests/TestMain.cpp
         Tests/GraphRenderTests.cpp
+        Tests/PluginStateTests.cpp
         Tests/StubProcessors.hpp
     )
 
