@@ -1,11 +1,11 @@
 #include "IconMenu.hpp"
 #include "GraphTopology.hpp"
+#include "PluginChainStore.hpp"
 #include "PluginState.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
 #include <BinaryData.h>
 #include <algorithm>
-#include <ctime>
 #include <exception>
 
 #if JUCE_WINDOWS
@@ -14,6 +14,11 @@
 #endif
 
 using namespace juce;
+
+// Owns the per-plugin settings keys. Made where it is used rather than held as
+// state: it is a reference to the settings plus a staging area, and a long-lived
+// one would carry a half-finished edit into the next operation.
+using ChainStore = lighthost::chain::Store;
 
 //==============================================================================
 class IconMenu::PluginListWindow final : public DocumentWindow
@@ -198,6 +203,23 @@ IconMenu::IconMenu()
     if (auto savedPluginListActive = getAppProperties().getUserSettings()->getXmlValue ("pluginListActive"))
         activePluginList.recreateFromXml (*savedPluginListActive);
 
+    // Settings written by 4.0.3 and earlier are keyed on the plugin's name and
+    // version, so a plugin update orphaned everything the user had set. Move them
+    // onto the stable keys once, now that the chain is known.
+    {
+        auto* settings = getAppProperties().getUserSettings();
+        ChainStore store (*settings);
+
+        const auto types = activePluginList.getTypes();
+        const std::vector<PluginDescription> chain (types.begin(), types.end());
+
+        if (const auto migrated = store.migrateIfNeeded (chain); migrated > 0)
+            juce::Logger::writeToLog ("IconMenu: migrated chain settings for "
+                                      + juce::String (migrated) + " plugin(s)");
+
+        settings->saveIfNeeded();
+    }
+
     loadActivePlugins();
     activePluginList.addChangeListener (this);
 
@@ -295,22 +317,26 @@ void IconMenu::loadActivePlugins()
         return;
 
     auto* settings = getAppProperties().getUserSettings();
+    ChainStore store (*settings);
 
     pendingLoads.reserve (sorted.size());
 
     for (const auto& plugin : sorted)
     {
-        auto nodeIdVal = settings->getIntValue (getKey ("nodeid", plugin), 0);
+        auto nodeIdVal = store.readNodeId (plugin);
+
         if (nodeIdVal == 0)
         {
-            nodeIdVal = settings->getIntValue ("nextPluginNodeId", 1);
-            settings->setValue ("nextPluginNodeId", nodeIdVal + 1);
-            settings->setValue (getKey ("nodeid", plugin), nodeIdVal);
+            nodeIdVal = store.allocateNodeId();
+            store.stageNodeId (plugin, nodeIdVal);
         }
+
         pendingLoads.push_back ({ plugin,
-                                  settings->getValue (getKey ("state", plugin)),
+                                  store.readState (plugin),
                                   static_cast<uint32> (nodeIdVal) });
     }
+
+    store.commit();
     settings->saveIfNeeded();
 
     setIconTooltip ("Light Host - loading...");
@@ -377,11 +403,12 @@ void IconMenu::onPluginInstanceReady (std::unique_ptr<AudioProcessor> instance,
         // Guard against the plugin having been deleted from the active list while
         // it was loading. If its NodeID is no longer in settings it is unwanted;
         // the unique_ptr cleans it up.
-        auto* settings = getAppProperties().getUserSettings();
+        const ChainStore store (*getAppProperties().getUserSettings());
         bool stillWanted = false;
+
         for (const auto& plugin : activePluginList.getTypes())
         {
-            if (static_cast<uint32> (settings->getIntValue (getKey ("nodeid", plugin), 0)) == nodeId.uid)
+            if (static_cast<uint32> (store.readNodeId (plugin)) == nodeId.uid)
             {
                 stillWanted = true;
                 break;
@@ -502,11 +529,11 @@ void IconMenu::reconnectGraph()
         if (auto* processor = outputNode->getProcessor())
             layout.outputNodeChannels = processor->getTotalNumInputChannels();
 
-    auto* settings = getAppProperties().getUserSettings();
+    const ChainStore store (*getAppProperties().getUserSettings());
 
     for (const auto& pd : getTimeSortedList())
     {
-        const auto nodeIdVal = settings->getIntValue (getKey ("nodeid", pd), 0);
+        const auto nodeIdVal = store.readNodeId (pd);
         if (nodeIdVal == 0)
             continue;
 
@@ -515,7 +542,7 @@ void IconMenu::reconnectGraph()
         if (node == nullptr)
             continue;
 
-        node->setBypassed (settings->getBoolValue (getKey ("bypass", pd), false));
+        node->setBypassed (store.readBypassed (pd));
 
         auto* processor = node->getProcessor();
         if (processor == nullptr)
@@ -525,7 +552,7 @@ void IconMenu::reconnectGraph()
         // than trusted; nothing else validates it.
         lighthost::topology::NodeFacts facts;
         facts.nodeId            = nodeId;
-        facts.lane              = settings->getIntValue (getKey ("lane", pd), 0);
+        facts.lane              = store.readLane (pd);
         facts.numInputChannels  = processor->getTotalNumInputChannels();
         facts.numOutputChannels = processor->getTotalNumOutputChannels();
 
@@ -618,7 +645,7 @@ const std::vector<PluginDescription>& IconMenu::getTimeSortedList() const
     if (! sortedCacheDirty)
         return sortedPluginCache;
 
-    auto* settings = getAppProperties().getUserSettings();
+    const ChainStore store (*getAppProperties().getUserSettings());
     const auto types = activePluginList.getTypes();
 
     // Pre-read every order value once — O(N) settings reads — so the sort
@@ -627,7 +654,7 @@ const std::vector<PluginDescription>& IconMenu::getTimeSortedList() const
     std::vector<std::pair<int, PluginDescription>> orderedTypes;
     orderedTypes.reserve (static_cast<size_t> (types.size()));
     for (int i = 0; i < types.size(); ++i)
-        orderedTypes.emplace_back (settings->getIntValue (getKey ("order", types[i]), 0), types[i]);
+        orderedTypes.emplace_back (store.readOrder (types[i]), types[i]);
 
     std::sort (orderedTypes.begin(), orderedTypes.end(),
                [] (const auto& a, const auto& b) { return a.first < b.first; });
@@ -690,12 +717,6 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
 }
 
 //==============================================================================
-String IconMenu::getKey (const String& type, const PluginDescription& plugin)
-{
-    return "plugin-" + type.toLowerCase() + "-" + plugin.name + plugin.version + plugin.pluginFormatName;
-}
-
-//==============================================================================
 void IconMenu::timerCallback()
 {
     stopTimer();
@@ -708,16 +729,15 @@ void IconMenu::timerCallback()
     menu.addSectionHeader ("Active Plugins");
 
     const auto& timeSorted = getTimeSortedList();
-    auto* settings = getAppProperties().getUserSettings();
+    const ChainStore store (*getAppProperties().getUserSettings());
 
     for (size_t i = 0; i < timeSorted.size(); ++i)
     {
         PopupMenu options;
         options.addItem (kEditOffset + static_cast<int> (i), "Edit");
 
-        const auto key = getKey ("bypass", timeSorted[i]);
-        const auto bypass = settings->getBoolValue (key);
-        options.addItem (kBypassOffset + static_cast<int> (i), "Bypass", true, bypass);
+        options.addItem (kBypassOffset + static_cast<int> (i), "Bypass", true,
+                         store.readBypassed (timeSorted[i]));
         options.addSeparator();
         options.addItem (kMoveUpOffset + static_cast<int> (i), "Move Up", i > 0);
         options.addItem (kMoveDownOffset + static_cast<int> (i), "Move Down", i < timeSorted.size() - 1);
@@ -818,7 +838,40 @@ void IconMenu::handleDeletePlugin (int index)
     savePluginStates();
 
     auto* settings = getAppProperties().getUserSettings();
-    const auto nodeIdVal = settings->getIntValue (getKey ("nodeid", pluginToDelete), 0);
+    ChainStore store (*settings);
+
+    const auto nodeIdVal = store.readNodeId (pluginToDelete);
+
+    // Erase every field the store owns, which is the point of it owning them:
+    // up to 4.0.3 this list was written out by hand here and omitted the lane, so
+    // a delete left an orphan lane key for the next plugin to inherit.
+    store.stageErase (pluginToDelete);
+
+    // Remove from the list first. It is the mutation that can throw (its change
+    // listener writes the XML), and nothing destructive should happen until it
+    // has succeeded.
+    try
+    {
+        activePluginList.removeType (pluginToDelete);  // triggers changeListener → persists XML
+    }
+    catch (const std::exception& e)
+    {
+        store.rollback();
+        juce::Logger::writeToLog ("activePluginList.removeType threw std::exception for "
+                                  + pluginToDelete.name + ": " + juce::String (e.what())
+                                  + "; the plugin's settings were left untouched");
+        refreshPreferencesIfOpen();
+        return;
+    }
+    catch (...)
+    {
+        store.rollback();
+        juce::Logger::writeToLog ("activePluginList.removeType threw unknown exception for "
+                                  + pluginToDelete.name
+                                  + "; the plugin's settings were left untouched");
+        refreshPreferencesIfOpen();
+        return;
+    }
 
     if (nodeIdVal != 0)
     {
@@ -827,26 +880,9 @@ void IconMenu::handleDeletePlugin (int index)
         graph.removeNode (nodeId);                             // destroy only this instance
     }
 
-    settings->removeValue (getKey ("order",  pluginToDelete));
-    settings->removeValue (getKey ("bypass", pluginToDelete));
-    settings->removeValue (getKey ("state",  pluginToDelete));
-    settings->removeValue (getKey ("nodeid", pluginToDelete));
+    store.commit();
     settings->saveIfNeeded();
 
-    try
-    {
-        activePluginList.removeType (pluginToDelete);  // triggers changeListener → persists XML
-    }
-    catch (const std::exception& e)
-    {
-        juce::Logger::writeToLog ("activePluginList.removeType threw std::exception for "
-                                  + pluginToDelete.name + ": " + juce::String (e.what()));
-    }
-    catch (...)
-    {
-        juce::Logger::writeToLog ("activePluginList.removeType threw unknown exception for "
-                                  + pluginToDelete.name);
-    }
     sortedCacheDirty = true;
     reconnectGraph();  // rewire around the removed node — no plugin loads needed
     refreshPreferencesIfOpen();
@@ -858,10 +894,13 @@ void IconMenu::handleBypassPlugin (int index)
     if (index < 0 || index >= static_cast<int> (timeSorted.size()))
         return;
 
-    const auto key = getKey ("bypass", timeSorted[static_cast<size_t> (index)]);
+    const auto& plugin = timeSorted[static_cast<size_t> (index)];
 
     auto* settings = getAppProperties().getUserSettings();
-    settings->setValue (key, ! settings->getBoolValue (key));
+    ChainStore store (*settings);
+
+    store.stageBypassed (plugin, ! store.readBypassed (plugin));
+    store.commit();
     settings->saveIfNeeded();
 
     reconnectGraph();
@@ -874,7 +913,8 @@ void IconMenu::handleEditPlugin (int index)
     if (index < 0 || index >= static_cast<int> (sorted.size()))
         return;
 
-    const auto nodeIdVal = getAppProperties().getUserSettings()->getIntValue (getKey ("nodeid", sorted[static_cast<size_t> (index)]), 0);
+    const ChainStore store (*getAppProperties().getUserSettings());
+    const auto nodeIdVal = store.readNodeId (sorted[static_cast<size_t> (index)]);
     if (nodeIdVal == 0)
         return;
 
@@ -899,15 +939,18 @@ void IconMenu::handleMovePlugin (int index, bool moveUp)
     const auto& target   = timeSorted[static_cast<size_t> (index)];
     const auto& neighbor = timeSorted[static_cast<size_t> (neighborIndex)];
 
-    // Swap only the two affected order values — O(1) writes and 4 key
-    // allocations.  Previously rewrote all N values and called
-    // savePluginStates() even though plugin state is unchanged by a move.
+    // Swap only the two affected order values — O(1) writes.  Previously
+    // rewrote all N values and called savePluginStates() even though plugin
+    // state is unchanged by a move.
     auto* settings = getAppProperties().getUserSettings();
-    const auto targetOrder   = settings->getIntValue (getKey ("order", target),   0);
-    const auto neighborOrder = settings->getIntValue (getKey ("order", neighbor), 0);
+    ChainStore store (*settings);
 
-    settings->setValue (getKey ("order", target),   neighborOrder);
-    settings->setValue (getKey ("order", neighbor), targetOrder);
+    const auto targetOrder   = store.readOrder (target);
+    const auto neighborOrder = store.readOrder (neighbor);
+
+    store.stageOrder (target,   neighborOrder);
+    store.stageOrder (neighbor, targetOrder);
+    store.commit();
     settings->saveIfNeeded();
 
     sortedCacheDirty = true;
@@ -920,10 +963,12 @@ void IconMenu::deletePluginStates()
 {
     const auto list = getTimeSortedList();
     auto* settings = getAppProperties().getUserSettings();
+    ChainStore store (*settings);
 
     for (const auto& plugin : list)
-        settings->removeValue (getKey ("state", plugin));
+        store.stageState (plugin, {});
 
+    store.commit();
     settings->saveIfNeeded();
 }
 
@@ -931,10 +976,11 @@ void IconMenu::savePluginStates()
 {
     const auto& list = getTimeSortedList();
     auto* settings = getAppProperties().getUserSettings();
+    ChainStore store (*settings);
 
     for (const auto& plugin : list)
     {
-        const auto nodeIdVal = settings->getIntValue (getKey ("nodeid", plugin), 0);
+        const auto nodeIdVal = store.readNodeId (plugin);
         if (nodeIdVal == 0)
             continue;
 
@@ -957,7 +1003,7 @@ void IconMenu::savePluginStates()
         {
             MemoryBlock savedStateBinary;
             node->getProcessor()->getStateInformation (savedStateBinary);
-            settings->setValue (getKey ("state", plugin), savedStateBinary.toBase64Encoding());
+            store.stageState (plugin, savedStateBinary.toBase64Encoding());
         }
         catch (const std::exception& e)
         {
@@ -971,6 +1017,9 @@ void IconMenu::savePluginStates()
 
     try
     {
+        // A plugin that threw above simply has nothing staged, so the state
+        // already on disk survives; the others are written together.
+        store.commit();
         settings->saveIfNeeded();
     }
     catch (const std::exception& e)
@@ -997,18 +1046,20 @@ void IconMenu::showPreferences()
 
     Component::SafePointer<IconMenu> safe (this);
 
-    // Build initial bypass states from persisted settings
+    // Build initial bypass and lane states from persisted settings
     const auto chain = getTimeSortedList();
-    std::vector<bool> bypassStates;
-    bypassStates.reserve (chain.size());
-    auto* settings = getAppProperties().getUserSettings();
-    for (const auto& plugin : chain)
-        bypassStates.push_back (settings->getBoolValue (getKey ("bypass", plugin), false));
+    const ChainStore store (*getAppProperties().getUserSettings());
 
-    std::vector<int> laneStates;
+    std::vector<bool> bypassStates;
+    std::vector<int>  laneStates;
+    bypassStates.reserve (chain.size());
     laneStates.reserve (chain.size());
-    for (const auto& pd : chain)
-        laneStates.push_back (getAppProperties().getUserSettings()->getIntValue (getKey ("lane", pd), 0));
+
+    for (const auto& plugin : chain)
+    {
+        bypassStates.push_back (store.readBypassed (plugin));
+        laneStates.push_back (store.readLane (plugin));
+    }
 
     preferencesWindow = std::make_unique<PreferencesWindow> (
         deviceManager,
@@ -1060,24 +1111,27 @@ void IconMenu::refreshPreferencesIfOpen()
     if (preferencesWindow == nullptr) return;
 
     const auto chain = getTimeSortedList();
-    auto* settings   = getAppProperties().getUserSettings();
-    std::vector<bool> bypass;
-    bypass.reserve (chain.size());
-    for (const auto& p : chain)
-        bypass.push_back (settings->getBoolValue (getKey ("bypass", p), false));
+    const ChainStore store (*getAppProperties().getUserSettings());
 
-    std::vector<int> lanes;
+    std::vector<bool> bypass;
+    std::vector<int>  lanes;
+    bypass.reserve (chain.size());
     lanes.reserve (chain.size());
-    for (const auto& pd : chain)
-        lanes.push_back (getAppProperties().getUserSettings()->getIntValue (getKey("lane", pd), 0));
+
+    for (const auto& plugin : chain)
+    {
+        bypass.push_back (store.readBypassed (plugin));
+        lanes.push_back (store.readLane (plugin));
+    }
 
     preferencesWindow->refreshPluginChain (chain, bypass, lanes);
 }
 
 void IconMenu::openPluginEditorFor (const PluginDescription& pd)
 {
-    const auto nodeIdVal = getAppProperties().getUserSettings()
-                               ->getIntValue (getKey ("nodeid", pd), 0);
+    const ChainStore store (*getAppProperties().getUserSettings());
+    const auto nodeIdVal = store.readNodeId (pd);
+
     if (nodeIdVal == 0)
     {
         juce::Logger::writeToLog ("IconMenu: editor open skipped, missing nodeId for " + pd.name);
@@ -1099,13 +1153,20 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
                                   const std::vector<bool>& bypassStates,
                                   const std::vector<int>& lanes)
 {
-    // Helper: stable string identity for matching plugins across lists.
-    auto identity = [] (const PluginDescription& pd) -> String
+    // One definition of "the same plugin", the same one the settings store uses,
+    // so a plugin matched here is the plugin whose settings are read there.
+    const auto identity = [] (const PluginDescription& pd) { return ChainStore::identityOf (pd); };
+
+    const auto sameAsAny = [&identity] (const auto& haystack, const PluginDescription& needle)
     {
-        return pd.fileOrIdentifier + pd.pluginFormatName + pd.name;
+        return std::any_of (haystack.begin(), haystack.end(),
+                            [&] (const PluginDescription& candidate)
+                            { return identity (candidate) == identity (needle); });
     };
 
     auto* settings = getAppProperties().getUserSettings();
+    ChainStore store (*settings);
+
     const auto& currentChain = getTimeSortedList();
 
     bool identicalChain = currentChain.size() == newChain.size();
@@ -1117,16 +1178,14 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
             break;
         }
 
-        const bool currentBypass = settings->getBoolValue (getKey ("bypass", currentChain[i]), false);
+        // Bypass and lane are compared as well as membership: a lane change alone
+        // flips neither the order nor the bypass, and Apply used to no-op when
+        // only the lane dropdown had moved.
         const bool requestedBypass = i < bypassStates.size() ? bypassStates[i] : false;
-        if (currentBypass != requestedBypass)
-            identicalChain = false;
+        const int  requestedLane   = i < lanes.size() ? lanes[i] : 0;
 
-        // Lane changes alone would not flip order/bypass — include them here
-        // or Apply silently no-ops when only the lane dropdown was changed.
-        const int currentLane = settings->getIntValue (getKey ("lane", currentChain[i]), 0);
-        const int requestedLane = i < lanes.size() ? lanes[i] : 0;
-        if (currentLane != requestedLane)
+        if (store.readBypassed (currentChain[i]) != requestedBypass
+            || store.readLane (currentChain[i]) != requestedLane)
             identicalChain = false;
     }
 
@@ -1139,117 +1198,127 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     // Snapshot the current active list before mutations so iterators stay valid.
     const auto currentTypes = activePluginList.getTypes();
 
-    bool hasStructuralChanges = currentTypes.size() != static_cast<int> (newChain.size());
-    for (int i = 0; ! hasStructuralChanges && i < currentTypes.size(); ++i)
+    // ── Work out what is leaving and what is arriving ────────────────────────
+    // The node ids of departing plugins are read before anything is staged: once
+    // an erase is staged the store reports them as gone, which is the point.
+    struct Departing
     {
-        const auto& existing = currentTypes[i];
-        const bool inNew = std::any_of (newChain.begin(), newChain.end(),
-                                        [&] (const PluginDescription& np)
-                                        { return identity (np) == identity (existing); });
-        if (! inNew)
-            hasStructuralChanges = true;
-    }
+        PluginDescription description;
+        int               nodeId;
+    };
 
-    if (hasStructuralChanges)
+    std::vector<Departing> departing;
+    std::vector<PluginDescription> arriving;
+
+    for (const auto& existing : currentTypes)
+        if (! sameAsAny (newChain, existing))
+            departing.push_back ({ existing, store.readNodeId (existing) });
+
+    for (const auto& candidate : newChain)
+        if (! sameAsAny (currentTypes, candidate))
+            arriving.push_back (candidate);
+
+    if (! departing.empty() || ! arriving.empty())
         cancelPluginLoading();
 
     juce::Logger::writeToLog ("IconMenu: applying plugin chain (" + juce::String ((int) currentChain.size())
-                              + " -> " + juce::String ((int) newChain.size()) + " plugins)");
+                              + " -> " + juce::String ((int) newChain.size()) + " plugins, "
+                              + juce::String ((int) arriving.size()) + " added, "
+                              + juce::String ((int) departing.size()) + " removed)");
 
     // Persist current plugin states before making any graph changes.
     savePluginStates();
 
-    // ── Step 1: remove plugins absent from the new chain ────────────────────
-    for (int i = 0; i < currentTypes.size(); ++i)
+    // ── Mutate the plugin list ───────────────────────────────────────────────
+    // Nothing is written to the settings and no node is destroyed until every
+    // list mutation has succeeded. A throw here leaves the settings exactly as
+    // they were rather than describing a chain the user did not ask for.
+    const auto abandon = [&] (const juce::String& what, const juce::String& detail)
     {
-        const auto& existing = currentTypes[i];
-        const bool inNew = std::any_of (newChain.begin(), newChain.end(),
-                                         [&] (const PluginDescription& np)
-                                         { return identity (np) == identity (existing); });
-        if (inNew) continue;
+        store.rollback();
+        juce::Logger::writeToLog ("IconMenu: " + what + " threw (" + detail
+                                  + "); chain edit abandoned, settings untouched");
+        sortedCacheDirty = true;
+        reconnectGraph();
+        refreshPreferencesIfOpen();
+    };
 
-        const auto nodeIdVal = settings->getIntValue (getKey ("nodeid", existing), 0);
-        if (nodeIdVal != 0)
-        {
-            const NodeID nodeId { static_cast<uint32> (nodeIdVal) };
-            PluginWindow::closeCurrentlyOpenWindowsFor (nodeId);
-            graph.removeNode (nodeId);
-        }
+    for (const auto& plugin : departing)
+    {
+        store.stageErase (plugin.description);
 
-        settings->removeValue (getKey ("order",  existing));
-        settings->removeValue (getKey ("bypass", existing));
-        settings->removeValue (getKey ("state",  existing));
-        settings->removeValue (getKey ("lane",  existing));
-        settings->removeValue (getKey ("nodeid", existing));
         try
         {
-            activePluginList.removeType (existing);  // triggers changeListener → persists XML
+            activePluginList.removeType (plugin.description);  // changeListener persists the XML
         }
         catch (const std::exception& e)
         {
-            juce::Logger::writeToLog ("activePluginList.removeType threw std::exception for "
-                                      + existing.name + ": " + juce::String (e.what()));
+            abandon ("activePluginList.removeType", plugin.description.name + ": " + e.what());
+            return;
         }
         catch (...)
         {
-            juce::Logger::writeToLog ("activePluginList.removeType threw unknown exception for "
-                                      + existing.name);
+            abandon ("activePluginList.removeType", plugin.description.name);
+            return;
         }
     }
 
-    // ── Step 2: assign NodeIDs and register any newly added plugins ──────────
-    bool hasNewPlugins = false;
-    for (const auto& np : newChain)
+    for (const auto& plugin : arriving)
     {
-        const bool inCurrent = std::any_of (currentTypes.begin(), currentTypes.end(),
-                                             [&] (const PluginDescription& ep)
-                                             { return identity (ep) == identity (np); });
-        if (inCurrent) continue;
+        if (store.readNodeId (plugin) == 0)
+            store.stageNodeId (plugin, store.allocateNodeId());
 
-        auto nodeIdVal = settings->getIntValue (getKey ("nodeid", np), 0);
-        if (nodeIdVal == 0)
-        {
-            nodeIdVal = settings->getIntValue ("nextPluginNodeId", 1);
-            settings->setValue ("nextPluginNodeId", nodeIdVal + 1);
-            settings->setValue (getKey ("nodeid", np), nodeIdVal);
-        }
         try
         {
-            activePluginList.addType (np);  // triggers changeListener → persists XML
+            activePluginList.addType (plugin);  // changeListener persists the XML
         }
         catch (const std::exception& e)
         {
-            juce::Logger::writeToLog ("activePluginList.addType threw std::exception for "
-                                      + np.name + ": " + juce::String (e.what()));
+            abandon ("activePluginList.addType", plugin.name + ": " + e.what());
+            return;
         }
         catch (...)
         {
-            juce::Logger::writeToLog ("activePluginList.addType threw unknown exception for "
-                                      + np.name);
+            abandon ("activePluginList.addType", plugin.name);
+            return;
         }
-        hasNewPlugins = true;
     }
 
-    // ── Step 3: write new sequential order and bypass values ────────────────
-    // Using time-based base + offset keeps order values unique and naturally ordered.
-    const auto baseTime = static_cast<int> (std::time (nullptr));
+    // ── Tear down the nodes of departed plugins ──────────────────────────────
+    for (const auto& plugin : departing)
+    {
+        if (plugin.nodeId == 0)
+            continue;
+
+        const NodeID nodeId { static_cast<uint32> (plugin.nodeId) };
+        PluginWindow::closeCurrentlyOpenWindowsFor (nodeId);
+        graph.removeNode (nodeId);
+    }
+
+    // ── Write the new order, bypass and lane ─────────────────────────────────
+    // Order values are plain indices. They used to be time(nullptr) + offset,
+    // which is opaque, tells nothing apart from insertion time, and overflows a
+    // signed 32-bit int in 2038. Every plugin in the chain is written in this one
+    // pass, so the values stay consistent with each other.
     for (size_t i = 0; i < newChain.size(); ++i)
     {
-        settings->setValue (getKey ("order", newChain[i]), baseTime + static_cast<int> (i));
+        store.stageOrder (newChain[i], static_cast<int> (i));
+
         if (i < bypassStates.size())
-            settings->setValue (getKey ("bypass", newChain[i]), bypassStates[i]);
+            store.stageBypassed (newChain[i], bypassStates[i]);
+
         if (i < lanes.size())
-            settings->setValue (getKey ("lane", newChain[i]), lanes[i]);
+            store.stageLane (newChain[i], lanes[i]);
     }
 
+    store.commit();
     settings->saveIfNeeded();
     sortedCacheDirty = true;
 
-    // ── Step 4: reload graph ─────────────────────────────────────────────────
-    // If new plugins were added we need DLL loads — hand off to the background
-    // thread (which handles the full chain).  For reorder/remove-only changes a
-    // plain reconnect is sufficient.
-    if (hasNewPlugins)
+    // ── Reload the graph ─────────────────────────────────────────────────────
+    // Arriving plugins need their DLLs loaded, which loadActivePlugins does for
+    // the whole chain. A reorder, a bypass or a lane change needs only a rewire.
+    if (! arriving.empty())
         loadActivePlugins();
     else
         reconnectGraph();

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "PluginChainStore.hpp"
+
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_core/juce_core.h>
 
 //==============================================================================
@@ -35,6 +38,117 @@ namespace lighthost::selftest
         return "LightHost-selftest-" + juce::Uuid().toDashedString();
     }
 
+    //==========================================================================
+    // A seeded chain, so a self-test run exercises settings written by an earlier
+    // version rather than only first-launch behaviour.
+    //
+    // The seeded plugin's format matches no registered format, so the host
+    // reports a load failure and carries on. That needs no plugin on disk, and it
+    // covers three things worth covering: the one-shot migration of 4.0.3's
+    // per-plugin keys, the load-failure path, and the rule that a plugin which
+    // never loaded keeps its saved state instead of having it overwritten.
+    //==========================================================================
+    [[nodiscard]] inline juce::PluginDescription seedDescription()
+    {
+        juce::PluginDescription description;
+        description.name             = "SelfTest Plugin";
+        description.version          = "1.0.0";
+        description.pluginFormatName = "SelfTestFormat";
+        description.fileOrIdentifier = "selftest://not-a-real-plugin";
+        description.uniqueId         = 0x5e1f7e57;
+        return description;
+    }
+
+    [[nodiscard]] inline juce::String seedState() { return "c2VsZi10ZXN0LXN0YXRl"; }
+
+    /** The 4.0.3 key format, written out here rather than borrowed from the store,
+        so this seeds what that version really wrote.
+    */
+    [[nodiscard]] inline juce::String seedLegacyKey (const juce::String& field)
+    {
+        const auto description = seedDescription();
+        return "plugin-" + field + "-"
+             + description.name + description.version + description.pluginFormatName;
+    }
+
+    /** Writes a one-plugin chain in the 4.0.3 format. Called before the app's own
+        settings are read, so the migration sees it on startup.
+    */
+    inline void seedLegacyChain (juce::PropertySet& settings)
+    {
+        juce::KnownPluginList list;
+        list.addType (seedDescription());
+
+        if (auto xml = list.createXml())
+            settings.setValue ("pluginListActive", xml.get());
+
+        settings.setValue (seedLegacyKey ("order"),  1234);
+        settings.setValue (seedLegacyKey ("lane"),   2);
+        settings.setValue (seedLegacyKey ("bypass"), true);
+        settings.setValue (seedLegacyKey ("nodeid"), 77);
+        settings.setValue (seedLegacyKey ("state"),  seedState());
+    }
+
+    /** Asserts the seeded chain was migrated onto the stable keys with every
+        value intact.
+    */
+    [[nodiscard]] inline juce::StringArray checkSeededChainMigrated (juce::PropertySet& settings)
+    {
+        using Store = lighthost::chain::Store;
+        namespace fields = lighthost::chain::fields;
+
+        juce::StringArray failures;
+        const auto plugin = seedDescription();
+
+        for (const auto* field : fields::all)
+            if (settings.containsKey (seedLegacyKey (field)))
+                failures.add (juce::String ("legacy key '") + field
+                              + "' survived, so the chain settings were not migrated");
+
+        const auto expectInt = [&] (const char* field, int expected, const juce::String& what)
+        {
+            const auto actual = settings.getIntValue (Store::keyFor (plugin, field), -1);
+
+            if (actual != expected)
+                failures.add (what + " did not survive migration: expected "
+                              + juce::String (expected) + ", got " + juce::String (actual));
+        };
+
+        expectInt (fields::order,  1234, "order");
+        expectInt (fields::lane,   2,    "lane");
+        expectInt (fields::bypass, 1,    "bypass");
+        expectInt (fields::nodeId, 77,   "node id");
+
+        if (settings.getValue (Store::keyFor (plugin, fields::state)) != seedState())
+            failures.add ("the saved plugin state did not survive migration");
+
+        if (settings.getIntValue ("chainSettingsVersion", 0) != Store::kFormatVersion)
+            failures.add ("the settings format version was not recorded, so migration will run again");
+
+        return failures;
+    }
+
+    /** After shutdown, with the settings file closed: the seeded plugin never
+        loaded, so its saved state must still be on disk. Overwriting it with a
+        plugin's factory defaults is the data loss guarded against in
+        PluginState.hpp, and this is the end-to-end check of it.
+    */
+    [[nodiscard]] inline juce::StringArray checkSeededStateSurvived (const juce::File& settingsFile)
+    {
+        juce::StringArray failures;
+
+        if (! settingsFile.existsAsFile())
+        {
+            failures.add ("settings file was never written to " + settingsFile.getFullPathName());
+            return failures;
+        }
+
+        if (! settingsFile.loadFileAsString().contains (seedState()))
+            failures.add ("the saved state of a plugin that never loaded was overwritten");
+
+        return failures;
+    }
+
     /** Checks that survive being run mid-flight, before shutdown. */
     [[nodiscard]] inline juce::StringArray checkAfterStartup (const juce::File& logFile,
                                                               const juce::File& settingsFile)
@@ -57,6 +171,17 @@ namespace lighthost::selftest
 
         if (! log.contains ("AudioConfig [startup]"))
             failures.add ("audio configuration was never logged, so device init did not complete");
+
+        if (! log.contains ("migrated chain settings"))
+            failures.add ("the seeded 4.0.3 chain was not reported as migrated");
+
+        // The seeded plugin cannot be instantiated, and the host must say so and
+        // keep going rather than stalling the load chain.
+        if (! log.contains ("Plugin load failed"))
+            failures.add ("a plugin that cannot be instantiated was not reported as failed");
+
+        if (! log.contains ("loadActivePlugins complete"))
+            failures.add ("the load chain did not finish after a failed plugin load");
 
         // The settings file is written lazily, so its absence here is not a
         // failure. Its parent directory existing proves the redirection worked.

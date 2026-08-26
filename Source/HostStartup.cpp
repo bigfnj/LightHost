@@ -62,6 +62,12 @@ public:
 
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
+        // Seeded before IconMenu is constructed, so the run starts from settings
+        // written by an older version rather than from nothing. This is what makes
+        // the self-test cover the one-shot chain-settings migration.
+        if (selfTest)
+            lighthost::selftest::seedLegacyChain (*appProperties->getUserSettings());
+
         iconMenu = std::make_unique<IconMenu>();
 
         #if JUCE_MAC
@@ -145,9 +151,13 @@ private:
 
         juce::Timer::callAfterDelay (kDwellMs, [this]
         {
+            auto* settings = appProperties->getUserSettings();
+
             selfTestFailures.addArray (
-                lighthost::selftest::checkAfterStartup (
-                    logFile, appProperties->getUserSettings()->getFile()));
+                lighthost::selftest::checkAfterStartup (logFile, settings->getFile()));
+
+            selfTestFailures.addArray (
+                lighthost::selftest::checkSeededChainMigrated (*settings));
 
             quit();
         });
@@ -156,6 +166,7 @@ private:
     void finishSelfTest (const juce::File& settingsFile)
     {
         selfTestFailures.addArray (lighthost::selftest::checkAfterShutdown (logFile));
+        selfTestFailures.addArray (lighthost::selftest::checkSeededStateSurvived (settingsFile));
 
         setApplicationReturnValue (
             lighthost::selftest::report (selfTestFailures, settingsFile.getParentDirectory()));

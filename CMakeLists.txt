@@ -168,6 +168,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/TestMain.cpp
         Tests/GraphRenderTests.cpp
         Tests/GraphTopologyTests.cpp
+        Tests/PluginChainStoreTests.cpp
         Tests/PluginStateTests.cpp
         Tests/StubProcessors.hpp
     )
@@ -231,11 +232,13 @@ if(LIGHTHOST_BUILD_TESTS)
                  COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHost> -self-test)
         set_tests_properties(smoke-startup PROPERTIES LABELS smoke TIMEOUT 90)
 
-        # Second run against the settings the first one wrote, exercising the
-        # restore path rather than only first-launch behaviour.
-        add_test(NAME smoke-restore
+        # A second, identical run. Each self-test uses a settings folder unique to
+        # the run, so this is not a restore-from-previous-session check (the seeded
+        # chain inside every run covers that); it is a repeat, which is what
+        # catches a startup that only fails sometimes.
+        add_test(NAME smoke-repeat
                  COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHost> -self-test)
-        set_tests_properties(smoke-restore PROPERTIES LABELS smoke TIMEOUT 90
+        set_tests_properties(smoke-repeat PROPERTIES LABELS smoke TIMEOUT 90
                              DEPENDS smoke-startup)
 
         # The multi-instance flag suffixes the settings filename; check it does not
