@@ -2,7 +2,123 @@
 
 ---
 
-## [Unreleased]
+## [Unreleased] — towards 5.0.0
+
+Work in progress on `main`. The version in `CMakeLists.txt` is still 4.0.3 and no
+5.0.0 tag exists: the version bump and the release are the last step, and the
+remaining work is listed in [BACKLOG.md](BACKLOG.md).
+
+### Fixed — parallel lanes were misaligned by the compensation meant to align them
+
+Versions up to 4.0.3 inserted their own `DelayProcessor` on shorter lanes.
+Because it delayed audio without reporting the delay via `setLatencySamples`,
+`AudioProcessorGraph` still saw a zero-latency lane and padded it a second time.
+Measured: two lanes 512 samples apart produced impulses at 512 and 1024 instead
+of one at 512, so the host was worse off than with no compensation at all. The
+manual padding is gone; the graph's own compensation is correct and is now pinned
+by tests that render impulses through a real graph. `DelayProcessor.hpp` and
+`PdcLayout.hpp` are deleted.
+
+### Fixed — a failed state restore destroyed the user's saved preset
+
+When a plugin threw out of `setStateInformation` the node was added holding
+factory defaults, and the next `savePluginStates()` wrote those defaults over the
+good base64 blob. One bad load and the preset was gone, with a log line as the
+only trace. `Source/PluginState.hpp` now reports whether a restore happened,
+failed nodes are recorded, and the save path skips them.
+
+### Fixed — chain settings were orphaned by a plugin update
+
+Per-plugin settings were keyed on `name + version + pluginFormatName`. Updating a
+plugin changed its version and orphaned its order, lane, bypass and saved preset;
+the same plugin installed in two folders shared one set of settings; and two
+plugins whose name and version concatenated alike shared one set as well. Keys
+are now derived from the plugin's file, format and unique ids, which is the field
+set JUCE itself uses to decide whether two descriptions are the same plugin.
+Existing settings are migrated once on first launch and the old keys removed.
+
+### Fixed — editing the chain clicked and dropped out
+
+Rewiring removed every connection and added them all back, each mutation
+defaulting to `UpdateKind::sync`, so the audio thread saw partly and fully
+disconnected render sequences on every edit, including a bypass toggle. The
+desired wiring is now computed first (`Source/GraphTopology.hpp`), diffed against
+the live graph, and only the difference applied, followed by a single `rebuild()`.
+A bypass toggle changes no connections and so applies none.
+
+### Fixed — the plugin loader blocked shutdown and could not load off-thread anyway
+
+`createInstanceFromDescription` posts to the message thread and blocks on an
+untimed wait, so the DLL load happened on the message thread while the worker
+slept. The costs were real: `stopThread(3000)` does not pump messages, so
+cancelling a load blocked for three seconds, force-killed the thread and left a
+queued callback pointing into a dead stack frame; the worker built a
+`Component::SafePointer`, whose `WeakReference` is not thread-safe; and calling
+from a worker skipped JUCE's `requiresUnblockedMessageThreadDuringCreation`
+check. Loading is now a message-thread chain through
+`createPluginInstanceAsync`, cancellation is a generation bump, and `~IconMenu`
+no longer blocks.
+
+### Fixed — smaller correctness bugs
+
+- **Deleting a plugin left its lane key behind.** The fields to remove were
+  listed by hand at each call site and the lane was missed, so the next plugin to
+  occupy that key inherited a stale lane. Fields are declared once and erased
+  together.
+- **Apply read lanes after the fact.** The chain and bypass flags were
+  snapshotted before Apply's async hop while the lanes were read live inside it,
+  so a lane edit between the click and the dispatch was applied against the
+  earlier chain. All three are snapshotted together.
+- **A rejected `addNode` was reported as success.** The return value was ignored
+  and "plugin instance ready" logged regardless, so a duplicate id left a plugin
+  visible in the UI with no node, no audio and no error.
+- **`setIconImage` was passed colour art as the macOS template**, which put a
+  full-size colour app icon in the menu bar. A monochrome template is passed now.
+- **Order values are plain indices**, not `time(nullptr) + offset`, which was
+  opaque and overflows a signed 32-bit int in 2038.
+- **A settings write followed by a throwing plugin-list mutation** left the two
+  halves disagreeing about the chain. Settings writes are staged and rolled back
+  if the list mutation throws.
+
+### Changed — dependencies and licensing
+
+- **JUCE 8.0.13 to 9.0.1.** No source change was needed. This retires six libpng
+  CVEs (1.6.37 from 2019 to 1.6.58), two HarfBuzz advisories, a leaked
+  `VST3HostContext` per VST3 scanned, undefined behaviour in the WASAPI backend,
+  and ASIO device-open state machine faults. `/wd5105` was removed after
+  verifying it was a stale suppression.
+- **The application is stated as AGPLv3 as a whole**, because it links JUCE
+  without a commercial licence. Light Host's own source stays GPLv2-or-later. The
+  Steinberg VST2 SDK headers are documented as an explicit exception, and
+  `third_party` now records the version of every bundled library.
+
+### Added — tests, and a harness that cannot silently pass
+
+The project had no tests. It now has 180 assertions in four areas, needing no
+audio device and no real plugin: lane alignment rendered through a real
+`AudioProcessorGraph`, chain wiring as a pure function plus its application to a
+live graph, the chain settings store and its migration, and plugin state restore.
+
+- A headless `-self-test` runs the real application and inspects its own log.
+  Each run seeds a one-plugin chain in the 4.0.3 settings format, so the
+  migration, a plugin that cannot be instantiated, and the rule that an unloaded
+  plugin keeps its saved state are all exercised in the real app.
+- **The test runner was discarding results.** `UnitTestRunner::runTests` clears
+  its result list on entry, so tallying once after the category loop reported
+  only the last category: a failure in any earlier one would have exited 0. The
+  same code went from 7 counted assertions to 180. A category name matching no
+  test now fails rather than looking like success.
+- CI builds and tests on Windows, Linux and macOS. The Linux job had been broken
+  since 2026-06-19 by a cached `CMakeCache.txt` pinning an absolute path to a
+  per-run temp `ninja`; no job caches its build directory now.
+
+### Added — user-facing
+
+- Preferences detects when no virtual audio input exists and offers a
+  **Get VB-CABLE** link, since Windows cannot capture another application's
+  playback without one and JUCE's WASAPI backend has no loopback mode.
+- New application and tray icons, with a purpose-built glyph for small sizes
+  rather than a downscaled badge.
 
 ---
 

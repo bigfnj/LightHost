@@ -2,7 +2,9 @@
 
 Light Host is a lightweight desktop audio plugin host built with **JUCE 9.0.1**. It is designed to live in the system tray on Windows or the menu bar on macOS, with no permanent main window. Audio flows through a realtime `AudioProcessorGraph` with support for parallel processing lanes and automatic delay compensation. Plugins can be added, removed, reordered, bypassed, edited, and assigned to lanes from the tray/menu UI and the Preferences window.
 
-Current version: **4.0.3** — see [CHANGELOG.md](CHANGELOG.md).
+Released version: **4.0.3**. `main` carries unreleased work towards 5.0.0, listed
+in [CHANGELOG.md](CHANGELOG.md); what is left before that release is in
+[BACKLOG.md](BACKLOG.md).
 
 ## What It Does
 
@@ -108,6 +110,7 @@ alignment, so a regression here fails the build.
 ├── CMakeLists.txt          Main build definition
 ├── CMakePresets.json       Build presets
 ├── CHANGELOG.md            Change history
+├── BACKLOG.md              Known bugs and remaining work
 └── README.md               This file
 ```
 
@@ -296,11 +299,15 @@ If the host crashes without a message, the log should be the first place to chec
 ## Known Limitations
 
 - Stereo-focused routing only
+- No per-lane gain or metering: parallel lanes sum at unity, so four lanes
+  carrying the same source arrive about 12 dB hot
 - No side-chain routing
 - No MIDI routing
 - No undo/redo for chain edits
 - No preset snapshot system
 - No plugin sandboxing or out-of-process isolation
+
+Known bugs, as opposed to missing features, are listed in [BACKLOG.md](BACKLOG.md).
 
 ## Stability Notes
 
