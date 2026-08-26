@@ -176,9 +176,11 @@ namespace lighthost::selftest
             failures.add ("the seeded 4.0.3 chain was not reported as migrated");
 
         // The seeded plugin cannot be instantiated, and the host must say so and
-        // keep going rather than stalling the load chain.
-        if (! log.contains ("Plugin load failed"))
-            failures.add ("a plugin that cannot be instantiated was not reported as failed");
+        // keep going rather than stalling the load chain. The "Problem:" prefix is
+        // the status sink's: it proves the failure went somewhere the user can see
+        // it rather than into the log alone.
+        if (! log.contains ("Problem: Plugin load failed"))
+            failures.add ("a plugin that cannot be instantiated was not reported to the status sink");
 
         if (! log.contains ("loadActivePlugins complete"))
             failures.add ("the load chain did not finish after a failed plugin load");

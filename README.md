@@ -216,6 +216,11 @@ a corrupt settings file being clamped rather than honoured, and two invariants
 the live rewiring depends on. Every connection must name a channel the node
 actually has, and the same chain must always produce the same wiring.
 
+Two smaller areas cover decisions that are hard to reach through the UI: the
+sample-rate correction policy, including the bound that stops a driver which never
+settles from being asked forever, and the status sink that collects failures for
+the tooltip.
+
 The third area is the chain settings store: identity surviving a plugin update
 and a rename while still telling apart two plugins inside one shell file, staged
 writes being invisible until commit and undone by rollback, an erase leaving no
@@ -330,6 +335,20 @@ message thread whichever thread asks, so a worker only slept while the message
 thread did the work, and cancelling one meant a blocking join during shutdown.
 Cancellation is now a generation counter bump, and a superseded callback drops
 its result when it arrives.
+
+### Failures are visible
+
+Hover the tray icon. When something has gone wrong, the tooltip says so instead of
+just naming the application: a plugin that would not load, a plugin that refused
+to restore its saved settings, an audio device that would not open, or a settings
+file that could not be written. Versions up to 4.0.3 discarded all of those:
+`AudioDeviceManager::initialise` returns a reason it could not open a device and
+that string was thrown away, and every one of the thirteen `saveIfNeeded()` calls
+ignored its result, so a full disk or a locked settings file lost every edit
+silently while the application went on looking healthy.
+
+The log still holds the full history. The tooltip holds the most recent problem,
+because it is the one surface that is always there.
 
 ### Chain settings survive a plugin update
 

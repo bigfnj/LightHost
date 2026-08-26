@@ -46,18 +46,11 @@ Found by audit, still present. Each is a real fault, not a style preference.
 - **The lane popup callback writes to an unvalidated row index.** It captures a
   row, and nothing re-checks it before writing, so it can write past the end of
   the vector. (`Source/PreferencesWindow.cpp`, lane combo callback.)
-- **The device-change guard cannot stop the recursion that matters.** The
-  `ScopedValueSetter` on `isHandlingDeviceChange` guards against a synchronous
-  re-entry that cannot happen, while the real path (a driver that rejects the rate
-  it just accepted) can loop unbounded. Needs a real latch.
-- **Errors are discarded.** `AudioDeviceManager::initialise`'s error string and
-  every `saveIfNeeded()` return value are thrown away, so a failure to persist
-  settings is invisible. Wanted: one error sink surfaced in the tray tooltip and
-  in Preferences.
-- **Plugin delay compensation goes stale.** Nothing listens for
-  `audioProcessorChanged`, so a plugin that changes its reported latency (a
-  linear-phase EQ switching mode inside its own editor is the usual case) leaves
-  the graph compensating for the old value until the next rewire.
+- **Problems are only visible in the tray tooltip.** The status sink is surfaced
+  there, which is free but easy to miss. Preferences should show the recent
+  problems as well, and offer to open the log. The sink already broadcasts
+  `onChange`, so this is a UI job rather than a plumbing one.
+  (`Source/StatusSink.hpp`.)
 
 ## Features and refactors
 
