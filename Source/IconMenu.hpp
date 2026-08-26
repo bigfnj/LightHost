@@ -1,5 +1,7 @@
 #pragma once
 
+#include "GainProcessor.hpp"
+#include "Lanes.hpp"
 #include "StatusSink.hpp"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -23,6 +25,14 @@ public:
 
     void mouseDown (const juce::MouseEvent&) override;
     void changeListenerCallback (juce::ChangeBroadcaster* changed) override;
+
+    /** Opens the Preferences window, as a left-click on the tray icon does.
+
+        Public so the headless self-test can build the window: it is the only
+        window this application has, it holds every control, and nothing else
+        constructs it during an automated run.
+    */
+    void showPreferencesWindow();
 
     // Menu action ID offsets — each plugin gets an ID in the range [offset, offset + maxPlugins)
     static constexpr int kEditOffset     = 1'000'000;
@@ -52,6 +62,23 @@ private:
     void handleEditPlugin (int index);
     void handleMovePlugin (int index, bool moveUp);
 
+    // Lane trims. Four gain nodes at reserved ids, one at each lane's summing
+    // point. See Source/GainProcessor.hpp for why they exist.
+    [[nodiscard]] static NodeID laneGainNodeId (int lane);
+    void createLaneGainNodes();
+    [[nodiscard]] lighthost::gain::Processor* laneGainProcessor (int lane);
+
+public:
+    /** The stored trim for a lane, in decibels. For the Preferences UI. */
+    [[nodiscard]] float getLaneGainDb (int lane) const;
+
+    /** Applies a trim to the running graph without persisting it. */
+    void setLaneGainDb (int lane, float decibels);
+
+    /** Writes a trim to the settings file. Called when a drag ends, not per pixel. */
+    void persistLaneGainDb (int lane, float decibels);
+
+private:
     /** Saves the settings file and reports a failure rather than discarding it. */
     void flushSettings (juce::PropertiesFile& settings, const juce::String& context);
 

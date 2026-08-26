@@ -91,6 +91,31 @@ window again wiped them again after a rescan. The purge is gone. A node that
 genuinely cannot carry audio is now wired around by the graph topology and logged,
 so an unusable plugin in the list degrades instead of breaking the chain.
 
+### Added — a trim per lane
+
+Lanes are fed the same input and summed at the output, so four lanes carrying
+similar material sum coherently and arrive about 12 dB hot, with no trim, meter or
+dry/wet to do anything about it. Each lane now has a fader in a **LANE TRIM**
+section in Preferences, from mute to +12 dB, unity by default so an existing setup
+sounds unchanged after upgrading.
+
+The trims apply while being dragged and are written to disk when the gesture ends,
+because each settings write rewrites the whole document and doing that per pixel
+would be hundreds of rewrites for one gesture. Each is a gain node at its lane's
+summing point, ramped over 20 ms so a change does not click, and reporting no
+latency so the graph's delay compensation is unaffected.
+
+A trim belongs to the lane rather than to the plugins on it, which is why it is not
+part of `Slot`: a lane is not an entity in this codebase, only an integer carried
+by each plugin, so a lane's trim cannot belong to any one of them. Deleting every
+plugin from a lane leaves its trim intact, and moving a plugin to another lane
+hands it that lane's trim.
+
+The Preferences window's default and minimum heights grew to fit the new section.
+They were already too small: with the virtual-input hint showing, the default
+window was about 28 pixels short of its own layout and the sections at the bottom
+were being silently squeezed to nothing.
+
 ### Added — failures are visible instead of discarded
 
 `AudioDeviceManager::initialise` returns a reason it could not open a device and

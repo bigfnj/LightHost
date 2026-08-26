@@ -185,6 +185,12 @@ namespace lighthost::selftest
         if (! log.contains ("loadActivePlugins complete"))
             failures.add ("the load chain did not finish after a failed plugin load");
 
+        // The Preferences window is built during the run. Reaching this line means
+        // every control in it was constructed and laid out without faulting or
+        // asserting, which nothing else in an automated run checks.
+        if (! log.contains ("opening Preferences window"))
+            failures.add ("the Preferences window was never built");
+
         // The settings file is written lazily, so its absence here is not a
         // failure. Its parent directory existing proves the redirection worked.
         if (! settingsFile.getParentDirectory().isDirectory())

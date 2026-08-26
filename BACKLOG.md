@@ -33,6 +33,14 @@ never been run against a real plugin.
 
 Found by audit, still present. Each is a real fault, not a style preference.
 
+- **The Preferences panel squeezes its bottom sections instead of scrolling.**
+  `resized()` lays out a fixed stack with `removeFromTop`, so if the window is
+  shorter than the layout needs, the sections at the end silently collapse to zero
+  height and the Apply button disappears. The window's minimum and default heights
+  are set to fit the current layout, which means the arithmetic has to be redone by
+  hand every time a section is added. Putting the whole panel in a `Viewport` would
+  retire the problem rather than re-solving it.
+  (`Source/PreferencesWindow.cpp`, `resized()` and the resize limits.)
 - **Problems are only visible in the tray tooltip.** The status sink is surfaced
   there, which is free but easy to miss. Preferences should show the recent
   problems as well, and offer to open the log. The sink already broadcasts
@@ -60,12 +68,13 @@ Phase numbers refer to the 5.0.0 plan.
   doing it is that the invariant currently lives in a 1400-line class and would
   end up in a 60-line one whose whole purpose is to hold it. The argument against
   is that nothing else in the plan depends on it.
-- **Phase 6: per-lane gain, default unity.** Four lanes carrying the same source
-  sum to about +12 dB today with no trim, meter or dry/wet. Needs a gain field in
-  `lighthost::chain::fields` (add it there and `stageErase` picks it up, and the
-  erase test will fail until it is registered), a gain node per lane in
-  `GraphTopology`, and a control per row in Preferences. Unity default means no
-  existing user hears a change on upgrade.
+- **Phase 6: metering.** The lane trims landed, so lanes can be balanced, but
+  there is nothing to look at while doing it. A peak meter per lane, and one on the
+  output, would make the trims usable without guessing. This is the remaining half
+  of "no trim, meter or dry/wet".
+- **Phase 6: dry/wet per lane.** A lane is either in or out. A blend against the
+  unprocessed input is what parallel processing is usually for, and the trim nodes
+  are the obvious place to hang it.
 - **Phase 6: test `PluginWindow.cpp`.** At ~200 lines with one stub processor it
   is the cheapest file in the project to cover, and it holds three historical
   fixes (duplicate Generic windows, a throwing editor constructor, a deprecated

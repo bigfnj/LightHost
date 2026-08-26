@@ -166,6 +166,7 @@ if(LIGHTHOST_BUILD_TESTS)
 
     target_sources(LightHostTests PRIVATE
         Tests/TestMain.cpp
+        Tests/GainProcessorTests.cpp
         Tests/GraphRenderTests.cpp
         Tests/GraphTopologyTests.cpp
         Tests/PluginChainStoreTests.cpp

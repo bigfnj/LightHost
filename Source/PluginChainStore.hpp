@@ -1,5 +1,8 @@
 #pragma once
 
+#include "GainProcessor.hpp"
+#include "Lanes.hpp"
+
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_core/juce_core.h>
 
@@ -236,6 +239,42 @@ namespace lighthost::chain
             }
         }
 
+        //==========================================================================
+        // Lane trims.
+        //
+        // These are not per-plugin and deliberately not part of Slot. A lane is not
+        // an entity anywhere in this codebase: it is an integer carried by each
+        // plugin, and lanes exist only for as long as GraphTopology groups plugins
+        // by it. So a lane's trim cannot belong to any one plugin. Keeping it in
+        // Slot would mean the trim vanished when its plugin was deleted and
+        // travelled with a plugin moved to another lane, neither of which is what a
+        // lane trim means.
+        //
+        // Stored in decibels, so the settings file stays readable and the UI needs
+        // no conversion. Read clamped: the value is user-editable on disk.
+
+        [[nodiscard]] static juce::String laneGainKey (int lane)
+        {
+            // "lanegain-N" cannot collide with a plugin identity, which is hex.
+            return "chain-lanegain-" + juce::String (juce::jlimit (0, lighthost::kMaxLane, lane));
+        }
+
+        [[nodiscard]] float readLaneGainDb (int lane) const
+        {
+            const auto stored = valueOf (laneGainKey (lane), {});
+
+            if (stored.isEmpty())
+                return gain::kDefaultDb;
+
+            return gain::clampDb (static_cast<float> (stored.getDoubleValue()));
+        }
+
+        void stageLaneGainDb (int lane, float decibels)
+        {
+            stageValue (laneGainKey (lane), juce::String (gain::clampDb (decibels), 2));
+        }
+
+        //==========================================================================
         /** Reserves the next graph node id. Staged like everything else, so an
             abandoned edit does not burn an id.
         */

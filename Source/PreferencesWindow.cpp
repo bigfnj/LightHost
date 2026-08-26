@@ -1,4 +1,6 @@
 #include "PreferencesWindow.h"
+#include "GainProcessor.hpp"
+#include "Lanes.hpp"
 #include <set>
 
 using namespace juce;
@@ -344,12 +346,14 @@ public:
         const std::vector<juce::PluginDescription>& activeChain,
         const std::vector<bool>& bypassStates,
         const std::vector<int>& laneStates,
+        PreferencesWindow::LaneTrim laneTrimIn,
         std::function<void (const std::vector<juce::PluginDescription>&,
                             const std::vector<bool>&,
                             const std::vector<int>&)> onApply,
         std::function<void (const juce::PluginDescription&)> onEditPlugin)
         : deviceManager (dm),
           knownPlugins   (knownPlugins_),
+          laneTrim       (std::move (laneTrimIn)),
           onApplyFn      (std::move (onApply)),
           onEditPluginFn (std::move (onEditPlugin))
     {
@@ -406,6 +410,54 @@ public:
         addPluginButton.onClick = [this] { showAddPluginMenu(); };
         addAndMakeVisible (addPluginButton);
 
+        // ── LANE TRIM section ─────────────────────────────────────────────────
+        // Lanes are fed the same input and summed at the output, so four lanes
+        // carrying similar material arrive about 12 dB hot. These are the trims
+        // for that. Unity by default, so an existing setup sounds unchanged.
+        addAndMakeVisible (laneTrimSectionLabel);
+
+        for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
+        {
+            const auto index = static_cast<size_t> (lane);
+
+            auto& label = laneTrimLabels[index];
+            label.setText ("L" + juce::String (lane), juce::dontSendNotification);
+            label.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
+            label.setJustificationType (juce::Justification::centredRight);
+            addAndMakeVisible (label);
+
+            auto& slider = laneTrimSliders[index];
+            slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            slider.setRange (lighthost::gain::kMinDb, lighthost::gain::kMaxDb, 0.1);
+            slider.setSkewFactorFromMidPoint (-12.0);
+            slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
+            slider.setTextValueSuffix (" dB");
+            slider.setDoubleClickReturnValue (true, lighthost::gain::kDefaultDb);
+            slider.setTooltip ("Trim for lane " + juce::String (lane)
+                               + ". Double-click to return to unity.");
+            slider.setValue (laneTrim.initialDb[index], juce::dontSendNotification);
+
+            slider.onValueChange = [this, lane, index]
+            {
+                const auto decibels = static_cast<float> (laneTrimSliders[index].getValue());
+
+                if (laneTrim.onChanged)
+                    laneTrim.onChanged (lane, decibels);
+
+                // Persist here only when this is not a drag. Typing a value,
+                // nudging with the arrow keys and double-clicking to reset all
+                // arrive this way and produce no drag-end.
+                if (laneTrimSliders[index].isMouseButtonDown())
+                    laneTrimDirty[index] = true;
+                else
+                    commitLaneTrim (lane);
+            };
+
+            slider.onDragEnd = [this, lane] { commitLaneTrim (lane); };
+
+            addAndMakeVisible (slider);
+        }
+
         // ── OUTPUT section ────────────────────────────────────────────────────
         addAndMakeVisible (outputSectionLabel);
         addAndMakeVisible (outputDeviceCombo);
@@ -457,6 +509,12 @@ public:
     ~PreferencesContentComponent() override
     {
         deviceManager.removeChangeListener (this);
+
+        // A trim changed by a route that produces no drag-end is written here, so
+        // closing the window cannot lose it.
+        for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
+            if (laneTrimDirty[static_cast<size_t> (lane)])
+                commitLaneTrim (lane);
     }
 
     void setChain (const std::vector<juce::PluginDescription>& chain,
@@ -467,6 +525,17 @@ public:
         chainList.syncBypassedSize();
         updateChainListHeight();
         chainList.repaint();
+    }
+
+    /** Writes a lane trim to disk, once, if it has moved since the last write. */
+    void commitLaneTrim (int lane)
+    {
+        const auto index = static_cast<size_t> (lane);
+
+        if (laneTrim.onCommitted)
+            laneTrim.onCommitted (lane, static_cast<float> (laneTrimSliders[index].getValue()));
+
+        laneTrimDirty[index] = false;
     }
 
     void resized() override
@@ -491,6 +560,7 @@ public:
             + kHintH                            // virtual-input hint, when shown
             + kSectH + kGap;                    // AUDIO CHAIN label
         const int kFixedBelowChain = kGap + kRowH + kGap           // Add Plugin row
+            + kSectH + kGap + kRowH + kGap                          // LANE TRIM
             + kSectH + kGap + kRowH + kGap                          // OUTPUT
             + kSectH + kGap + kRowH + kGap + kRowH + kGap + kRowH + kGap  // DEVICE SETTINGS (API + rate + buffer)
             + kBtnH + kPad;
@@ -529,6 +599,28 @@ public:
         area.removeFromTop (kGap);
         addPluginButton.setBounds (
             area.removeFromTop (kRowH).removeFromRight (120).reduced (0, 3));
+        area.removeFromTop (kGap);
+
+        // ── LANE TRIM ─────────────────────────────────────────────────────────
+        laneTrimSectionLabel.setBounds (area.removeFromTop (kSectH));
+        area.removeFromTop (kGap);
+        {
+            auto row = area.removeFromTop (kRowH);
+            const int cellWidth = row.getWidth() / lighthost::kNumLanes;
+
+            for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
+            {
+                const auto index = static_cast<size_t> (lane);
+
+                // The last cell takes the remainder, so rounding does not leave a
+                // gap on the right at awkward widths.
+                auto cell = (lane == lighthost::kMaxLane) ? row
+                                                          : row.removeFromLeft (cellWidth);
+
+                laneTrimLabels[index].setBounds (cell.removeFromLeft (22));
+                laneTrimSliders[index].setBounds (cell.reduced (2, 3));
+            }
+        }
         area.removeFromTop (kGap);
 
         // ── OUTPUT ────────────────────────────────────────────────────────────
@@ -578,6 +670,8 @@ private:
     juce::AudioDeviceManager& deviceManager;
     juce::KnownPluginList&    knownPlugins;
 
+    PreferencesWindow::LaneTrim laneTrim;
+
     std::function<void (const std::vector<juce::PluginDescription>&,
                         const std::vector<bool>&,
                         const std::vector<int>&)>    onApplyFn;
@@ -598,6 +692,12 @@ private:
     AudioChainListComponent chainList;
     juce::Viewport          chainViewport;
     juce::TextButton        addPluginButton;
+
+    // LANE TRIM
+    SectionLabel  laneTrimSectionLabel { "  LANE TRIM" };
+    std::array<juce::Label,  lighthost::kNumLanes> laneTrimLabels;
+    std::array<juce::Slider, lighthost::kNumLanes> laneTrimSliders;
+    std::array<bool,         lighthost::kNumLanes> laneTrimDirty {};
 
     // OUTPUT
     SectionLabel   outputSectionLabel   { "  OUTPUT" };
@@ -1002,6 +1102,7 @@ PreferencesWindow::PreferencesWindow (
     const std::vector<juce::PluginDescription>& activeChain,
     const std::vector<bool>& bypassStates,
     const std::vector<int>& laneStates,
+    LaneTrim laneTrim,
     std::function<void (const std::vector<juce::PluginDescription>&,
                         const std::vector<bool>&,
                         const std::vector<int>&)> onApply,
@@ -1015,14 +1116,27 @@ PreferencesWindow::PreferencesWindow (
 {
     auto* content = new PreferencesContentComponent (
         deviceManager, knownPlugins, activeChain, bypassStates, laneStates,
-        std::move (onApply), std::move (onEditPlugin));
+        std::move (laneTrim), std::move (onApply), std::move (onEditPlugin));
 
-    content->setSize (520, 560);
+    // Height budget, from the constants in resized(). Above the chain: 10 pad +
+    // 62 INPUT + 34 virtual-input hint when shown + 28 chain label = 134. Below
+    // it: 40 Add Plugin + 62 LANE TRIM + 62 OUTPUT + 130 DEVICE SETTINGS + 50
+    // buttons and pad = 344. With the chain viewport at its 80px minimum that is
+    // 558 of content, so the default leaves the chain some room beyond the
+    // minimum and the smallest allowed size still fits everything.
+    //
+    // These numbers were too small before the LANE TRIM section was added: with
+    // the virtual-input hint showing, the default window was already about 28px
+    // short and the sections at the bottom were silently squeezed to nothing.
+    constexpr int kDefaultWidth  = 520;
+    constexpr int kDefaultHeight = 650;
+
+    content->setSize (kDefaultWidth, kDefaultHeight);
     setContentOwned (content, true);
     setUsingNativeTitleBar (true);
     setResizable (true, false);
-    setResizeLimits (440, 500, 900, 1000);
-    centreWithSize (520, 560);
+    setResizeLimits (440, 600, 900, 1100);
+    centreWithSize (kDefaultWidth, kDefaultHeight);
     setVisible (true);
 }
 

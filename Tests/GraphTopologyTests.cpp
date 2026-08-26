@@ -1,3 +1,4 @@
+#include "../Source/GainProcessor.hpp"
 #include "../Source/GraphTopology.hpp"
 #include "StubProcessors.hpp"
 
@@ -41,6 +42,18 @@ namespace
         layout.inputNodeChannels = inputChannels;
         layout.outputNodeChannels = outputChannels;
         layout.nodes             = std::move (nodes);
+        return layout;
+    }
+
+    /** Reserved ids for the lane trims, matching IconMenu's. */
+    constexpr NodeID laneGain (int lane) { return NodeID { 1'000'010u + (juce::uint32) lane }; }
+
+    /** Gives every lane a trim node. */
+    Layout withLaneGains (Layout layout)
+    {
+        for (int lane = 0; lane <= kMaxLane; ++lane)
+            layout.laneGainNodeIds[(size_t) lane] = laneGain (lane);
+
         return layout;
     }
 
@@ -115,6 +128,19 @@ namespace
                                       processor->getTotalNumOutputChannels() });
 
             return node->nodeID;
+        }
+
+        /** Adds a real trim node per lane at the reserved ids, as IconMenu does. */
+        void addLaneGains()
+        {
+            for (int lane = 0; lane <= kMaxLane; ++lane)
+            {
+                auto node = graph.addNode (std::make_unique<lighthost::gain::Processor>(),
+                                           laneGain (lane));
+
+                if (node != nullptr)
+                    layout.laneGainNodeIds[(size_t) lane] = node->nodeID;
+            }
         }
 
         DiffResult apply()
@@ -333,6 +359,75 @@ public:
             }
         }
 
+        beginTest ("a lane's trim sits between its last plugin and the output");
+        {
+            const auto first  = plugin (10);
+            const auto second = plugin (11);
+            const auto connections = buildConnections (withLaneGains (layoutOf ({ first, second })));
+
+            expect (has (connections, second.nodeId, 0, laneGain (0), 0));
+            expect (has (connections, second.nodeId, 1, laneGain (0), 1));
+            expect (has (connections, laneGain (0), 0, kOutput, 0));
+            expect (has (connections, laneGain (0), 1, kOutput, 1));
+
+            // Nothing bypasses the trim on its way out.
+            expect (! has (connections, second.nodeId, 0, kOutput, 0),
+                    "the last plugin still reaches the output directly");
+            expectEquals (countInto (connections, kOutput), 2);
+        }
+
+        beginTest ("each lane passes through its own trim, and only its own");
+        {
+            const auto laneZero = plugin (10, 0);
+            const auto laneTwo  = plugin (11, 2);
+            const auto connections = buildConnections (withLaneGains (layoutOf ({ laneZero, laneTwo })));
+
+            expect (has (connections, laneZero.nodeId, 0, laneGain (0), 0));
+            expect (has (connections, laneTwo.nodeId,  0, laneGain (2), 0));
+
+            expect (! has (connections, laneZero.nodeId, 0, laneGain (2), 0));
+            expect (! has (connections, laneTwo.nodeId,  0, laneGain (0), 0));
+
+            // Two lanes, two trims, two channels each.
+            expectEquals (countInto (connections, kOutput), 4);
+
+            // The trims of the two empty lanes are not wired to anything.
+            expect (! touches (connections, laneGain (1)));
+            expect (! touches (connections, laneGain (3)));
+        }
+
+        beginTest ("a mono lane is spread to stereo by its trim");
+        {
+            // The trim is stereo, so a lane ending in a mono plugin arrives at the
+            // output on both channels rather than only the left.
+            const auto monoOut = plugin (10, 0, 2, 1);
+            const auto connections = buildConnections (withLaneGains (layoutOf ({ monoOut })));
+
+            expect (has (connections, monoOut.nodeId, 0, laneGain (0), 0));
+            expect (has (connections, monoOut.nodeId, 0, laneGain (0), 1));
+            expect (has (connections, laneGain (0), 1, kOutput, 1));
+        }
+
+        beginTest ("a lane with no trim node is wired straight to the output");
+        {
+            // Robustness: if a trim node could not be added to the graph, audio
+            // must still get out.
+            const auto only = plugin (10);
+            const auto connections = buildConnections (layoutOf ({ only }));
+
+            expect (has (connections, only.nodeId, 0, kOutput, 0));
+            expect (! touches (connections, laneGain (0)));
+        }
+
+        beginTest ("an empty chain does not route through a trim");
+        {
+            const auto connections = buildConnections (withLaneGains (layoutOf ({})));
+
+            expectEquals ((int) connections.size(), 2);
+            expect (has (connections, kInput, 0, kOutput, 0));
+            expect (! touches (connections, laneGain (0)));
+        }
+
         beginTest ("the same layout always produces the same connections, with no duplicates");
         {
             // reconnectGraph diffs this result against the live graph. If the
@@ -473,6 +568,41 @@ public:
             expect (! touchesBroken, "wired a node that cannot pass audio");
             expect (live.count ({ { working, 0 }, { g.layout.outputNodeId, 0 } }) == 1,
                     "the rest of the lane should still reach the output");
+        }
+
+        beginTest ("the graph accepts a chain wired through real trim nodes");
+        {
+            LiveGraph g;
+            g.addLaneGains();
+            const auto onLaneZero = g.add (0);
+            const auto onLaneOne  = g.add (1);
+
+            const auto diff = g.apply();
+            const auto live = g.live();
+
+            expect (diff.refused.empty(), "the graph refused a connection to a trim node");
+            expect (live.count ({ { onLaneZero, 0 }, { laneGain (0), 0 } }) == 1);
+            expect (live.count ({ { onLaneOne,  0 }, { laneGain (1), 0 } }) == 1);
+            expect (live.count ({ { laneGain (0), 0 }, { g.layout.outputNodeId, 0 } }) == 1);
+            expect (live.count ({ { laneGain (1), 0 }, { g.layout.outputNodeId, 0 } }) == 1);
+        }
+
+        beginTest ("adding a trim to an existing chain rewires only the summing point");
+        {
+            // The trims are created once at load. This is the other order: a chain
+            // wired without them, then rewired with them, which is what a diff has
+            // to handle without tearing the lane down.
+            LiveGraph g;
+            const auto only = g.add (0);
+            g.apply();
+
+            g.addLaneGains();
+            const auto diff = g.apply();
+
+            expect (diff.refused.empty());
+            expectEquals (diff.removed, 2, "more than the final edge was torn down");
+            expectEquals (diff.added, 4, "plugin to trim, and trim to output");
+            expect (g.live().count ({ { only, 0 }, { laneGain (0), 0 } }) == 1);
         }
 
         beginTest ("removing every plugin falls back to a direct connection");

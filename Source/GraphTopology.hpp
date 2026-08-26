@@ -1,8 +1,11 @@
 #pragma once
 
+#include "Lanes.hpp"
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <algorithm>
+#include <array>
 #include <map>
 #include <set>
 #include <vector>
@@ -44,8 +47,10 @@ namespace lighthost::topology
     using NodeID     = juce::AudioProcessorGraph::NodeID;
     using Connection = juce::AudioProcessorGraph::Connection;
 
-    /** Highest lane index the Preferences UI offers, so lanes are 0-3. */
-    static constexpr int kMaxLane = 3;
+    /** Highest lane index, from Lanes.hpp. Named here too so the routing rules
+        below read without reaching outside this namespace.
+    */
+    static constexpr int kMaxLane = lighthost::kMaxLane;
 
     /** Light Host is a stereo host: it wires at most two channels per edge. */
     static constexpr int kMaxChannels = 2;
@@ -83,6 +88,18 @@ namespace lighthost::topology
             order within a lane is the order of this vector.
         */
         std::vector<NodeFacts> nodes;
+
+        /** The trim node each lane passes through on its way to the output, or a
+            default-constructed NodeID for a lane that has none.
+
+            A lane with no trim node is wired straight to the output, so the
+            routing still works if a trim node could not be added, and so tests
+            that do not care about trims need not create them.
+        */
+        std::array<NodeID, lighthost::kNumLanes> laneGainNodeIds {};
+
+        /** Channels each trim node carries. They are stereo. */
+        int laneGainChannels = 2;
     };
 
     /** A node can only sit in a serial lane if audio can get in and back out of
@@ -165,6 +182,20 @@ namespace lighthost::topology
 
                 previousId       = node->nodeId;
                 previousChannels = node->numOutputChannels;
+            }
+
+            // The lane's trim sits at the summing point, which is the only place
+            // in this function where a lane exists as more than a group key.
+            const auto gainNodeId = layout.laneGainNodeIds[static_cast<size_t> (lane.first)];
+
+            if (gainNodeId.uid != 0)
+            {
+                appendEdge (connections,
+                            previousId, previousChannels,
+                            gainNodeId, layout.laneGainChannels);
+
+                previousId       = gainNodeId;
+                previousChannels = layout.laneGainChannels;
             }
 
             appendEdge (connections,
