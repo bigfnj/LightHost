@@ -44,9 +44,24 @@ namespace lighthost::test
         void prepareToPlay (double, int maximumExpectedSamplesPerBlock) override
         {
             setLatencySamples (latency);
+            blockSize = maximumExpectedSamplesPerBlock;
             buffer.setSize (2, juce::jmax (maximumExpectedSamplesPerBlock, latency + 1));
             buffer.clear();
             writePos = 0;
+        }
+
+        /** Changes the reported latency the way a plugin does when the user
+            switches it to a linear-phase or oversampled mode inside its editor.
+            Calls updateHostDisplay, so a listening host hears about it.
+        */
+        void changeLatencyTo (int newLatency)
+        {
+            latency = newLatency;
+            setLatencySamples (latency);
+            buffer.setSize (2, juce::jmax (blockSize, latency + 1));
+            buffer.clear();
+            writePos = 0;
+            updateHostDisplay (ChangeDetails{}.withLatencyChanged (true));
         }
 
         using juce::AudioProcessor::processBlock;
@@ -98,6 +113,7 @@ namespace lighthost::test
         }
 
         int latency;
+        int blockSize = 0;
         juce::AudioBuffer<float> buffer;
         int writePos = 0;
 

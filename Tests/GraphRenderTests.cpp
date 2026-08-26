@@ -113,6 +113,21 @@ namespace
             connect (previous, output);
         }
 
+        /** Adds one lane of a single LatencyStub and hands it back, so a test can
+            change its latency after the graph has been prepared.
+        */
+        LatencyStub& addLaneReturningStub (int latency)
+        {
+            auto processor = std::make_unique<LatencyStub> (latency);
+            auto& reference = *processor;
+
+            auto node = graph.addNode (std::move (processor));
+            connect (input, node->nodeID);
+            connect (node->nodeID, output);
+
+            return reference;
+        }
+
         /** One lane holding a single plugin that owns its bypass parameter. */
         void addLaneWithBypassParameter (int latency, bool bypassed)
         {
@@ -244,6 +259,47 @@ public:
 
             expectEquals (g.graph.getLatencySamples(), 256,
                           "a plugin bypassed through its own parameter keeps its latency");
+        }
+
+        beginTest ("a latency change mid-session realigns the lanes once rebuilt");
+        {
+            // The graph records each node's latency when it builds its render
+            // sequence and never revisits it on its own: it does not listen to
+            // its nodes. So when a plugin switches to a linear-phase or
+            // oversampled mode inside its own editor, every other lane stays
+            // compensated by the old amount until something rebuilds.
+            //
+            // IconMenu listens for that change and rewires. This pins the half of
+            // the mechanism that belongs to JUCE: that a rebuild is enough, and
+            // the new latency is what gets compensated.
+            StereoGraph g;
+            auto& changing = g.addLaneReturningStub (0);
+            g.addLane ({ 256 });
+            g.prepare();
+
+            const auto before = findImpulse (render (g.graph, 8), 1.5f);
+            expect (before.has_value(), "the lanes did not start out aligned");
+
+            if (before.has_value())
+                expectEquals (*before, 256);
+
+            // The plugin now claims more latency than the other lane.
+            changing.changeLatencyTo (512);
+            g.graph.rebuild();
+            g.graph.prepareToPlay (kSampleRate, kBlockSize);
+
+            const auto signal = render (g.graph, 16);
+            logMessage ("after latency change, non-zero samples:" + describeHits (signal));
+
+            const auto after = findImpulse (signal, 1.5f);
+            expect (after.has_value(),
+                    "the lanes did not realign after a plugin changed its latency");
+
+            if (after.has_value())
+                expectEquals (*after, 512, "compensation used the old latency");
+
+            expectEquals (g.graph.getLatencySamples(), 512,
+                          "the host should report the new slowest lane");
         }
     }
 

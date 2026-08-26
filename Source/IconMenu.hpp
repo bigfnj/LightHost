@@ -11,6 +11,8 @@ class PreferencesWindow;
 
 class IconMenu final : public juce::SystemTrayIconComponent,
                        private juce::Timer,
+                       private juce::AudioProcessorListener,
+                       private juce::AsyncUpdater,
                        public juce::ChangeListener
 {
 public:
@@ -53,6 +55,29 @@ private:
     void reconnectGraph();
     void autoMatchSampleRate();
     void logAudioConfig (const juce::String& contextLabel) const;
+
+    // Watching hosted plugins for changes that invalidate the routing.
+    //
+    // juce::AudioProcessorGraph does not listen to its own nodes: its render
+    // sequence records each node's reported latency when it is built, and nothing
+    // rebuilds it when a plugin changes that later. A plugin that switches to a
+    // linear-phase or oversampled mode inside its own editor therefore leaves
+    // every other lane compensated by the old amount, which is a quiet phase
+    // error rather than an obvious failure.
+    //
+    // audioProcessorChanged can arrive on any thread, so the response is deferred
+    // through AsyncUpdater rather than acted on in place: triggerAsyncUpdate is
+    // safe to call from anywhere, whereas rewiring the graph is not, and building
+    // a Component::SafePointer off the message thread is not either.
+    void audioProcessorChanged (juce::AudioProcessor* processor,
+                                const ChangeDetails& details) override;
+    void audioProcessorParameterChanged (juce::AudioProcessor* processor,
+                                         int parameterIndex,
+                                         float newValue) override;
+    void handleAsyncUpdate() override;
+
+    void listenTo (juce::AudioProcessor& processor);
+    void stopListeningTo (NodeID nodeId);
 
     #if JUCE_WINDOWS
     [[nodiscard]] static juce::File getStartupShortcutPath();
