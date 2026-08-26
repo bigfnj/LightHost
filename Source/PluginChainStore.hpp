@@ -80,6 +80,43 @@ namespace lighthost::chain
         juce::String state;      ///< base64; empty when nothing has been saved yet
     };
 
+    /** The part of a slot a user edit can change: which plugin, and its two
+        per-plugin settings. Position is the index in the vector.
+
+        Node id and saved state are deliberately absent. Those are the host's own
+        bookkeeping, not something the user asked for, and treating a new node id
+        as an edit would make every Apply look like a change.
+    */
+    struct ChainEntry
+    {
+        juce::String identity;
+        bool         bypassed = false;
+        int          lane     = 0;
+
+        bool operator== (const ChainEntry& other) const
+        {
+            return identity == other.identity
+                && bypassed == other.bypassed
+                && lane     == other.lane;
+        }
+
+        bool operator!= (const ChainEntry& other) const { return ! operator== (other); }
+    };
+
+    /** True when a requested edit would change nothing.
+
+        Every field is compared, which is the whole point: the v4.0.2 bug was that
+        a lane change flips neither the order nor the bypass, so an Apply that only
+        moved a lane dropdown compared equal and was silently discarded. A field
+        added to ChainEntry without being compared here fails the table-driven test
+        in Tests/PluginChainStoreTests.cpp.
+    */
+    [[nodiscard]] inline bool isNoOpEdit (const std::vector<ChainEntry>& current,
+                                          const std::vector<ChainEntry>& requested)
+    {
+        return current == requested;
+    }
+
     class Store
     {
     public:
@@ -299,6 +336,41 @@ namespace lighthost::chain
 
             settings.setValue (kFormatVersionKey, kFormatVersion);
             return migrated;
+        }
+
+        /** Builds the comparable form of a chain edit. Missing bypass or lane
+            entries default, which is what the Preferences window sends for a
+            plugin it has just added.
+        */
+        [[nodiscard]] static std::vector<ChainEntry> entriesFor (
+            const std::vector<juce::PluginDescription>& chain,
+            const std::vector<bool>& bypassed,
+            const std::vector<int>& lanes)
+        {
+            std::vector<ChainEntry> entries;
+            entries.reserve (chain.size());
+
+            for (size_t i = 0; i < chain.size(); ++i)
+                entries.push_back ({ identityOf (chain[i]),
+                                     i < bypassed.size() ? bypassed[i] : false,
+                                     i < lanes.size()    ? lanes[i]    : 0 });
+
+            return entries;
+        }
+
+        /** The comparable form of what is currently stored for a chain. */
+        [[nodiscard]] std::vector<ChainEntry> entriesFor (
+            const std::vector<juce::PluginDescription>& chain) const
+        {
+            std::vector<ChainEntry> entries;
+            entries.reserve (chain.size());
+
+            for (const auto& description : chain)
+                entries.push_back ({ identityOf (description),
+                                     readBypassed (description),
+                                     readLane (description) });
+
+            return entries;
         }
 
     private:

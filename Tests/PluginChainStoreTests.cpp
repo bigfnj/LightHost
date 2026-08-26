@@ -455,3 +455,92 @@ public:
 };
 
 static PluginChainMigrationTests pluginChainMigrationTests;
+
+//==============================================================================
+// Whether an Apply changes anything.
+//
+// The v4.0.2 bug: a lane change flips neither the order nor the bypass, so an
+// Apply that had only moved a lane dropdown compared equal to the stored chain
+// and was silently discarded. The table below walks every field of a chain entry
+// and asserts that changing it alone is enough to count as an edit, so a field
+// added to ChainEntry without being compared fails here.
+//==============================================================================
+class ChainEditComparisonTests final : public juce::UnitTest
+{
+public:
+    ChainEditComparisonTests()
+        : juce::UnitTest ("Chain edit comparison", "PluginChain") {}
+
+    void runTest() override
+    {
+        const std::vector<juce::PluginDescription> chain
+        {
+            describe ("First",  "1.0", "C:/VST3/First.vst3"),
+            describe ("Second", "1.0", "C:/VST3/Second.vst3")
+        };
+
+        const std::vector<bool> bypassed { false, true };
+        const std::vector<int>  lanes    { 0, 2 };
+
+        const auto stored = Store::entriesFor (chain, bypassed, lanes);
+
+        beginTest ("an unchanged chain is a no-op");
+        {
+            expect (isNoOpEdit (stored, Store::entriesFor (chain, bypassed, lanes)));
+        }
+
+        beginTest ("changing any single field counts as an edit");
+        {
+            struct Case
+            {
+                const char* what;
+                std::vector<juce::PluginDescription> chain;
+                std::vector<bool> bypassed;
+                std::vector<int>  lanes;
+            };
+
+            std::vector<juce::PluginDescription> reordered { chain[1], chain[0] };
+            std::vector<juce::PluginDescription> replaced  { chain[0],
+                                                             describe ("Third", "1.0", "C:/VST3/Third.vst3") };
+            std::vector<juce::PluginDescription> shorter   { chain[0] };
+            auto longer = chain;
+            longer.push_back (describe ("Fourth", "1.0", "C:/VST3/Fourth.vst3"));
+
+            const std::vector<Case> cases
+            {
+                { "the lane alone",       chain,     bypassed,        { 0, 3 } },
+                { "the bypass alone",     chain,     { true, true },  lanes },
+                { "the order alone",      reordered, bypassed,        lanes },
+                { "a different plugin",   replaced,  bypassed,        lanes },
+                { "a plugin removed",     shorter,   { false },       { 0 } },
+                { "a plugin added",       longer,    { false, true, false }, { 0, 2, 0 } }
+            };
+
+            for (const auto& testCase : cases)
+            {
+                const auto requested = Store::entriesFor (testCase.chain, testCase.bypassed, testCase.lanes);
+
+                expect (! isNoOpEdit (stored, requested),
+                        juce::String ("changing ") + testCase.what + " was treated as no change");
+            }
+        }
+
+        beginTest ("a new node id or saved state is not a user edit");
+        {
+            // Those are the host's bookkeeping. Counting them would make every
+            // Apply look like a change and reload the whole chain each time.
+            juce::PropertySet settings;
+            Store store (settings);
+
+            store.stageNodeId (chain[0], 99);
+            store.stageState  (chain[0], "some-blob");
+            store.commit();
+
+            expect (isNoOpEdit (store.entriesFor (chain),
+                                Store::entriesFor (chain, { false, false }, { 0, 0 })),
+                    "node id or state leaked into the edit comparison");
+        }
+    }
+};
+
+static ChainEditComparisonTests chainEditComparisonTests;

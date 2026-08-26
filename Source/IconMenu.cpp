@@ -829,7 +829,9 @@ void IconMenu::handleDeletePlugin (int index)
     if (index < 0 || index >= static_cast<int> (timeSorted.size()))
         return;
 
-    const auto& pluginToDelete = timeSorted[static_cast<size_t> (index)];
+    // Copied, not referenced. getTimeSortedList hands out a reference to a cache
+    // that the next rebuild clears, and this function outlives that rebuild.
+    const auto pluginToDelete = timeSorted[static_cast<size_t> (index)];
     juce::Logger::writeToLog ("IconMenu: deleting plugin " + pluginToDelete.name);
 
     cancelPluginLoading();
@@ -894,7 +896,7 @@ void IconMenu::handleBypassPlugin (int index)
     if (index < 0 || index >= static_cast<int> (timeSorted.size()))
         return;
 
-    const auto& plugin = timeSorted[static_cast<size_t> (index)];
+    const auto plugin = timeSorted[static_cast<size_t> (index)];   // copied: see handleDeletePlugin
 
     auto* settings = getAppProperties().getUserSettings();
     ChainStore store (*settings);
@@ -936,8 +938,8 @@ void IconMenu::handleMovePlugin (int index, bool moveUp)
     if (neighborIndex < 0 || neighborIndex >= static_cast<int> (timeSorted.size()))
         return;
 
-    const auto& target   = timeSorted[static_cast<size_t> (index)];
-    const auto& neighbor = timeSorted[static_cast<size_t> (neighborIndex)];
+    const auto target   = timeSorted[static_cast<size_t> (index)];          // copied: see
+    const auto neighbor = timeSorted[static_cast<size_t> (neighborIndex)];  // handleDeletePlugin
 
     // Swap only the two affected order values — O(1) writes.  Previously
     // rewrote all N values and called savePluginStates() even though plugin
@@ -1169,27 +1171,11 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
 
     const auto& currentChain = getTimeSortedList();
 
-    bool identicalChain = currentChain.size() == newChain.size();
-    for (size_t i = 0; identicalChain && i < newChain.size(); ++i)
-    {
-        if (identity (currentChain[i]) != identity (newChain[i]))
-        {
-            identicalChain = false;
-            break;
-        }
-
-        // Bypass and lane are compared as well as membership: a lane change alone
-        // flips neither the order nor the bypass, and Apply used to no-op when
-        // only the lane dropdown had moved.
-        const bool requestedBypass = i < bypassStates.size() ? bypassStates[i] : false;
-        const int  requestedLane   = i < lanes.size() ? lanes[i] : 0;
-
-        if (store.readBypassed (currentChain[i]) != requestedBypass
-            || store.readLane (currentChain[i]) != requestedLane)
-            identicalChain = false;
-    }
-
-    if (identicalChain)
+    // Membership, order, bypass and lane are all compared: a lane change alone
+    // flips neither the order nor the bypass, and Apply used to no-op when only
+    // the lane dropdown had moved.
+    if (lighthost::chain::isNoOpEdit (store.entriesFor (currentChain),
+                                      ChainStore::entriesFor (newChain, bypassStates, lanes)))
     {
         juce::Logger::writeToLog ("IconMenu: Apply pressed with no plugin-chain changes");
         return;
