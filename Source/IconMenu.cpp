@@ -182,11 +182,19 @@ IconMenu::IconMenu()
     // Use the free function addDefaultFormatsToManager() instead.
     addDefaultFormatsToManager (formatManager);
 
-    // Audio device initialization
-    if (auto savedAudioState = getAppProperties().getUserSettings()->getXmlValue ("audioDeviceState"))
-        deviceManager.initialise (2, 2, savedAudioState.get(), true);
-    else
-        deviceManager.initialise (2, 2, nullptr, true);
+    // Any problem reported from here on shows up in the tray tooltip.
+    status.onChange = [this] { refreshTooltip(); };
+
+    // Audio device initialization. initialise returns a description of why it
+    // could not open a device, which was previously discarded: the app then looked
+    // like it was running while passing no audio at all.
+    {
+        const auto savedAudioState = getAppProperties().getUserSettings()->getXmlValue ("audioDeviceState");
+        const auto error = deviceManager.initialise (2, 2, savedAudioState.get(), true);
+
+        if (error.isNotEmpty())
+            status.report ("Audio device could not be opened: " + error);
+    }
 
     player.setProcessor (&graph);
     deviceManager.addAudioCallback (&player);
@@ -218,14 +226,14 @@ IconMenu::IconMenu()
             juce::Logger::writeToLog ("IconMenu: migrated chain settings for "
                                       + juce::String (migrated) + " plugin(s)");
 
-        settings->saveIfNeeded();
+        flushSettings (*settings, "chain settings migration");
     }
 
     loadActivePlugins();
     activePluginList.addChangeListener (this);
 
     setIcon();
-    setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
+    refreshTooltip();
 }
 
 IconMenu::~IconMenu()
@@ -268,7 +276,7 @@ void IconMenu::cancelPluginLoading()
     ++pluginLoadGeneration;
     pendingLoads.clear();
     nextLoadIndex = 0;
-    setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
+    refreshTooltip();
     juce::Logger::writeToLog ("IconMenu: cancelled in-flight plugin load");
 }
 
@@ -342,9 +350,9 @@ void IconMenu::loadActivePlugins()
     }
 
     store.commit();
-    settings->saveIfNeeded();
+    flushSettings (*settings, "assigning plugin node ids");
 
-    setIconTooltip ("Light Host - loading...");
+    refreshTooltip();
     loadNextPlugin();
 }
 
@@ -383,7 +391,7 @@ void IconMenu::loadNextPlugin()
                 return;   // IconMenu gone; instance cleaned up by unique_ptr
 
             if (instance == nullptr)
-                juce::Logger::writeToLog ("Plugin load failed: " + name + " - " + error);
+                im->status.report ("Plugin load failed: " + name + " - " + error);
 
             im->onPluginInstanceReady (std::move (instance),
                                        AudioProcessorGraph::NodeID { nodeId },
@@ -469,11 +477,42 @@ void IconMenu::restorePluginState (AudioProcessorGraph::Node& node,
 
         case lighthost::state::RestoreResult::failed:
             statesNotRestored.insert (nodeId.uid);
-            juce::Logger::writeToLog ("Plugin state failed to restore for node "
-                                      + juce::String ((int) nodeId.uid)
-                                      + " — keeping the saved blob rather than overwriting it");
+            status.report ("A plugin refused to restore its saved settings. Its stored "
+                           "preset has been left alone rather than overwritten.");
             break;
     }
+}
+
+//==============================================================================
+void IconMenu::flushSettings (juce::PropertiesFile& settings, const juce::String& context)
+{
+    // saveIfNeeded returns false when the file could not be written: a full disk,
+    // a permission problem, a backup agent holding the file open. Every one of
+    // these call sites used to ignore it, so the user lost their edits silently.
+    if (! settings.saveIfNeeded())
+        status.report ("Settings could not be saved (" + context
+                       + "). Recent changes may be lost when Light Host closes.");
+}
+
+void IconMenu::refreshTooltip()
+{
+    const auto name = JUCEApplication::getInstance()->getApplicationName();
+
+    if (! pendingLoads.empty())
+    {
+        setIconTooltip (name + " - loading...");
+        return;
+    }
+
+    // The tooltip is the only surface that is always there, needs no layout, and
+    // costs the user nothing to find.
+    if (status.hasProblem())
+    {
+        setIconTooltip (name + " - " + status.mostRecent());
+        return;
+    }
+
+    setIconTooltip (name);
 }
 
 //==============================================================================
@@ -518,7 +557,7 @@ void IconMenu::onAllPluginsLoaded (int generation)
     pendingLoads.clear();
     nextLoadIndex = 0;
     reconnectGraph();
-    setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
+    refreshTooltip();
     juce::Logger::writeToLog ("IconMenu: loadActivePlugins complete");
 }
 
@@ -731,7 +770,7 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
         if (auto xml = knownPluginList.createXml())
         {
             settings->setValue ("pluginList", xml.get());
-            settings->saveIfNeeded();
+            flushSettings (*settings, "saving the scanned plugin list");
         }
     }
     else if (changed == &activePluginList)
@@ -739,7 +778,7 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
         if (auto xml = activePluginList.createXml())
         {
             settings->setValue ("pluginListActive", xml.get());
-            settings->saveIfNeeded();
+            flushSettings (*settings, "saving the plugin chain");
         }
     }
     else if (changed == &deviceManager)
@@ -767,7 +806,7 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
         if (auto xml = deviceManager.createStateXml())
         {
             settings->setValue ("audioDeviceState", xml.get());
-            settings->saveIfNeeded();
+            flushSettings (*settings, "saving the audio device settings");
         }
     }
 }
@@ -940,7 +979,7 @@ void IconMenu::handleDeletePlugin (int index)
     }
 
     store.commit();
-    settings->saveIfNeeded();
+    flushSettings (*settings, "deleting a plugin");
 
     sortedCacheDirty = true;
     reconnectGraph();  // rewire around the removed node — no plugin loads needed
@@ -960,7 +999,7 @@ void IconMenu::handleBypassPlugin (int index)
 
     store.stageBypassed (plugin, ! store.readBypassed (plugin));
     store.commit();
-    settings->saveIfNeeded();
+    flushSettings (*settings, "toggling bypass");
 
     reconnectGraph();
     refreshPreferencesIfOpen();
@@ -1010,7 +1049,7 @@ void IconMenu::handleMovePlugin (int index, bool moveUp)
     store.stageOrder (target,   neighborOrder);
     store.stageOrder (neighbor, targetOrder);
     store.commit();
-    settings->saveIfNeeded();
+    flushSettings (*settings, "reordering the chain");
 
     sortedCacheDirty = true;
     reconnectGraph();
@@ -1028,7 +1067,7 @@ void IconMenu::deletePluginStates()
         store.stageState (plugin, {});
 
     store.commit();
-    settings->saveIfNeeded();
+    flushSettings (*settings, "clearing saved plugin states");
 }
 
 void IconMenu::savePluginStates()
@@ -1079,7 +1118,7 @@ void IconMenu::savePluginStates()
         // A plugin that threw above simply has nothing staged, so the state
         // already on disk survives; the others are written together.
         store.commit();
-        settings->saveIfNeeded();
+        flushSettings (*settings, "saving plugin states");
     }
     catch (const std::exception& e)
     {
@@ -1148,9 +1187,9 @@ void IconMenu::showPreferences()
                 auto audioState = im->deviceManager.createStateXml();
                 if (audioState != nullptr)
                 {
-                    getAppProperties().getUserSettings()->setValue ("audioDeviceState",
-                                                                     audioState.get());
-                    getAppProperties().getUserSettings()->saveIfNeeded();
+                    auto* settings = getAppProperties().getUserSettings();
+                    settings->setValue ("audioDeviceState", audioState.get());
+                    im->flushSettings (*settings, "closing Preferences");
                 }
 
                 // Defer the reset to avoid destroying the PreferencesWindow —
@@ -1356,7 +1395,7 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     }
 
     store.commit();
-    settings->saveIfNeeded();
+    flushSettings (*settings, "applying the plugin chain");
     sortedCacheDirty = true;
 
     // ── Reload the graph ─────────────────────────────────────────────────────

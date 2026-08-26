@@ -1,5 +1,7 @@
 #pragma once
 
+#include "StatusSink.hpp"
+
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <set>
@@ -50,6 +52,12 @@ private:
     void handleBypassPlugin (int index);
     void handleEditPlugin (int index);
     void handleMovePlugin (int index, bool moveUp);
+
+    /** Saves the settings file and reports a failure rather than discarding it. */
+    void flushSettings (juce::PropertiesFile& settings, const juce::String& context);
+
+    /** Sets the tray tooltip from the current state: loading, a problem, or idle. */
+    void refreshTooltip();
 
     [[nodiscard]] const std::vector<juce::PluginDescription>& getTimeSortedList() const;
     void reconnectGraph();
@@ -110,6 +118,9 @@ private:
     // Corrective sample-rate requests made since the device last reported a rate
     // it supports. Reset the moment it settles.
     int sampleRateCorrections = 0;
+
+    // Where failures go so the user can see them, rather than only the log file.
+    lighthost::status::Sink status;
 
     // Background plugin loading. Plugin instantiation must happen on the message
     // thread — JUCE loads the DLL and calls the plugin factory there no matter

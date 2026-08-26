@@ -171,6 +171,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/PluginChainStoreTests.cpp
         Tests/PluginStateTests.cpp
         Tests/SampleRatePolicyTests.cpp
+        Tests/StatusSinkTests.cpp
         Tests/StubProcessors.hpp
     )
 
