@@ -15,6 +15,25 @@ endif()
 # Must be set before project() so the VS generator picks it up for WindowsTargetPlatformVersion.
 set(CMAKE_SYSTEM_VERSION "10.0.26100.0" CACHE STRING "Windows SDK version" FORCE)
 
+# ── macOS architectures and floor ───────────────────────────────────────────────
+# Both must be set before project(): they are consumed while the compiler is being
+# identified.
+#
+# Universal, so one download runs on Apple Silicon and on Intel. Without this the
+# build produces a binary for whatever machine happened to compile it, and GitHub's
+# macOS runners are Apple Silicon, so the published app would have refused to start
+# for every Intel Mac owner.
+#
+# 11.0 is the floor because arm64 macOS starts there, so a universal binary cannot
+# usefully target anything older.
+if(NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures to build")
+endif()
+
+if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum supported macOS version")
+endif()
+
 project(LightHost
     VERSION 4.0.3
     DESCRIPTION "Lightweight VST/AU/VST3 Audio Plugin Host"

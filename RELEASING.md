@@ -83,6 +83,25 @@ Fix on `main`, let CI pass, then cut `-rc2`. Do not move a tag that has been
 pushed: anyone who fetched it keeps the old commit, and the release artifacts stop
 matching the tag they claim to come from.
 
+## What each artifact is, and who it runs for
+
+| Archive | Contains | Runs on |
+|---|---|---|
+| `LightHost-vX.Y.Z-windows-x64.zip` | `Light Host.exe`, licence files | Windows 10 or later, x64. The runtime is static, so no Visual C++ redistributable |
+| `LightHost-vX.Y.Z-macos-universal.zip` | `Light Host.app`, licence files | macOS 11 or later, Apple Silicon and Intel both, from one universal binary |
+| `LightHost-vX.Y.Z-linux-x64.tar.gz` | `Light Host`, licence files | See the glibc note below |
+
+The Linux binary is built on `ubuntu-24.04`, so it needs that image's glibc (2.39)
+or newer. It will not start on Ubuntu 22.04, Debian 12, or anything else older, and
+the failure is an unhelpful loader error rather than a clear message. Anyone on an
+older distribution has to build from source, which is a short job because the
+dependencies are listed in the README. Building on an older image, or in a
+container with an older glibc, is the fix if Linux downloads turn out to matter.
+
+Linux also gets no `.desktop` entry, no icon registration and no tray-support
+check. The tray icon needs an appindicator-capable panel, which several desktops no
+longer provide by default.
+
 ## What the pipeline does not do
 
 - **No code signing on any platform.** Windows will show a SmartScreen warning on
