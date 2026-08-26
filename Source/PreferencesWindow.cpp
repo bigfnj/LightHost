@@ -214,6 +214,15 @@ public:
                 [safe, row] (int result)
                 {
                     if (safe == nullptr || result == 0) return;
+
+                    // The menu is asynchronous, so the chain can have changed
+                    // while it was open and the row captured at click time has to
+                    // be re-checked. Without this, resize() below shrinks lanes to
+                    // the new, shorter chain and the write lands past the end. The
+                    // delete handler above already re-checks; this did not.
+                    if (row < 0 || row >= static_cast<int> (safe->items.size()))
+                        return;
+
                     safe->lanes.resize (safe->items.size(), 0);
                     safe->lanes[static_cast<size_t>(row)] = result - 1;
                     if (safe->onChange) safe->onChange();
@@ -921,26 +930,47 @@ private:
                        return mfr != 0 ? mfr < 0 : a.name.compareIgnoreCase (b.name) < 0;
                    });
 
-        // Build popup with manufacturer sub-menus
+        // Build popup with manufacturer sub-menus.
+        //
+        // The group is flushed on "a group was started", not on "its name is not
+        // empty". Sorting puts plugins with no manufacturer first, so the old
+        // condition never flushed them: the submenu they had accumulated into was
+        // cleared when the first named manufacturer arrived, and every one of
+        // those plugins vanished from the menu. Blank manufacturers are common in
+        // VST2, which this host still supports. If every plugin had a blank
+        // manufacturer, the menu came up empty.
+        const auto labelFor = [] (const juce::String& manufacturer)
+        {
+            return manufacturer.isNotEmpty() ? manufacturer
+                                             : juce::String ("(no manufacturer)");
+        };
+
         juce::PopupMenu menu;
-        juce::String    lastMfr;
         juce::PopupMenu subMenu;
+        juce::String    currentMfr;
+        bool            groupStarted = false;
         int id = 1;
 
         for (const auto& pd : types)
         {
-            if (pd.manufacturerName != lastMfr)
+            if (! groupStarted || pd.manufacturerName != currentMfr)
             {
-                if (lastMfr.isNotEmpty())
-                    menu.addSubMenu (lastMfr, subMenu);
+                if (groupStarted)
+                    menu.addSubMenu (labelFor (currentMfr), subMenu);
+
                 subMenu.clear();
-                lastMfr = pd.manufacturerName;
+                currentMfr   = pd.manufacturerName;
+                groupStarted = true;
             }
+
+            // Ids are 1-based indices into `types`, which the callback below
+            // relies on, so this counter must advance once per plugin in order.
             const auto key = pd.fileOrIdentifier + pd.pluginFormatName + pd.name;
             subMenu.addItem (id++, pd.name, active.count (key) == 0);
         }
-        if (lastMfr.isNotEmpty())
-            menu.addSubMenu (lastMfr, subMenu);
+
+        if (groupStarted)
+            menu.addSubMenu (labelFor (currentMfr), subMenu);
 
         if (types.isEmpty())
             menu.addItem (1, "(no plugins scanned)", false);

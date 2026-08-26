@@ -33,19 +33,6 @@ never been run against a real plugin.
 
 Found by audit, still present. Each is a real fault, not a style preference.
 
-- **`removePluginsLackingInputOutput()` destroys the user's scan results.** It
-  permanently purges every scanned plugin with fewer than two input or output
-  channels when the plugin list window closes, and it judges on scan-time
-  defaults rather than the negotiated bus layout, so usable mono-to-stereo
-  plugins and every instrument are wiped. If a "cannot host this" signal is
-  wanted, grey the row out at display time instead.
-  (`Source/IconMenu.cpp`, called from the plugin list window's destructor.)
-- **Plugins with a blank manufacturer never appear in Add Plugin.** The grouping
-  loop only flushes its submenu when the manufacturer name is non-empty, so those
-  entries are silently dropped. Common for VST2, which is still supported.
-- **The lane popup callback writes to an unvalidated row index.** It captures a
-  row, and nothing re-checks it before writing, so it can write past the end of
-  the vector. (`Source/PreferencesWindow.cpp`, lane combo callback.)
 - **Problems are only visible in the tray tooltip.** The status sink is surfaced
   there, which is free but easy to miss. Preferences should show the recent
   problems as well, and offer to open the log. The sink already broadcasts
@@ -64,10 +51,21 @@ Phase numbers refer to the 5.0.0 plan.
   detach sequence must move wholesale into `AudioEngine`'s destructor as its
   first statements, comment kept verbatim, and the smoke test should be run under
   a sanitiser as part of the gate.
+
+  **Weigh this before starting it.** It is the only remaining item with no
+  user-visible payoff, it carries the worst failure mode in the project (a crash
+  on every shutdown, on a path no automated test can reproduce: with no audio
+  device there is no callback thread, so the race cannot occur on CI), and the
+  sanitiser gate that would justify it has not been set up. The argument for
+  doing it is that the invariant currently lives in a 1400-line class and would
+  end up in a 60-line one whose whole purpose is to hold it. The argument against
+  is that nothing else in the plan depends on it.
 - **Phase 6: per-lane gain, default unity.** Four lanes carrying the same source
-  sum to about +12 dB today with no trim, meter or dry/wet. A gain node plus a
-  persisted per-lane value; unity default means no existing user hears a change
-  on upgrade. The settings store already has a slot for it.
+  sum to about +12 dB today with no trim, meter or dry/wet. Needs a gain field in
+  `lighthost::chain::fields` (add it there and `stageErase` picks it up, and the
+  erase test will fail until it is registered), a gain node per lane in
+  `GraphTopology`, and a control per row in Preferences. Unity default means no
+  existing user hears a change on upgrade.
 - **Phase 6: test `PluginWindow.cpp`.** At ~200 lines with one stub processor it
   is the cheapest file in the project to cover, and it holds three historical
   fixes (duplicate Generic windows, a throwing editor constructor, a deprecated

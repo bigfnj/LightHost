@@ -57,7 +57,10 @@ public:
 
     void closeButtonPressed() override
     {
-        owner.removePluginsLackingInputOutput();
+        // Closing this window used to purge every scanned plugin with fewer than
+        // two input or output channels from the user's plugin list, permanently.
+        // See the note on removePluginsLackingInputOutput's removal in the 5.0.0
+        // changelog: the scan results are the user's, not ours to prune.
 
         #if JUCE_MAC
         Process::setDockIconVisible (false);
@@ -1466,13 +1469,3 @@ void IconMenu::reloadPlugins()
     pluginListWindow->toFront (true);
 }
 
-void IconMenu::removePluginsLackingInputOutput()
-{
-    const auto types = knownPluginList.getTypes();
-
-    for (const auto& plugin : types)
-    {
-        if (plugin.numInputChannels < 2 || plugin.numOutputChannels < 2)
-            knownPluginList.removeType (plugin);
-    }
-}
