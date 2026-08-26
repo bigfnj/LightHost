@@ -47,7 +47,6 @@ private:
     void savePluginStates();
     void deletePluginStates();
     void setIcon();
-    void removePluginsLackingInputOutput();
     void handleDeletePlugin (int index);
     void handleBypassPlugin (int index);
     void handleEditPlugin (int index);

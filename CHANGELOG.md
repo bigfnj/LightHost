@@ -59,6 +59,47 @@ check. Loading is now a message-thread chain through
 `createPluginInstanceAsync`, cancellation is a generation bump, and `~IconMenu`
 no longer blocks.
 
+### Fixed — plugin delay compensation went stale
+
+`AudioProcessorGraph` does not listen to its own nodes: it records each node's
+reported latency when it builds a render sequence and nothing revisits that
+afterwards. A plugin that changed its latency mid-session, which is what
+switching a linear-phase or oversampled mode inside its own editor does, left
+every other lane compensated by the old amount. Parallel lanes then partly
+cancelled instead of summing, which sounds like a thin mix rather than a fault.
+Light Host now listens for `latencyChanged` and rewires, deferred through
+`AsyncUpdater` because the callback can arrive on any thread.
+
+### Fixed — the sample-rate correction loop had no bound
+
+A device change makes the host ask for a supported sample rate, which makes the
+device manager broadcast another change, which comes straight back. It normally
+terminates. A driver that reports a rate outside its own
+`getAvailableSampleRates()`, or keeps rejecting the rate it just accepted, never
+terminated it: the only guard was a flag held across one callback, and change
+broadcasts are asynchronous, so the second callback always found it clear. The
+decision now lives in `Source/SampleRatePolicy.hpp` and counts attempts, resetting
+whenever the device settles and giving up after three tries with a log line.
+
+### Fixed — the plugin list was pruned behind the user's back
+
+Closing the plugin list window ran `removePluginsLackingInputOutput()`, which
+permanently removed every scanned plugin reporting fewer than two input or output
+channels, judged on scan-time defaults rather than the negotiated bus layout.
+Every instrument and every mono plugin was wiped from the scan, and closing the
+window again wiped them again after a rescan. The purge is gone. A node that
+genuinely cannot carry audio is now wired around by the graph topology and logged,
+so an unusable plugin in the list degrades instead of breaking the chain.
+
+### Added — failures are visible instead of discarded
+
+`AudioDeviceManager::initialise` returns a reason it could not open a device and
+that string was thrown away; all thirteen `saveIfNeeded()` calls ignored their
+result, so a full disk or a locked settings file lost the user's edits while the
+app looked healthy. `Source/StatusSink.hpp` collects failures and the tray tooltip
+shows the most recent one, alongside plugin loads that failed and plugins that
+refused to restore their saved state.
+
 ### Fixed — smaller correctness bugs
 
 - **Deleting a plugin left its lane key behind.** The fields to remove were
@@ -76,6 +117,14 @@ no longer blocks.
   full-size colour app icon in the menu bar. A monochrome template is passed now.
 - **Order values are plain indices**, not `time(nullptr) + offset`, which was
   opaque and overflows a signed 32-bit int in 2038.
+- **Plugins with a blank manufacturer never appeared in Add Plugin.** The grouping
+  loop flushed its submenu only when the manufacturer name was non-empty, and
+  sorting put the blank ones first, so their submenu was cleared when the first
+  named manufacturer arrived. Common for VST2. They are grouped under
+  "(no manufacturer)" now.
+- **The lane popup could write past the end of the chain.** It captured a row
+  index at click time and never re-checked it, so if the chain shrank while the
+  asynchronous menu was open, the write landed out of bounds.
 - **A settings write followed by a throwing plugin-list mutation** left the two
   halves disagreeing about the chain. Settings writes are staged and rolled back
   if the list mutation throws.
