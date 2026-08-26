@@ -1,4 +1,5 @@
 #include "IconMenu.hpp"
+#include "GraphTopology.hpp"
 #include "PluginState.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
@@ -454,10 +455,6 @@ void IconMenu::onAllPluginsLoaded (int generation)
 //==============================================================================
 void IconMenu::reconnectGraph()
 {
-    static constexpr int kChannelOne = 0;
-    static constexpr int kChannelTwo = 1;
-    static constexpr int kMaxLane    = 3;   // Lane 0-3, matching the Preferences UI
-
     // NOTE ON PLUGIN DELAY COMPENSATION
     //
     // There is deliberately none here. juce::AudioProcessorGraph already performs
@@ -477,77 +474,87 @@ void IconMenu::reconnectGraph()
     //
     // Do not reintroduce manual padding here without first making the padding node
     // report its own latency, and then checking whether it is needed at all.
+    //
+    // NOTE ON WHY THIS APPLIES A DIFF
+    //
+    // Up to 4.0.3 this function removed every connection in the graph and then
+    // added the ones it wanted, each call defaulting to UpdateKind::sync. Every
+    // one of those ~70 mutations per click published a new render sequence to the
+    // audio thread, including the intermediate ones where the chain was partly or
+    // entirely disconnected, which is audible as a click or a dropout on
+    // something as small as a bypass toggle. The teardown also destroyed the
+    // graph's own delay lines, so the compensation restarted from silence.
+    //
+    // Now the desired wiring is computed first (GraphTopology.hpp), diffed
+    // against what the graph already holds, and only the difference is applied
+    // with UpdateKind::none. A single rebuild() at the end publishes one
+    // consistent sequence. A change that alters nothing applies nothing.
 
-    for (auto& c : graph.getConnections())
-        graph.removeConnection (c);
+    lighthost::topology::Layout layout;
+    layout.inputNodeId  = inputNodeId;
+    layout.outputNodeId = outputNodeId;
 
-    const auto& sorted = getTimeSortedList();
-    const auto numPlugins = static_cast<int> (sorted.size());
+    if (auto* inputNode = graph.getNodeForId (inputNodeId))
+        if (auto* processor = inputNode->getProcessor())
+            layout.inputNodeChannels = processor->getTotalNumOutputChannels();
+
+    if (auto* outputNode = graph.getNodeForId (outputNodeId))
+        if (auto* processor = outputNode->getProcessor())
+            layout.outputNodeChannels = processor->getTotalNumInputChannels();
 
     auto* settings = getAppProperties().getUserSettings();
-    std::map<int, std::vector<NodeID>> lanesData;
 
-    if (numPlugins == 0)
+    for (const auto& pd : getTimeSortedList())
     {
-        graph.addConnection ({ { inputNodeId, kChannelOne }, { outputNodeId, kChannelOne } });
-        if (! graph.addConnection ({ { inputNodeId, kChannelTwo }, { outputNodeId, kChannelTwo } }))
-            graph.addConnection ({ { inputNodeId, kChannelOne }, { outputNodeId, kChannelTwo } });
-        return;
-    }
-
-    for (int i = 0; i < numPlugins; ++i)
-    {
-        const auto& pd = sorted[static_cast<size_t> (i)];
         const auto nodeIdVal = settings->getIntValue (getKey ("nodeid", pd), 0);
-        if (nodeIdVal == 0) continue;
+        if (nodeIdVal == 0)
+            continue;
+
         const NodeID nodeId { static_cast<uint32> (nodeIdVal) };
+        auto* node = graph.getNodeForId (nodeId);
+        if (node == nullptr)
+            continue;
 
-        if (auto* node = graph.getNodeForId (nodeId))
-        {
-            node->setBypassed (settings->getBoolValue (getKey ("bypass", pd), false));
+        node->setBypassed (settings->getBoolValue (getKey ("bypass", pd), false));
 
-            // Clamp: nothing else validates what came out of the settings file.
-            const int lane = juce::jlimit (0, kMaxLane,
-                                           settings->getIntValue (getKey ("lane", pd), 0));
+        auto* processor = node->getProcessor();
+        if (processor == nullptr)
+            continue;
 
-            lanesData[lane].push_back (nodeId);
-        }
+        // Lane comes straight from the settings file, so it is clamped rather
+        // than trusted; nothing else validates it.
+        lighthost::topology::NodeFacts facts;
+        facts.nodeId            = nodeId;
+        facts.lane              = settings->getIntValue (getKey ("lane", pd), 0);
+        facts.numInputChannels  = processor->getTotalNumInputChannels();
+        facts.numOutputChannels = processor->getTotalNumOutputChannels();
+
+        if (! lighthost::topology::canPassAudio (facts))
+            juce::Logger::writeToLog ("IconMenu: " + pd.name + " has "
+                                      + juce::String (facts.numInputChannels) + " in / "
+                                      + juce::String (facts.numOutputChannels)
+                                      + " out channels, so it cannot sit in a lane; wiring around it");
+
+        layout.nodes.push_back (facts);
     }
 
-    if (lanesData.empty())
-    {
-        graph.addConnection ({ { inputNodeId, kChannelOne }, { outputNodeId, kChannelOne } });
-        if (! graph.addConnection ({ { inputNodeId, kChannelTwo }, { outputNodeId, kChannelTwo } }))
-            graph.addConnection ({ { inputNodeId, kChannelOne }, { outputNodeId, kChannelTwo } });
-        return;
-    }
+    const auto desired = lighthost::topology::buildConnections (layout);
+    const auto diff    = lighthost::topology::applyConnections (graph, desired);
 
-    for (const auto& [lane, laneNodes] : lanesData)
-    {
-        NodeID lastActiveNodeId {};
-        for (const auto& nodeId : laneNodes)
-        {
-            if (lastActiveNodeId.uid == 0)
-            {
-                graph.addConnection ({ { inputNodeId, kChannelOne }, { nodeId, kChannelOne } });
-                if (! graph.addConnection ({ { inputNodeId, kChannelTwo }, { nodeId, kChannelTwo } }))
-                    graph.addConnection ({ { inputNodeId, kChannelOne }, { nodeId, kChannelTwo } });
-            }
-            else
-            {
-                graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { nodeId, kChannelOne } });
-                if (! graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { nodeId, kChannelTwo } }))
-                    graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { nodeId, kChannelTwo } });
-            }
-            lastActiveNodeId = nodeId;
-        }
+    // One publish to the audio thread, whatever changed.
+    graph.rebuild();
 
-        // The graph inserts whatever delay this lane needs to stay aligned with
-        // the others; see the note at the top of this function.
-        graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { outputNodeId, kChannelOne } });
-        if (! graph.addConnection ({ { lastActiveNodeId, kChannelTwo }, { outputNodeId, kChannelTwo } }))
-            graph.addConnection ({ { lastActiveNodeId, kChannelOne }, { outputNodeId, kChannelTwo } });
-    }
+    for (const auto& connection : diff.refused)
+        juce::Logger::writeToLog ("IconMenu: graph refused connection "
+                                  + juce::String ((int) connection.source.nodeID.uid) + ":"
+                                  + juce::String (connection.source.channelIndex) + " -> "
+                                  + juce::String ((int) connection.destination.nodeID.uid) + ":"
+                                  + juce::String (connection.destination.channelIndex));
+
+    if (diff.added > 0 || diff.removed > 0)
+        juce::Logger::writeToLog ("IconMenu: graph rewired (" + juce::String (diff.added)
+                                  + " added, " + juce::String (diff.removed) + " removed, "
+                                  + juce::String ((int) desired.size()) + " total)");
 }
 void IconMenu::logAudioConfig (const juce::String& contextLabel) const
 {
