@@ -167,6 +167,7 @@ if(LIGHTHOST_BUILD_TESTS)
     target_sources(LightHostTests PRIVATE
         Tests/TestMain.cpp
         Tests/GraphRenderTests.cpp
+        Tests/GraphTopologyTests.cpp
         Tests/PluginStateTests.cpp
         Tests/StubProcessors.hpp
     )
@@ -194,8 +195,11 @@ if(LIGHTHOST_BUILD_TESTS)
         juce::juce_recommended_warning_flags
     )
 
-    add_test(NAME graphrender COMMAND LightHostTests)
-    set_tests_properties(graphrender PROPERTIES LABELS unit TIMEOUT 120)
+    # One CTest entry runs the whole binary, which runs every category in
+    # Tests/TestMain.cpp. Named for what it is rather than for one of the
+    # categories inside it.
+    add_test(NAME unit COMMAND LightHostTests)
+    set_tests_properties(unit PROPERTIES LABELS unit TIMEOUT 120)
 
     # ── Headless startup/shutdown smoke test ────────────────────────────────────
     # Runs the real app: real device manager, real graph, real tray icon, real

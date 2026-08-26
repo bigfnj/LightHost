@@ -46,36 +46,56 @@ int main()
     juce::UnitTestRunner runner;
     runner.setAssertOnFailure (false);   // let the run finish and report every failure
 
-    for (const auto* category : { "GraphRender", "PluginState" })
-        runner.runTestsInCategory (category);
-
     int totalFailures = 0;
     int totalPasses   = 0;
 
-    for (int i = 0; i < runner.getNumResults(); ++i)
+    // Results are collected after every category, not once at the end.
+    // UnitTestRunner::runTests() calls results.clear() on entry
+    // (juce_UnitTest.cpp:176), so a single sweep afterwards would see only the
+    // last category: every earlier category's failures would vanish and this
+    // process would exit 0 with a broken build.
+    const auto collectResults = [&runner, &totalFailures, &totalPasses]
     {
-        const auto* result = runner.getResult (i);
-
-        if (result == nullptr)
-            continue;
-
-        totalFailures += result->failures;
-        totalPasses   += result->passes;
-
-        if (result->failures > 0)
+        for (int i = 0; i < runner.getNumResults(); ++i)
         {
-            std::printf ("FAILED: %s / %s (%d failed, %d passed)\n",
-                         result->unitTestName.toRawUTF8(),
-                         result->subcategoryName.toRawUTF8(),
-                         result->failures,
-                         result->passes);
+            const auto* result = runner.getResult (i);
 
-            for (const auto& message : result->messages)
-                std::printf ("    %s\n", message.toRawUTF8());
+            if (result == nullptr)
+                continue;
+
+            totalFailures += result->failures;
+            totalPasses   += result->passes;
+
+            if (result->failures > 0)
+            {
+                std::printf ("FAILED: %s / %s (%d failed, %d passed)\n",
+                             result->unitTestName.toRawUTF8(),
+                             result->subcategoryName.toRawUTF8(),
+                             result->failures,
+                             result->passes);
+
+                for (const auto& message : result->messages)
+                    std::printf ("    %s\n", message.toRawUTF8());
+            }
         }
+    };
+
+    for (const auto* category : { "GraphRender", "GraphTopology", "PluginState" })
+    {
+        runner.runTestsInCategory (category);
+        collectResults();
     }
 
     std::printf ("\n==== %d passed, %d failed ====\n", totalPasses, totalFailures);
+
+    // A category is matched by string. A renamed or misspelled one silently runs
+    // nothing, which would otherwise look exactly like success.
+    if (totalPasses == 0 && totalFailures == 0)
+    {
+        std::printf ("NO ASSERTIONS RAN: a category above matches no registered test\n");
+        juce::Logger::setCurrentLogger (nullptr);
+        return 1;
+    }
 
     juce::Logger::setCurrentLogger (nullptr);
 

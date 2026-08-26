@@ -66,6 +66,8 @@ and other virtual audio drivers work equally well.
 - Right-click tray icon: opens the action menu
 - Plugins on the same lane are connected in series through a JUCE `AudioProcessorGraph`
 - Lanes run in parallel; their outputs sum automatically at the graph's output node
+- Editing the chain rewires only what changed and publishes one render sequence,
+  so a bypass toggle no longer clicks or drops out
 - Shorter lanes are delayed automatically so all lanes remain sample-aligned
   (Plugin Delay Compensation, performed by JUCE's `AudioProcessorGraph`)
 - If all plugins are bypassed, input is wired directly to output
@@ -203,7 +205,15 @@ with latencies that cross block boundaries, equal-latency lanes, and a bypassed
 lane. Each asserts that all lanes sum into one impulse on the same sample and
 that the host reports the slowest lane as its latency.
 
-The second area is plugin state restore: a good blob round-trips, an empty blob
+The second area is chain wiring, tested as a pure function over node facts with
+no graph at all: serial order within a lane, lanes staying parallel, mono sources
+duplicating into both destination channels, mono destinations taking one channel
+and no more, nodes that cannot carry audio being wired around, lane indices from
+a corrupt settings file being clamped rather than honoured, and two invariants
+the live rewiring depends on. Every connection must name a channel the node
+actually has, and the same chain must always produce the same wiring.
+
+The third area is plugin state restore: a good blob round-trips, an empty blob
 reports "nothing saved" rather than failure, a plugin that throws out of
 `setStateInformation` reports failure without letting the exception escape, and
 the resulting rule (never save a node whose restore failed) leaves the stored
