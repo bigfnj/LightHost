@@ -19,7 +19,8 @@ Current version: **4.0.3** — see [CHANGELOG.md](CHANGELOG.md).
 - Supports plugin bypass, reorder, delete, and editor opening
 - Saves plugin state, device settings, plugin order, and lane assignments
   between launches
-- Loads active plugins in the background so startup stays responsive
+- Loads active plugins one at a time, keeping the message loop pumping between
+  them so startup stays responsive
 
 ## Supported Plugin Formats
 
@@ -202,6 +203,12 @@ with latencies that cross block boundaries, equal-latency lanes, and a bypassed
 lane. Each asserts that all lanes sum into one impulse on the same sample and
 that the host reports the slowest lane as its latency.
 
+The second area is plugin state restore: a good blob round-trips, an empty blob
+reports "nothing saved" rather than failure, a plugin that throws out of
+`setStateInformation` reports failure without letting the exception escape, and
+the resulting rule (never save a node whose restore failed) leaves the stored
+preset intact.
+
 No audio device and no real plugin are needed, so these run identically on every
 platform. CI runs them on every push, and the Release workflow runs them before
 publishing an artifact.
@@ -277,13 +284,31 @@ If the host crashes without a message, the log should be the first place to chec
 Because Light Host runs plugins in-process, a plugin that crashes the host process can still take the application down. v4.0.3 closed out the host-side production-hardening backlog with exception protection around:
 
 - Preferences Apply (`setCurrentAudioDeviceType` / `setAudioDeviceSetup`)
-- background plugin loading and state restore
+- plugin loading and state restore
 - plugin state save (`getStateInformation` and `saveIfNeeded`)
 - plugin editor creation (`PluginWindow::getWindowFor`)
 - plugin-list mutation (`activePluginList.addType` / `removeType`)
-- `pluginLoadGeneration` is `std::atomic<int>` for explicit cross-thread semantics
 
-All exception handlers log via `juce::Logger::writeToLog` so failures land in the log rather than silently corrupting state. That said, a truly unstable plugin can still crash the process directly — in-process hosting cannot fully sandbox plugin code.
+All exception handlers log via `juce::Logger::writeToLog` so failures land in the log rather than silently corrupting state. A truly unstable plugin can still crash the process directly, because in-process hosting cannot fully sandbox plugin code.
+
+### Plugin loading
+
+Plugins are instantiated on the message thread via `createPluginInstanceAsync`,
+one at a time, each load starting from the previous one's completion callback.
+There is no loader thread: JUCE loads the DLL and calls the plugin factory on the
+message thread whichever thread asks, so a worker only slept while the message
+thread did the work, and cancelling one meant a blocking join during shutdown.
+Cancellation is now a generation counter bump, and a superseded callback drops
+its result when it arrives.
+
+### Saved presets survive a failed restore
+
+If a plugin throws out of `setStateInformation`, it keeps its factory defaults.
+Saving that node back would overwrite the user's stored preset with defaults, so
+a transient load failure would become permanent data loss. `Source/PluginState.hpp`
+reports whether a restore actually happened, nodes whose restore failed are
+recorded, and the save path skips them so the stored blob is left intact.
+`Tests/PluginStateTests.cpp` pins that contract.
 
 ## License
 

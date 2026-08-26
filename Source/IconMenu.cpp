@@ -1,4 +1,5 @@
 #include "IconMenu.hpp"
+#include "PluginState.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
 #include <BinaryData.h>
@@ -166,101 +167,6 @@ private:
 };
 
 //==============================================================================
-// Loads plugin instances on a background thread one at a time, then marshals
-// each completed instance back to the message thread via callAsync so the UI
-// stays responsive during startup and full reloads.
-//
-// Edge-case behaviour: if a plugin is deleted from the active list while this
-// thread is running, onPluginInstanceReady checks activePluginList and discards
-// the stale instance rather than adding an orphaned node.
-class IconMenu::PluginLoadThread final : public juce::Thread
-{
-public:
-    struct LoadSpec
-    {
-        juce::PluginDescription description;
-        juce::String            savedState;
-        juce::uint32            nodeId;
-    };
-
-    PluginLoadThread (IconMenu& ownerRef,
-                      std::vector<LoadSpec> specsToLoad,
-                      juce::AudioPluginFormatManager& formatManagerToUse,
-                      double sampleRateToUse,
-                      int blockSizeToUse,
-                      int generationToUse)
-        : juce::Thread ("LightHost Plugin Loader"),
-          owner         (ownerRef),
-          specs         (std::move (specsToLoad)),
-          formatManager (formatManagerToUse),
-          sampleRate    (sampleRateToUse),
-          blockSize     (blockSizeToUse),
-          generation    (generationToUse)
-    {}
-
-    void run() override
-    {
-        for (auto& spec : specs)
-        {
-            if (threadShouldExit())
-                return;
-
-            juce::String error;
-            auto instance = formatManager.createPluginInstance (
-                spec.description, sampleRate, blockSize, error);
-
-            if (instance == nullptr)
-            {
-                juce::Logger::writeToLog ("Plugin load failed: " + spec.description.name + " - " + error);
-                continue;
-            }
-
-            if (threadShouldExit())
-                return;
-
-            // Transfer ownership to the message thread.
-            // SafePointer ensures the lambda is a no-op if IconMenu is
-            // destroyed before it fires; the unique_ptr still cleans up.
-            auto* raw  = instance.release();
-            auto  nid  = spec.nodeId;
-            auto  gen  = generation;
-            auto  state = spec.savedState;
-            juce::Component::SafePointer<IconMenu> safe (&owner);
-
-            juce::MessageManager::callAsync ([safe, raw, nid, gen, state]() mutable
-            {
-                std::unique_ptr<juce::AudioProcessor> inst (raw);
-                if (auto* im = safe.getComponent())
-                    im->onPluginInstanceReady (std::move (inst),
-                                               juce::AudioProcessorGraph::NodeID { nid },
-                                               gen,
-                                               std::move (state));
-                // If safe is null (IconMenu destroyed), inst is deleted here — no leak.
-            });
-        }
-
-        // All specs dispatched — signal completion.
-        auto gen = generation;
-        juce::Component::SafePointer<IconMenu> safe (&owner);
-        juce::MessageManager::callAsync ([safe, gen]()
-        {
-            if (auto* im = safe.getComponent())
-                im->onAllPluginsLoaded (gen);
-        });
-    }
-
-private:
-    IconMenu&                       owner;
-    std::vector<LoadSpec>           specs;
-    juce::AudioPluginFormatManager& formatManager;
-    double                          sampleRate;
-    int                             blockSize;
-    int                             generation;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginLoadThread)
-};
-
-//==============================================================================
 IconMenu::IconMenu()
 {
     juce::Logger::writeToLog ("IconMenu: constructing");
@@ -312,14 +218,13 @@ IconMenu::~IconMenu()
     deviceManager.removeAudioCallback (&player);
     player.setProcessor (nullptr);
 
-    // Stop the background load thread before saving states.
-    // This ensures no concurrent graph mutations and that no pending
-    // callAsync lambdas reference this object after it starts tearing down.
-    if (pluginLoadThread != nullptr)
-    {
-        pluginLoadThread->stopThread (3000);
-        pluginLoadThread.reset();
-    }
+    // Abandon any in-flight load before saving. Bumping the generation makes the
+    // pending createPluginInstanceAsync callbacks no-op when they arrive. Their
+    // captured SafePointer already guards against this object being gone; the
+    // generation bump additionally stops a late callback mutating the graph while
+    // we tear down. There is no worker thread to stop, so this cannot block.
+    ++pluginLoadGeneration;
+    pendingLoads.clear();
 
     savePluginStates();
 }
@@ -327,12 +232,14 @@ IconMenu::~IconMenu()
 //==============================================================================
 void IconMenu::cancelPluginLoading()
 {
-    if (pluginLoadThread == nullptr)
+    if (pendingLoads.empty())
         return;
 
+    // Bump the generation so the in-flight async callback drops its result, and
+    // drop the queue so no further plugins are dispatched.
     ++pluginLoadGeneration;
-    pluginLoadThread->stopThread (3000);
-    pluginLoadThread.reset();
+    pendingLoads.clear();
+    nextLoadIndex = 0;
     setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
     juce::Logger::writeToLog ("IconMenu: cancelled in-flight plugin load");
 }
@@ -360,15 +267,12 @@ void IconMenu::loadActivePlugins()
 
     juce::Logger::writeToLog ("IconMenu: loadActivePlugins begin");
 
-    // Cancel any in-flight load.  Incrementing the generation causes any
-    // callAsync lambdas already queued from the previous run to be discarded
-    // when they arrive on the message thread.
+    // Cancel any in-flight load. Bumping the generation makes queued async
+    // callbacks from the previous run drop their results when they arrive.
     ++pluginLoadGeneration;
-    if (pluginLoadThread != nullptr)
-    {
-        pluginLoadThread->stopThread (3000);
-        pluginLoadThread.reset();
-    }
+    pendingLoads.clear();
+    nextLoadIndex = 0;
+    statesNotRestored.clear();   // fresh graph — no failed restores to remember yet
 
     sortedCacheDirty = true;
     PluginWindow::closeAllCurrentlyOpenWindows();
@@ -389,14 +293,9 @@ void IconMenu::loadActivePlugins()
     if (sorted.empty())
         return;
 
-    // Assign NodeIDs on the message thread before handing off — settings
-    // writes must not happen from the background thread.
-    auto* settings   = getAppProperties().getUserSettings();
-    const auto sr    = graph.getSampleRate() > 0.0 ? graph.getSampleRate() : 44100.0;
-    const auto bs    = graph.getBlockSize()  > 0   ? graph.getBlockSize()  : 512;
+    auto* settings = getAppProperties().getUserSettings();
 
-    std::vector<PluginLoadThread::LoadSpec> specs;
-    specs.reserve (sorted.size());
+    pendingLoads.reserve (sorted.size());
 
     for (const auto& plugin : sorted)
     {
@@ -407,65 +306,136 @@ void IconMenu::loadActivePlugins()
             settings->setValue ("nextPluginNodeId", nodeIdVal + 1);
             settings->setValue (getKey ("nodeid", plugin), nodeIdVal);
         }
-        specs.push_back ({ plugin,
-                           settings->getValue (getKey ("state", plugin)),
-                           static_cast<uint32> (nodeIdVal) });
+        pendingLoads.push_back ({ plugin,
+                                  settings->getValue (getKey ("state", plugin)),
+                                  static_cast<uint32> (nodeIdVal) });
     }
     settings->saveIfNeeded();
 
     setIconTooltip ("Light Host - loading...");
+    loadNextPlugin();
+}
 
-    pluginLoadThread = std::make_unique<PluginLoadThread> (
-        *this, std::move (specs), formatManager, sr, bs, pluginLoadGeneration);
-    pluginLoadThread->startThread();
+//==============================================================================
+// Loads the next queued plugin on the message thread. createPluginInstanceAsync
+// does the DLL load and factory call on this thread and calls back here when the
+// instance is ready, at which point we chain to the next one. This keeps the
+// message loop pumping between plugins so the UI stays responsive.
+void IconMenu::loadNextPlugin()
+{
+    if (nextLoadIndex >= pendingLoads.size())
+    {
+        onAllPluginsLoaded (pluginLoadGeneration);
+        return;
+    }
+
+    const auto& spec = pendingLoads[nextLoadIndex];
+
+    const auto sr = graph.getSampleRate() > 0.0 ? graph.getSampleRate() : 44100.0;
+    const auto bs = graph.getBlockSize()  > 0   ? graph.getBlockSize()  : 512;
+
+    const auto generation = pluginLoadGeneration;
+    const auto nodeId     = spec.nodeId;
+    const auto savedState = spec.savedState;
+    const auto name       = spec.description.name;
+
+    Component::SafePointer<IconMenu> safe (this);
+
+    formatManager.createPluginInstanceAsync (
+        spec.description, sr, bs,
+        [safe, generation, nodeId, savedState, name]
+            (std::unique_ptr<AudioPluginInstance> instance, const juce::String& error) mutable
+        {
+            auto* im = safe.getComponent();
+            if (im == nullptr)
+                return;   // IconMenu gone; instance cleaned up by unique_ptr
+
+            if (instance == nullptr)
+                juce::Logger::writeToLog ("Plugin load failed: " + name + " - " + error);
+
+            im->onPluginInstanceReady (std::move (instance),
+                                       AudioProcessorGraph::NodeID { nodeId },
+                                       generation,
+                                       savedState);
+        });
 }
 
 //==============================================================================
 void IconMenu::onPluginInstanceReady (std::unique_ptr<AudioProcessor> instance,
                                       AudioProcessorGraph::NodeID nodeId,
                                       int generation,
-                                      juce::String savedState)
+                                      const juce::String& savedState)
 {
     if (generation != pluginLoadGeneration)
-        return;  // stale result — a newer loadActivePlugins() call cancelled this load
+        return;  // stale result — a newer load supersedes this one and owns the chain
 
-    if (instance == nullptr)
-        return;
-
-    if (savedState.isNotEmpty())
+    // Add the node first, then restore into the live node, so that a failed
+    // restore can be recorded against a node that actually exists.
+    if (instance != nullptr)
     {
-        try
+        // Guard against the plugin having been deleted from the active list while
+        // it was loading. If its NodeID is no longer in settings it is unwanted;
+        // the unique_ptr cleans it up.
+        auto* settings = getAppProperties().getUserSettings();
+        bool stillWanted = false;
+        for (const auto& plugin : activePluginList.getTypes())
         {
-            juce::MemoryBlock block;
-            block.fromBase64Encoding (savedState);
-            instance->setStateInformation (block.getData(),
-                                           static_cast<int> (block.getSize()));
+            if (static_cast<uint32> (settings->getIntValue (getKey ("nodeid", plugin), 0)) == nodeId.uid)
+            {
+                stillWanted = true;
+                break;
+            }
         }
-        catch (const std::exception& e)
+
+        if (stillWanted)
         {
-            juce::Logger::writeToLog ("Plugin state restore threw std::exception for node "
-                                      + juce::String ((int) nodeId.uid) + ": " + e.what());
-        }
-        catch (...)
-        {
-            juce::Logger::writeToLog ("Plugin state restore threw unknown exception for node "
-                                      + juce::String ((int) nodeId.uid));
+            if (auto node = graph.addNode (std::move (instance), nodeId))
+            {
+                restorePluginState (*node, nodeId, savedState);
+                juce::Logger::writeToLog ("IconMenu: plugin instance ready for node "
+                                          + juce::String ((int) nodeId.uid));
+            }
+            else
+            {
+                // addNode refused the ID (already present). Do not claim success:
+                // silently dropping the instance here is how a plugin ends up in
+                // the UI with no audio and no error.
+                juce::Logger::writeToLog ("IconMenu: addNode rejected node "
+                                          + juce::String ((int) nodeId.uid)
+                                          + " (duplicate id); instance discarded");
+            }
         }
     }
 
-    // Guard against the plugin having been deleted from the active list while
-    // the background thread was loading it.  If the NodeID is no longer in
-    // settings the plugin is unwanted; the unique_ptr destructor cleans up.
-    auto* settings = getAppProperties().getUserSettings();
-    for (const auto& plugin : activePluginList.getTypes())
+    // Chain to the next queued plugin.
+    ++nextLoadIndex;
+    loadNextPlugin();
+}
+
+// Restores base64 saved state into a live graph node. On failure the node keeps
+// its factory defaults and its id is recorded in statesNotRestored, so
+// savePluginStates() will not overwrite the good blob. The restore itself lives
+// in PluginState.hpp so its failure handling is unit tested.
+void IconMenu::restorePluginState (AudioProcessorGraph::Node& node,
+                                   AudioProcessorGraph::NodeID nodeId,
+                                   const juce::String& savedState)
+{
+    auto* processor = node.getProcessor();
+    if (processor == nullptr)
+        return;
+
+    switch (lighthost::state::restoreInto (*processor, savedState))
     {
-        if (static_cast<uint32> (settings->getIntValue (getKey ("nodeid", plugin), 0))
-                == nodeId.uid)
-        {
-            graph.addNode (std::move (instance), nodeId);
-            juce::Logger::writeToLog ("IconMenu: plugin instance ready for " + plugin.name);
-            return;
-        }
+        case lighthost::state::RestoreResult::restored:
+        case lighthost::state::RestoreResult::nothingSaved:
+            break;
+
+        case lighthost::state::RestoreResult::failed:
+            statesNotRestored.insert (nodeId.uid);
+            juce::Logger::writeToLog ("Plugin state failed to restore for node "
+                                      + juce::String ((int) nodeId.uid)
+                                      + " — keeping the saved blob rather than overwriting it");
+            break;
     }
 }
 
@@ -474,7 +444,8 @@ void IconMenu::onAllPluginsLoaded (int generation)
     if (generation != pluginLoadGeneration)
         return;
 
-    pluginLoadThread.reset();
+    pendingLoads.clear();
+    nextLoadIndex = 0;
     reconnectGraph();
     setIconTooltip (JUCEApplication::getInstance()->getApplicationName());
     juce::Logger::writeToLog ("IconMenu: loadActivePlugins complete");
@@ -959,6 +930,17 @@ void IconMenu::savePluginStates()
         const auto nodeIdVal = settings->getIntValue (getKey ("nodeid", plugin), 0);
         if (nodeIdVal == 0)
             continue;
+
+        // A plugin whose saved state failed to restore this session still holds
+        // its factory defaults. Saving those would overwrite the good blob on
+        // disk, turning a transient load failure into permanent data loss, so
+        // leave the stored state untouched.
+        if (statesNotRestored.count (static_cast<uint32> (nodeIdVal)) != 0)
+        {
+            juce::Logger::writeToLog ("Skipping state save for " + plugin.name
+                                      + ": its saved state never restored this session");
+            continue;
+        }
 
         auto* node = graph.getNodeForId (NodeID { static_cast<uint32> (nodeIdVal) });
         if (node == nullptr)

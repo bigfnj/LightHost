@@ -46,7 +46,8 @@ int main()
     juce::UnitTestRunner runner;
     runner.setAssertOnFailure (false);   // let the run finish and report every failure
 
-    runner.runTestsInCategory ("GraphRender");
+    for (const auto* category : { "GraphRender", "PluginState" })
+        runner.runTestsInCategory (category);
 
     int totalFailures = 0;
     int totalPasses   = 0;
