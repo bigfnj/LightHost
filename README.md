@@ -129,6 +129,7 @@ alignment, so a regression here fails the build.
 ├── CMakePresets.json       Build presets
 ├── CHANGELOG.md            Change history
 ├── BACKLOG.md              Known bugs and remaining work
+├── RELEASING.md            How a release is cut
 └── README.md               This file
 ```
 
