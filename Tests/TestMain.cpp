@@ -80,7 +80,7 @@ int main()
         }
     };
 
-    for (const auto* category : { "GraphRender", "GraphTopology", "PluginState" })
+    for (const auto* category : { "GraphRender", "GraphTopology", "PluginChain", "PluginState" })
     {
         runner.runTestsInCategory (category);
         collectResults();

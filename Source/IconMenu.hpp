@@ -20,8 +20,6 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void changeListenerCallback (juce::ChangeBroadcaster* changed) override;
 
-    [[nodiscard]] static juce::String getKey (const juce::String& type, const juce::PluginDescription& plugin);
-
     // Menu action ID offsets — each plugin gets an ID in the range [offset, offset + maxPlugins)
     static constexpr int kEditOffset     = 1'000'000;
     static constexpr int kBypassOffset   = 2'000'000;

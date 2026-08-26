@@ -780,14 +780,20 @@ private:
         const auto outName  = outputDeviceCombo.getText();
         const int  rateId   = sampleRateCombo.getSelectedId();
         const int  bufId    = bufferSizeCombo.getSelectedId();
+        // The chain, the bypass flags and the lane assignments are one value and
+        // are snapshotted as one. Reading any of them live inside the lambda
+        // below would apply an edit made after the click against a chain from
+        // before it: lanes used to be read that way, so a lane change between
+        // the click and the dispatch landed on the wrong plugin.
         const auto chain    = chainList.items;
         const auto bypass   = chainList.bypassed;
+        const auto lanes    = chainList.lanes;
 
         // callAsync lets the button visually grey out before we block the message
         // thread with device restarts.
         juce::Component::SafePointer<PreferencesContentComponent> safe (this);
         juce::MessageManager::callAsync (
-            [safe, typeName, inName, outName, rateId, bufId, chain, bypass]
+            [safe, typeName, inName, outName, rateId, bufId, chain, bypass, lanes]
             {
                 if (safe == nullptr) return;
                 auto& dm = safe->deviceManager;
@@ -862,7 +868,7 @@ private:
                 }
 
                 // 3. Plugin chain + bypass states
-                if (safe->onApplyFn) safe->onApplyFn (chain, bypass, safe->chainList.lanes);
+                if (safe->onApplyFn) safe->onApplyFn (chain, bypass, lanes);
 
                 // 4. Re-enable Apply now that all restarts are complete
                 if (safe != nullptr)

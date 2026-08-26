@@ -213,7 +213,13 @@ a corrupt settings file being clamped rather than honoured, and two invariants
 the live rewiring depends on. Every connection must name a channel the node
 actually has, and the same chain must always produce the same wiring.
 
-The third area is plugin state restore: a good blob round-trips, an empty blob
+The third area is the chain settings store: identity surviving a plugin update
+and a rename while still telling apart two plugins inside one shell file, staged
+writes being invisible until commit and undone by rollback, an erase leaving no
+field behind, and the migration from the 4.0.3 key format carrying every value
+over exactly once.
+
+The fourth area is plugin state restore: a good blob round-trips, an empty blob
 reports "nothing saved" rather than failure, a plugin that throws out of
 `setStateInformation` reports failure without letting the exception escape, and
 the resulting rule (never save a node whose restore failed) leaves the stored
@@ -232,9 +238,16 @@ Settings and log go to a throwaway folder unique to the run, so a self-test can
 never read or overwrite your real configuration. The folder is deleted on success
 and kept on failure.
 
-CTest registers three of these: a clean first run, a second run against the
-settings the first wrote, and one with `-multi-instance=`. They are labelled
-`smoke`, so `ctest -L unit` and `ctest -L smoke` can be run separately.
+Every self-test run starts from a seeded one-plugin chain written in the 4.0.3
+settings format, so it covers the one-shot settings migration, a plugin that
+cannot be instantiated being reported and skipped rather than stalling the load,
+and the rule that a plugin which never loaded keeps its saved state. The seeded
+plugin's format matches no registered format, so none of this needs a real plugin
+on disk.
+
+CTest registers three of these: a first run, an identical repeat, and one with
+`-multi-instance=`. They are labelled `smoke`, so `ctest -L unit` and
+`ctest -L smoke` can be run separately.
 
 This is the only automated check that exercises the destructor ordering in
 `~IconMenu` that prevents a shutdown crash. It is not a substitute for testing
@@ -310,6 +323,23 @@ message thread whichever thread asks, so a worker only slept while the message
 thread did the work, and cancelling one meant a blocking join during shutdown.
 Cancellation is now a generation counter bump, and a superseded callback drops
 its result when it arrives.
+
+### Chain settings survive a plugin update
+
+Each plugin's position, lane, bypass state, node id and saved preset are stored
+against an identity built from the plugin's file, its format and its unique id.
+Versions up to 4.0.3 built that key from the plugin's name and version instead,
+which had three consequences: updating a plugin changed its version and therefore
+orphaned everything the user had set for it, the same plugin installed in two
+folders shared one set of settings, and two plugins whose name and version
+happened to concatenate alike ("EQ" version "8" and "EQ8" with no version) also
+shared one set.
+
+Existing settings are migrated to the new keys once, on the first launch of 5.0.0,
+and the old keys are removed. Keys left over from plugins no longer in the chain
+are swept up at the same time, but only when the chain is not empty: an empty
+chain cannot be told apart from a chain whose saved list failed to load, and in
+that case those keys are the only surviving record of the settings.
 
 ### Saved presets survive a failed restore
 
