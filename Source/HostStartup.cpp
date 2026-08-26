@@ -1,6 +1,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "IconMenu.hpp"
+#include "InstanceName.hpp"
 #include "SelfTest.hpp"
 
 #if ! (JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
@@ -60,6 +61,9 @@ public:
         juce::Logger::setCurrentLogger (fileLogger.get());
         juce::Logger::writeToLog ("PluginHostApp: initialise");
 
+        if (instanceNameWarning.isNotEmpty())
+            juce::Logger::writeToLog (instanceNameWarning);
+
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
         // Seeded before IconMenu is constructed, so the run starts from settings
@@ -117,12 +121,15 @@ public:
     std::unique_ptr<juce::FileLogger> fileLogger;
     juce::LookAndFeel_V4 lookAndFeel;
 
+    [[nodiscard]] juce::File getCurrentLogFile() const { return logFile; }
+
 private:
     std::unique_ptr<IconMenu> iconMenu;
 
     bool selfTest = false;
     juce::File logFile;
     juce::StringArray selfTestFailures;
+    juce::String instanceNameWarning;
 
     [[nodiscard]] juce::String getMultiInstanceName() const
     {
@@ -134,10 +141,24 @@ private:
         return {};
     }
 
-    void applyMultiInstanceSuffix (juce::PropertiesFile::Options& options) const
+    void applyMultiInstanceSuffix (juce::PropertiesFile::Options& options)
     {
-        if (auto instanceName = getMultiInstanceName(); instanceName.isNotEmpty())
-            options.filenameSuffix = instanceName + "." + options.filenameSuffix;
+        const auto requested = getMultiInstanceName();
+
+        if (requested.isEmpty())
+            return;
+
+        // Sanitised before it reaches a filename: see Source/InstanceName.hpp for
+        // what an unsanitised one could do.
+        const auto safe = lighthost::instance::sanitise (requested);
+
+        // Held rather than logged: this runs before the file logger exists, so a
+        // message written here would go nowhere.
+        if (safe != requested)
+            instanceNameWarning = "PluginHostApp: instance name '" + requested
+                                + "' is not usable in a filename; using '" + safe + "'";
+
+        options.filenameSuffix = safe + "." + options.filenameSuffix;
     }
 
     /** Lets initialise() return so the real message loop runs, then checks and
@@ -186,5 +207,10 @@ private:
 
 static PluginHostApp& getApp()                             { return *dynamic_cast<PluginHostApp*> (juce::JUCEApplication::getInstance()); }
 juce::ApplicationProperties& getAppProperties()            { return *getApp().appProperties; }
+
+/** Where this run is logging. Follows the self-test's throwaway folder, so a
+    self-test never points the user at the real log.
+*/
+juce::File getLogFile()                                    { return getApp().getCurrentLogFile(); }
 
 START_JUCE_APPLICATION (PluginHostApp)

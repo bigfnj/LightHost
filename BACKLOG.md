@@ -31,21 +31,24 @@ never been run against a real plugin.
 
 ## Bugs
 
-Found by audit, still present. Each is a real fault, not a style preference.
+None known as of 2026-08-26. Everything the audits turned up has been fixed and is
+described in `CHANGELOG.md` under `[Unreleased]`, which is the place to look before
+concluding a fault is new.
 
-- **The Preferences panel squeezes its bottom sections instead of scrolling.**
-  `resized()` lays out a fixed stack with `removeFromTop`, so if the window is
-  shorter than the layout needs, the sections at the end silently collapse to zero
-  height and the Apply button disappears. The window's minimum and default heights
-  are set to fit the current layout, which means the arithmetic has to be redone by
-  hand every time a section is added. Putting the whole panel in a `Viewport` would
-  retire the problem rather than re-solving it.
-  (`Source/PreferencesWindow.cpp`, `resized()` and the resize limits.)
-- **Problems are only visible in the tray tooltip.** The status sink is surfaced
-  there, which is free but easy to miss. Preferences should show the recent
-  problems as well, and offer to open the log. The sink already broadcasts
-  `onChange`, so this is a UI job rather than a plumbing one.
-  (`Source/StatusSink.hpp`.)
+Two things worth knowing when reading an older audit of this project, because both
+have come up more than once:
+
+- Analyses of the **original** Light Host do not apply here. That codebase is
+  JUCE 4.2.4 with a Projucer `.jucer`, a VS2015 exporter, and gitignored `lib/`,
+  `Builds/` and `JuceLibraryCode/`. This fork is CMake with JUCE 9.0.1 vendored and
+  committed, the VST2 SDK at `lib/vstsdk2.4`, and ASIO headers that ship with JUCE
+  rather than being a separate download. Line numbers in such an audit will point
+  at code that no longer exists.
+- The settings key **does** still collide for two instances of the same plugin,
+  which is a real observation. It is unreachable, because the chain lives in a
+  `juce::KnownPluginList` and that container refuses a duplicate on the same field
+  set the key is built from. Making it reachable and making it correct are the same
+  piece of work: see the allocated slot ids under Deferred.
 
 ## Features and refactors
 

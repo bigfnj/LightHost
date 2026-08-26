@@ -123,7 +123,39 @@ that string was thrown away; all thirteen `saveIfNeeded()` calls ignored their
 result, so a full disk or a locked settings file lost the user's edits while the
 app looked healthy. `Source/StatusSink.hpp` collects failures and the tray tooltip
 shows the most recent one, alongside plugin loads that failed and plugins that
-refused to restore their saved state.
+refused to restore their saved state. The same message appears at the top of
+Preferences with a **Show Log** button beside it, because a tooltip is only found
+by someone who already suspects something is wrong.
+
+### Fixed — the multi-instance name reached a filename unsanitised
+
+`-multi-instance=NAME` is concatenated into the settings filename and was used
+exactly as given. A name containing a path separator or `..` therefore wrote
+outside the settings folder, and one containing a character the filesystem rejects
+produced a file that could never be opened, which combined with the ignored
+`saveIfNeeded()` results meant the configuration silently never saved. Names are
+now reduced to letters, digits, hyphens and underscores and capped at 32
+characters, and a name that sanitises to nothing becomes `instance` rather than
+falling back onto the primary configuration.
+
+### Fixed — a migrated chain could come back in a different order
+
+`getTimeSortedList()` sorted on the stored order value alone, and `std::sort`
+leaves equal keys in an unspecified order. Values written by this version are
+unique indices, but settings migrated from 4.0.3 carry that version's
+`time(nullptr) + offset` values, where two plugins added inside the same second
+share one. Such a chain could come back in a different order on each launch until
+the next Apply rewrote the values. Ordering now breaks ties on plugin identity,
+which is stable and unique.
+
+### Fixed — Preferences squeezed its own lower sections
+
+`resized()` lays out a fixed stack with `removeFromTop`, so a window shorter than
+the stack needed did not compress it: the sections at the end were handed whatever
+was left, which was nothing, and the Apply button disappeared. The panel now lives
+in a viewport that never sizes it below the height its layout needs, so a short
+window scrolls. The window's minimum height is about comfort again rather than
+correctness.
 
 ### Fixed — smaller correctness bugs
 

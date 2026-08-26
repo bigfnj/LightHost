@@ -544,3 +544,71 @@ public:
 };
 
 static ChainEditComparisonTests chainEditComparisonTests;
+
+//==============================================================================
+// Chain ordering, including the tie that migrated settings can produce.
+//==============================================================================
+class ChainOrderingTests final : public juce::UnitTest
+{
+public:
+    ChainOrderingTests()
+        : juce::UnitTest ("Chain ordering", "PluginChain") {}
+
+    void runTest() override
+    {
+        const auto first  = describe ("First",  "1.0", "C:/VST3/First.vst3");
+        const auto second = describe ("Second", "1.0", "C:/VST3/Second.vst3");
+        const auto third  = describe ("Third",  "1.0", "C:/VST3/Third.vst3");
+
+        beginTest ("plugins come back in order value order");
+        {
+            const auto ordered = Store::sortByOrder ({ { 2, third }, { 0, first }, { 1, second } });
+
+            expectEquals ((int) ordered.size(), 3);
+            expectEquals (ordered[0].name, juce::String ("First"));
+            expectEquals (ordered[1].name, juce::String ("Second"));
+            expectEquals (ordered[2].name, juce::String ("Third"));
+        }
+
+        beginTest ("an equal order value does not leave the result up to the sort");
+        {
+            // Settings migrated from 4.0.3 carry that version's time-based order
+            // values, and two plugins added inside the same second share one.
+            // std::sort leaves equal keys in an unspecified order, so a chain with
+            // a tie could come back differently on each launch.
+            const auto forwards  = Store::sortByOrder ({ { 7, first }, { 7, second }, { 7, third } });
+            const auto backwards = Store::sortByOrder ({ { 7, third }, { 7, second }, { 7, first } });
+
+            expectEquals ((int) forwards.size(), 3);
+            expectEquals ((int) backwards.size(), 3);
+
+            for (size_t i = 0; i < forwards.size(); ++i)
+                expectEquals (backwards[i].name, forwards[i].name,
+                              "input order changed the result for a tied order value");
+        }
+
+        beginTest ("a tie is broken consistently, not by input position");
+        {
+            const auto tied  = Store::sortByOrder ({ { 1, second }, { 1, first } });
+            const auto again = Store::sortByOrder ({ { 1, first }, { 1, second } });
+
+            expectEquals (again[0].name, tied[0].name);
+            expectEquals (again[1].name, tied[1].name);
+        }
+
+        beginTest ("ties do not disturb plugins that have distinct order values");
+        {
+            const auto ordered = Store::sortByOrder ({ { 5, third }, { 1, first }, { 1, second } });
+
+            expectEquals (ordered[2].name, juce::String ("Third"),
+                          "the distinctly-ordered plugin moved");
+        }
+
+        beginTest ("an empty chain sorts to nothing");
+        {
+            expect (Store::sortByOrder ({}).empty());
+        }
+    }
+};
+
+static ChainOrderingTests chainOrderingTests;

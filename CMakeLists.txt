@@ -169,6 +169,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/GainProcessorTests.cpp
         Tests/GraphRenderTests.cpp
         Tests/GraphTopologyTests.cpp
+        Tests/InstanceNameTests.cpp
         Tests/PluginChainStoreTests.cpp
         Tests/PluginStateTests.cpp
         Tests/SampleRatePolicyTests.cpp

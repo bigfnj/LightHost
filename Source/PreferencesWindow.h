@@ -61,6 +61,12 @@ public:
                              const std::vector<bool>& bypassStates,
                              const std::vector<int>& laneStates);
 
+    /** Shows the most recent problem at the top of the panel, or hides the row
+        when passed an empty string. The tray tooltip carries the same message,
+        but a tooltip is only found by someone already suspicious.
+    */
+    void setStatusMessage (const juce::String& message);
+
 private:
     std::function<void()> onCloseFn;
 
