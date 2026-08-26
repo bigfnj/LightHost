@@ -200,7 +200,10 @@ The workflow has never run, so this is preparation rather than a fix, but the ga
 were real:
 
 - **macOS is built and published**, not just tested in CI. It was absent
-  entirely, while the README advertised menu bar and AU support.
+  entirely, while the README advertised menu bar and AU support. The build is now
+  universal (`arm64;x86_64`) with a macOS 11 floor: nothing set
+  `CMAKE_OSX_ARCHITECTURES`, and GitHub's macOS runners are Apple Silicon, so the
+  published app would have refused to start for every Intel Mac owner.
 - **The licence ships with the binary.** Archives held a bare executable; the
   application is conveyed under AGPLv3, which requires the licence to accompany
   it. `license`, `agpl-3.0.txt`, `gpl.txt`, `third_party` and `README.md` are now
