@@ -147,7 +147,18 @@ private:
     */
     void scheduleSelfTestCheck()
     {
-        constexpr int kDwellMs = 1500;
+        constexpr int kDwellMs   = 1500;
+        constexpr int kOpenUIMs  = 700;
+
+        // Build the Preferences window part way through the run. It is the only
+        // window this application has and it holds every control, so constructing
+        // and tearing it down is worth exercising; nothing else in an automated
+        // run ever does. Whether it *looks* right is still a manual check.
+        juce::Timer::callAfterDelay (kOpenUIMs, [this]
+        {
+            if (iconMenu != nullptr)
+                iconMenu->showPreferencesWindow();
+        });
 
         juce::Timer::callAfterDelay (kDwellMs, [this]
         {

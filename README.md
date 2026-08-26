@@ -18,6 +18,7 @@ in [CHANGELOG.md](CHANGELOG.md); what is left before that release is in
   - sample rate and buffer size
   - plugin chain editing
   - per-plugin lane assignment
+  - a trim per lane, for balancing the parallel paths
 - Supports plugin bypass, reorder, delete, and editor opening
 - Saves plugin state, device settings, plugin order, and lane assignments
   between launches
@@ -73,6 +74,23 @@ and other virtual audio drivers work equally well.
 - Shorter lanes are delayed automatically so all lanes remain sample-aligned
   (Plugin Delay Compensation, performed by JUCE's `AudioProcessorGraph`)
 - If all plugins are bypassed, input is wired directly to output
+
+## Lane Trim
+
+Lanes are fed the same input and summed at the output, so four lanes carrying
+similar material sum coherently and arrive about 12 dB hot, and two lanes about
+6 dB. The **LANE TRIM** section in Preferences gives each lane a fader for that,
+from mute to +12 dB, unity by default so an existing setup sounds exactly as it
+did before.
+
+The trims apply as you drag them, because a level control you cannot hear while
+moving is not much use, and are written to disk when you let go. Double-click a
+fader to return it to unity. Each trim sits at its lane's summing point, after the
+last plugin on that lane, and ramps over 20 ms so a change does not click.
+
+A trim belongs to the lane, not to the plugins on it. Deleting every plugin from
+lane 2 leaves lane 2's trim where it was, ready for whatever you put there next,
+and moving a plugin to another lane hands it that lane's trim.
 
 ## Lanes and PDC
 
@@ -216,6 +234,11 @@ a corrupt settings file being clamped rather than honoured, and two invariants
 the live rewiring depends on. Every connection must name a channel the node
 actually has, and the same chain must always produce the same wiring.
 
+The lane trim is rendered rather than reasoned about: unity leaves the signal
+untouched, minus six decibels halves it, the range is clamped, a change mid-stream
+ramps rather than steps (the largest sample-to-sample jump is asserted small
+enough to be inaudible), and re-preparing does not fade the lane in.
+
 Two smaller areas cover decisions that are hard to reach through the UI: the
 sample-rate correction policy, including the bound that stops a driver which never
 settles from being asked forever, and the status sink that collects failures for
@@ -304,8 +327,7 @@ If the host crashes without a message, the log should be the first place to chec
 ## Known Limitations
 
 - Stereo-focused routing only
-- No per-lane gain or metering: parallel lanes sum at unity, so four lanes
-  carrying the same source arrive about 12 dB hot
+- No metering: the lane trims are set by ear or by looking at your output device
 - No side-chain routing
 - No MIDI routing
 - No undo/redo for chain edits

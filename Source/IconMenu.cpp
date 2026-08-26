@@ -325,6 +325,12 @@ void IconMenu::loadActivePlugins()
     inputNodeId  = kInputNodeId;
     outputNodeId = kOutputNodeId;
 
+    // One trim per lane, on reserved ids, created once here rather than allocated
+    // like plugin nodes: there are exactly kNumLanes of them and they outlive every
+    // chain edit. A lane whose trim could not be added is wired straight to the
+    // output instead, so a failure here costs the trim and not the audio.
+    createLaneGainNodes();
+
     // Wire input → output immediately so audio passes through while plugins load.
     reconnectGraph();
 
@@ -487,6 +493,71 @@ void IconMenu::restorePluginState (AudioProcessorGraph::Node& node,
 }
 
 //==============================================================================
+// Lane trims. Reserved ids well clear of the plugin ids, which are allocated from
+// 1 upwards, and of the two IO nodes.
+juce::AudioProcessorGraph::NodeID IconMenu::laneGainNodeId (int lane)
+{
+    return NodeID { 1'000'010u + static_cast<uint32> (juce::jlimit (0, lighthost::kMaxLane, lane)) };
+}
+
+void IconMenu::createLaneGainNodes()
+{
+    const ChainStore store (*getAppProperties().getUserSettings());
+
+    for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
+    {
+        auto node = graph.addNode (std::make_unique<lighthost::gain::Processor>(),
+                                   laneGainNodeId (lane));
+
+        if (node == nullptr)
+        {
+            status.report ("Lane " + juce::String (lane)
+                           + " trim could not be created; that lane runs at unity.");
+            continue;
+        }
+
+        if (auto* processor = dynamic_cast<lighthost::gain::Processor*> (node->getProcessor()))
+            processor->setGainDb (store.readLaneGainDb (lane));
+    }
+}
+
+lighthost::gain::Processor* IconMenu::laneGainProcessor (int lane)
+{
+    if (auto* node = graph.getNodeForId (laneGainNodeId (lane)))
+        return dynamic_cast<lighthost::gain::Processor*> (node->getProcessor());
+
+    return nullptr;
+}
+
+float IconMenu::getLaneGainDb (int lane) const
+{
+    const ChainStore store (*getAppProperties().getUserSettings());
+    return store.readLaneGainDb (lane);
+}
+
+void IconMenu::setLaneGainDb (int lane, float decibels)
+{
+    // Applied to the running graph immediately: this is a level control, and a
+    // fader you cannot hear while dragging is not a fader. The trim ramps
+    // internally, so no rewire and no rebuild is needed.
+    if (auto* processor = laneGainProcessor (lane))
+        processor->setGainDb (decibels);
+}
+
+void IconMenu::persistLaneGainDb (int lane, float decibels)
+{
+    // Called when the drag ends rather than on every value change: each write
+    // rewrites the whole settings document, so persisting per pixel would be
+    // hundreds of rewrites for one gesture.
+    auto* settings = getAppProperties().getUserSettings();
+    ChainStore store (*settings);
+
+    store.stageLaneGainDb (lane, decibels);
+    store.commit();
+    flushSettings (*settings, "saving a lane trim");
+}
+
+//==============================================================================
 void IconMenu::flushSettings (juce::PropertiesFile& settings, const juce::String& context)
 {
     // saveIfNeeded returns false when the file could not be written: a full disk,
@@ -613,6 +684,12 @@ void IconMenu::reconnectGraph()
     if (auto* outputNode = graph.getNodeForId (outputNodeId))
         if (auto* processor = outputNode->getProcessor())
             layout.outputNodeChannels = processor->getTotalNumInputChannels();
+
+    // A lane whose trim is missing gets a zero id, which the topology reads as
+    // "wire this lane straight to the output".
+    for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
+        if (graph.getNodeForId (laneGainNodeId (lane)) != nullptr)
+            layout.laneGainNodeIds[static_cast<size_t> (lane)] = laneGainNodeId (lane);
 
     const ChainStore store (*getAppProperties().getUserSettings());
 
@@ -1135,6 +1212,11 @@ void IconMenu::savePluginStates()
 }
 
 //==============================================================================
+void IconMenu::showPreferencesWindow()
+{
+    showPreferences();
+}
+
 void IconMenu::showPreferences()
 {
     if (preferencesWindow != nullptr)
@@ -1162,12 +1244,30 @@ void IconMenu::showPreferences()
         laneStates.push_back (store.readLane (plugin));
     }
 
+    PreferencesWindow::LaneTrim laneTrim;
+
+    for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
+        laneTrim.initialDb[static_cast<size_t> (lane)] = store.readLaneGainDb (lane);
+
+    laneTrim.onChanged = [safe] (int lane, float decibels)
+    {
+        if (auto* im = safe.getComponent())
+            im->setLaneGainDb (lane, decibels);
+    };
+
+    laneTrim.onCommitted = [safe] (int lane, float decibels)
+    {
+        if (auto* im = safe.getComponent())
+            im->persistLaneGainDb (lane, decibels);
+    };
+
     preferencesWindow = std::make_unique<PreferencesWindow> (
         deviceManager,
         knownPluginList,
         chain,
         bypassStates,
         laneStates,
+        std::move (laneTrim),
         [safe] (const std::vector<PluginDescription>& newChain,
                 const std::vector<bool>& newBypass,
                 const std::vector<int>& newLanes)
