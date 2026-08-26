@@ -63,3 +63,13 @@ SESSION_HANDOFF*.md
 
 .codex/
 SESSION_*
+
+# Per-repo agent instructions and generated context sidecars. Personal, machine
+# specific, or regenerated on demand — none of it belongs in a shared history.
+CLAUDE.local.md
+AGENTS.local.md
+AI_UNDERSTANDING*
+.aider*
+.gemini/
+.serena/
+*.agent-notes.md
