@@ -6,9 +6,11 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_core/juce_core.h>
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <set>
+#include <utility>
 #include <vector>
 
 //==============================================================================
@@ -375,6 +377,37 @@ namespace lighthost::chain
 
             settings.setValue (kFormatVersionKey, kFormatVersion);
             return migrated;
+        }
+
+        /** Orders a chain by its stored order values, breaking ties by identity.
+
+            The tie-break is load-bearing. Order values written by this version are
+            unique indices, but settings migrated from 4.0.3 carry that version's
+            `time(nullptr) + offset` values, and two plugins added within the same
+            second share one. std::sort leaves equal keys in an unspecified order,
+            so a migrated chain with a tie could come back in a different order on
+            each launch until the next Apply rewrote the values. Identity is stable
+            and unique per plugin, so ordering on it makes the result total.
+        */
+        [[nodiscard]] static std::vector<juce::PluginDescription> sortByOrder (
+            std::vector<std::pair<int, juce::PluginDescription>> entries)
+        {
+            std::sort (entries.begin(), entries.end(),
+                       [] (const auto& a, const auto& b)
+                       {
+                           if (a.first != b.first)
+                               return a.first < b.first;
+
+                           return identityOf (a.second) < identityOf (b.second);
+                       });
+
+            std::vector<juce::PluginDescription> ordered;
+            ordered.reserve (entries.size());
+
+            for (auto& entry : entries)
+                ordered.push_back (std::move (entry.second));
+
+            return ordered;
         }
 
         /** Builds the comparable form of a chain edit. Missing bypass or lane

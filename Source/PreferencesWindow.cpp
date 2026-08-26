@@ -6,6 +6,7 @@
 using namespace juce;
 
 juce::ApplicationProperties& getAppProperties();
+juce::File getLogFile();
 
 //==============================================================================
 // SectionLabel
@@ -357,6 +358,25 @@ public:
           onApplyFn      (std::move (onApply)),
           onEditPluginFn (std::move (onEditPlugin))
     {
+        // ── STATUS row ────────────────────────────────────────────────────────
+        // Hidden until something goes wrong, then it sits above everything else.
+        statusLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (12.0f)));
+        statusLabel.setColour (juce::Label::textColourId, juce::Colours::orange);
+        addChildComponent (statusLabel);
+
+        showLogButton.setButtonText ("Show Log");
+        showLogButton.setTooltip ("Opens the folder holding LightHost.log, which has the detail.");
+        showLogButton.onClick = []
+        {
+            const auto log = getLogFile();
+
+            if (log.existsAsFile())
+                log.revealToUser();
+            else
+                log.getParentDirectory().revealToUser();
+        };
+        addChildComponent (showLogButton);
+
         // ── INPUT section ─────────────────────────────────────────────────────
         addAndMakeVisible (inputSectionLabel);
         addAndMakeVisible (inputDeviceCombo);
@@ -538,38 +558,71 @@ public:
         laneTrimDirty[index] = false;
     }
 
-    void resized() override
+    /** Shows or hides the status row, and relays out around it. */
+    void setStatusMessage (const juce::String& message)
     {
-        constexpr int kPad    = 10;
-        constexpr int kSectH  = 22;
-        constexpr int kRowH   = 28;
-        constexpr int kGap    = 6;
-        constexpr int kBtnH   = 40;
-        constexpr int kMinChainH = 80;
+        const bool show = message.isNotEmpty();
 
-        // The virtual-input hint only takes up space while it is visible.
+        statusLabel.setText (show ? "Problem: " + message : juce::String(),
+                             juce::dontSendNotification);
+        statusLabel.setVisible (show);
+        showLogButton.setVisible (show);
+
+        resized();
+    }
+
+    /** Height of everything except the chain viewport, which is the only section
+        that stretches. Depends on which optional rows are showing.
+    */
+    [[nodiscard]] int fixedLayoutHeight() const
+    {
         #if JUCE_WINDOWS
-        const int kHintH = virtualInputHint.isVisible() ? kRowH + kGap : 0;
+        const int hintH = virtualInputHint.isVisible() ? kRowH + kGap : 0;
         #else
-        const int kHintH = 0;
+        const int hintH = 0;
         #endif
 
-        // Fixed-height sections below/above the chain viewport
-        const int kFixedAboveChain = kPad
+        const int statusH = statusLabel.isVisible() ? kRowH + kGap : 0;
+
+        const int aboveChain = kPad
+            + statusH                           // status row, when something failed
             + kSectH + kGap + kRowH + kGap     // INPUT
-            + kHintH                            // virtual-input hint, when shown
+            + hintH                             // virtual-input hint, when shown
             + kSectH + kGap;                    // AUDIO CHAIN label
-        const int kFixedBelowChain = kGap + kRowH + kGap           // Add Plugin row
-            + kSectH + kGap + kRowH + kGap                          // LANE TRIM
-            + kSectH + kGap + kRowH + kGap                          // OUTPUT
-            + kSectH + kGap + kRowH + kGap + kRowH + kGap + kRowH + kGap  // DEVICE SETTINGS (API + rate + buffer)
+
+        const int belowChain = kGap + kRowH + kGap           // Add Plugin row
+            + kSectH + kGap + kRowH + kGap                    // LANE TRIM
+            + kSectH + kGap + kRowH + kGap                    // OUTPUT
+            + kSectH + kGap + kRowH + kGap + kRowH + kGap + kRowH + kGap  // DEVICE SETTINGS
             + kBtnH + kPad;
 
-        const int chainViewH = juce::jmax (
-            kMinChainH,
-            getHeight() - kFixedAboveChain - kFixedBelowChain);
+        return aboveChain + belowChain;
+    }
+
+    /** The shortest this panel can be laid out at without a section losing its
+        height. The scrolling viewport that holds it never sizes it below this, so
+        a window too short for the layout scrolls instead of quietly eating the
+        Apply button.
+    */
+    [[nodiscard]] int getPreferredHeight() const
+    {
+        return fixedLayoutHeight() + kMinChainH;
+    }
+
+    void resized() override
+    {
+        const int chainViewH = juce::jmax (kMinChainH, getHeight() - fixedLayoutHeight());
 
         auto area = getLocalBounds().reduced (kPad, kPad);
+
+        // ── STATUS ─────────────────────────────────────────────────────────────
+        if (statusLabel.isVisible())
+        {
+            auto row = area.removeFromTop (kRowH);
+            showLogButton.setBounds (row.removeFromRight (90).reduced (0, 3));
+            statusLabel.setBounds (row.reduced (2, 0));
+            area.removeFromTop (kGap);
+        }
 
         // ── INPUT ──────────────────────────────────────────────────────────────
         inputSectionLabel.setBounds (area.removeFromTop (kSectH));
@@ -692,6 +745,19 @@ private:
     AudioChainListComponent chainList;
     juce::Viewport          chainViewport;
     juce::TextButton        addPluginButton;
+
+    // STATUS
+    juce::Label      statusLabel;
+    juce::TextButton showLogButton;
+
+    // Layout metrics, shared by resized() and the height it reports to its
+    // scrolling viewport, so the two cannot disagree.
+    static constexpr int kPad       = 10;
+    static constexpr int kSectH     = 22;
+    static constexpr int kRowH      = 28;
+    static constexpr int kGap       = 6;
+    static constexpr int kBtnH      = 40;
+    static constexpr int kMinChainH = 80;
 
     // LANE TRIM
     SectionLabel  laneTrimSectionLabel { "  LANE TRIM" };
@@ -1094,6 +1160,47 @@ private:
 };
 
 //==============================================================================
+// Holds the panel and scrolls it when the window is shorter than the layout needs.
+//
+// resized() lays out a fixed stack with removeFromTop, so a window shorter than
+// the stack does not compress it: the sections at the end get whatever is left,
+// which is nothing, and the Apply button disappears. Raising the window's minimum
+// height fixes that until the next section is added and the arithmetic has to be
+// redone. Scrolling retires the problem instead.
+//==============================================================================
+class PreferencesPanelViewport final : public juce::Viewport
+{
+public:
+    explicit PreferencesPanelViewport (PreferencesContentComponent* panelToOwn)
+        : panel (panelToOwn)
+    {
+        setViewedComponent (panel, true);   // the viewport owns it
+        setScrollBarsShown (true, false);
+    }
+
+    void resized() override
+    {
+        juce::Viewport::resized();
+
+        if (panel == nullptr)
+            return;
+
+        // The scrollbar's width is decided from the height the panel wants, which
+        // does not depend on the width, so this cannot oscillate.
+        const int preferred = panel->getPreferredHeight();
+        const bool needsScrollBar = preferred > getHeight();
+        const int width = getWidth() - (needsScrollBar ? getScrollBarThickness() : 0);
+
+        panel->setSize (juce::jmax (200, width), juce::jmax (getHeight(), preferred));
+    }
+
+    PreferencesContentComponent* panel = nullptr;
+
+private:
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreferencesPanelViewport)
+};
+
+//==============================================================================
 // PreferencesWindow
 //==============================================================================
 PreferencesWindow::PreferencesWindow (
@@ -1131,11 +1238,16 @@ PreferencesWindow::PreferencesWindow (
     constexpr int kDefaultWidth  = 520;
     constexpr int kDefaultHeight = 650;
 
-    content->setSize (kDefaultWidth, kDefaultHeight);
-    setContentOwned (content, true);
+    // The panel lives inside a viewport that never sizes it below the height its
+    // layout needs, so a short window scrolls rather than losing its lower
+    // sections. The minimum below is now about comfort, not correctness.
+    auto* scroller = new PreferencesPanelViewport (content);
+    scroller->setSize (kDefaultWidth, kDefaultHeight);
+
+    setContentOwned (scroller, true);
     setUsingNativeTitleBar (true);
     setResizable (true, false);
-    setResizeLimits (440, 600, 900, 1100);
+    setResizeLimits (440, 400, 900, 1100);
     centreWithSize (kDefaultWidth, kDefaultHeight);
     setVisible (true);
 }
@@ -1151,6 +1263,16 @@ void PreferencesWindow::refreshPluginChain (const std::vector<juce::PluginDescri
                                              const std::vector<bool>& bypassStates,
                                              const std::vector<int>& laneStates)
 {
-    if (auto* content = dynamic_cast<PreferencesContentComponent*> (getContentComponent()))
-        content->setChain (chain, bypassStates, laneStates);
+    // The window's content is the scrolling viewport now, and the panel is inside
+    // it, so this reaches one level further down than it used to.
+    if (auto* scroller = dynamic_cast<PreferencesPanelViewport*> (getContentComponent()))
+        if (scroller->panel != nullptr)
+            scroller->panel->setChain (chain, bypassStates, laneStates);
+}
+
+void PreferencesWindow::setStatusMessage (const juce::String& message)
+{
+    if (auto* scroller = dynamic_cast<PreferencesPanelViewport*> (getContentComponent()))
+        if (scroller->panel != nullptr)
+            scroller->panel->setStatusMessage (message);
 }

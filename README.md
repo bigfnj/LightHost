@@ -369,8 +369,22 @@ that string was thrown away, and every one of the thirteen `saveIfNeeded()` call
 ignored its result, so a full disk or a locked settings file lost every edit
 silently while the application went on looking healthy.
 
-The log still holds the full history. The tooltip holds the most recent problem,
-because it is the one surface that is always there.
+The same message appears at the top of Preferences while a problem stands, with a
+**Show Log** button beside it, since a tooltip is only found by someone who already
+suspects something. The log holds the full history and the detail.
+
+## Running More Than One Instance
+
+`Light Host -multi-instance=NAME` starts a second, independent copy with its own
+settings file, so you can run one chain on a microphone and another on system
+audio without them fighting over one configuration.
+
+The name is used in the settings filename, so it is reduced to letters, digits,
+hyphens and underscores, and capped at 32 characters. Anything else is dropped: a
+name containing a path separator would otherwise write outside the settings
+folder, and one containing a character the filesystem rejects would produce a file
+that could never be saved. A name that survives sanitising to nothing becomes
+`instance` rather than falling back to the main configuration.
 
 ### Chain settings survive a plugin update
 

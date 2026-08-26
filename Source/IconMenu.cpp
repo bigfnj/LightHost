@@ -185,8 +185,15 @@ IconMenu::IconMenu()
     // Use the free function addDefaultFormatsToManager() instead.
     addDefaultFormatsToManager (formatManager);
 
-    // Any problem reported from here on shows up in the tray tooltip.
-    status.onChange = [this] { refreshTooltip(); };
+    // Any problem reported from here on shows up in the tray tooltip, and in the
+    // Preferences window when it happens to be open.
+    status.onChange = [this]
+    {
+        refreshTooltip();
+
+        if (preferencesWindow != nullptr)
+            preferencesWindow->setStatusMessage (status.mostRecent());
+    };
 
     // Audio device initialization. initialise returns a description of why it
     // could not open a device, which was previously discarded: the app then looked
@@ -828,15 +835,8 @@ const std::vector<PluginDescription>& IconMenu::getTimeSortedList() const
     for (int i = 0; i < types.size(); ++i)
         orderedTypes.emplace_back (store.readOrder (types[i]), types[i]);
 
-    std::sort (orderedTypes.begin(), orderedTypes.end(),
-               [] (const auto& a, const auto& b) { return a.first < b.first; });
-
-    sortedPluginCache.clear();
-    sortedPluginCache.reserve (orderedTypes.size());
-    for (auto& [order, pd] : orderedTypes)
-        sortedPluginCache.push_back (std::move (pd));
-
-    sortedCacheDirty = false;
+    sortedPluginCache = ChainStore::sortByOrder (std::move (orderedTypes));
+    sortedCacheDirty  = false;
     return sortedPluginCache;
 }
 
@@ -1305,6 +1305,10 @@ void IconMenu::showPreferences()
                 });
             }
         });
+
+    // Whatever has already gone wrong is shown as soon as the window opens, not
+    // only when the next thing goes wrong.
+    preferencesWindow->setStatusMessage (status.mostRecent());
 }
 
 void IconMenu::refreshPreferencesIfOpen()
