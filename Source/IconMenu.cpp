@@ -2,6 +2,7 @@
 #include "GraphTopology.hpp"
 #include "PluginChainStore.hpp"
 #include "PluginState.hpp"
+#include "SampleRatePolicy.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
 #include <BinaryData.h>
@@ -655,29 +656,39 @@ void IconMenu::autoMatchSampleRate()
         return;
 
     auto setup = deviceManager.getAudioDeviceSetup();
-    const auto available = device->getAvailableSampleRates();
 
-    // If the current rate is already supported, nothing to do.
-    if (available.contains (setup.sampleRate))
-        return;
+    const auto decision = lighthost::samplerate::decide (setup.sampleRate,
+                                                         device->getAvailableSampleRates(),
+                                                         sampleRateCorrections);
 
-    // Priority list: prefer studio-standard rates, fall back to whatever the device offers.
-    static constexpr double kPreferred[] = { 48000.0, 44100.0, 96000.0, 88200.0, 192000.0, 32000.0 };
-    for (double rate : kPreferred)
+    if (decision.resetAttempts)
+        sampleRateCorrections = 0;
+
+    switch (decision.action)
     {
-        if (available.contains (rate))
-        {
-            setup.sampleRate = rate;
+        case lighthost::samplerate::Action::keepCurrentRate:
+            return;
+
+        case lighthost::samplerate::Action::giveUp:
+            // Logged once per episode: the counter only advances on a request, so
+            // this cannot repeat until the device settles and goes wrong again.
+            ++sampleRateCorrections;
+            juce::Logger::writeToLog ("IconMenu: giving up on the sample rate after "
+                                      + juce::String (lighthost::samplerate::kMaxCorrections)
+                                      + " attempts. The driver keeps reporting "
+                                      + juce::String (setup.sampleRate, 0)
+                                      + "Hz, which it also says it does not support.");
+            return;
+
+        case lighthost::samplerate::Action::applyRate:
+            ++sampleRateCorrections;
+            juce::Logger::writeToLog ("IconMenu: sample rate " + juce::String (setup.sampleRate, 0)
+                                      + "Hz is unsupported; asking for "
+                                      + juce::String (decision.rate, 0) + "Hz (attempt "
+                                      + juce::String (sampleRateCorrections) + ")");
+            setup.sampleRate = decision.rate;
             deviceManager.setAudioDeviceSetup (setup, true);
             return;
-        }
-    }
-
-    // Last resort: take whatever the device reports as its highest rate.
-    if (! available.isEmpty())
-    {
-        setup.sampleRate = available.getLast();
-        deviceManager.setAudioDeviceSetup (setup, true);
     }
 }
 
@@ -740,8 +751,11 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
         if (isHandlingDeviceChange)
             return;
 
-        // ScopedValueSetter ensures the flag is cleared even if an exception
-        // is thrown — prevents permanently silencing future device-change callbacks.
+        // Covers a synchronous re-entry only, and cheaply. The recursion that
+        // matters is asynchronous and is bounded by the attempt counter inside
+        // autoMatchSampleRate instead. ScopedValueSetter clears the flag even if
+        // something below throws, so a throw cannot permanently silence future
+        // device changes.
         const juce::ScopedValueSetter<bool> guard (isHandlingDeviceChange, true, false);
 
         reconnectGraph();

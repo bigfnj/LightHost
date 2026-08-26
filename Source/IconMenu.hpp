@@ -100,7 +100,16 @@ private:
 
     mutable std::vector<juce::PluginDescription> sortedPluginCache;
     mutable bool sortedCacheDirty = true;
+
+    // Stops a *synchronous* re-entry into the device-change handler. It cannot
+    // stop the recursion that actually happens: change broadcasts are async, so
+    // the second callback arrives after this has already been cleared. What bounds
+    // that is sampleRateCorrections, see Source/SampleRatePolicy.hpp.
     bool isHandlingDeviceChange = false;
+
+    // Corrective sample-rate requests made since the device last reported a rate
+    // it supports. Reset the moment it settles.
+    int sampleRateCorrections = 0;
 
     // Background plugin loading. Plugin instantiation must happen on the message
     // thread — JUCE loads the DLL and calls the plugin factory there no matter

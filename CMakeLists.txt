@@ -170,6 +170,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/GraphTopologyTests.cpp
         Tests/PluginChainStoreTests.cpp
         Tests/PluginStateTests.cpp
+        Tests/SampleRatePolicyTests.cpp
         Tests/StubProcessors.hpp
     )
 
