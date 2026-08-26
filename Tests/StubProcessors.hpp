@@ -104,6 +104,68 @@ namespace lighthost::test
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LatencyStub)
     };
 
+    /** A latency-reporting plugin that exposes its own bypass parameter.
+
+        This is the other half of bypass handling, and the half that is easy to
+        get wrong. The graph only bypasses a node itself when the processor has no
+        bypass parameter (juce_AudioProcessorGraph.cpp:893). When it has one,
+        setBypassed just sets that parameter: the plugin keeps being called and
+        keeps its latency, so the host must keep compensating for it. A host that
+        treated a bypassed plugin as zero latency would pull that lane out of time
+        with the others, which is silent phase cancellation rather than an obvious
+        failure.
+    */
+    class BypassParameterStub final : public juce::AudioProcessor
+    {
+    public:
+        explicit BypassParameterStub (int latencySamples)
+            : AudioProcessor (BusesProperties()
+                                  .withInput  ("In",  juce::AudioChannelSet::stereo(), true)
+                                  .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
+              delay (latencySamples)
+        {
+            addParameter (bypass = new juce::AudioParameterBool ({ "bypass", 1 }, "Bypass", false));
+            setLatencySamples (latencySamples);
+        }
+
+        juce::AudioProcessorParameter* getBypassParameter() const override { return bypass; }
+
+        const juce::String getName() const override        { return "BypassParameterStub"; }
+        bool acceptsMidi() const override                  { return false; }
+        bool producesMidi() const override                 { return false; }
+        double getTailLengthSeconds() const override       { return 0.0; }
+        int getNumPrograms() override                       { return 1; }
+        int getCurrentProgram() override                    { return 0; }
+        void setCurrentProgram (int) override               {}
+        const juce::String getProgramName (int) override    { return {}; }
+        void changeProgramName (int, const juce::String&) override {}
+        bool hasEditor() const override                     { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        void getStateInformation (juce::MemoryBlock&) override {}
+        void setStateInformation (const void*, int) override  {}
+        void releaseResources() override                    {}
+
+        void prepareToPlay (double rate, int maximumExpectedSamplesPerBlock) override
+        {
+            delay.prepareToPlay (rate, maximumExpectedSamplesPerBlock);
+        }
+
+        using juce::AudioProcessor::processBlock;
+
+        void processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi) override
+        {
+            // Delays either way. A plugin that reports latency must produce it
+            // whether its own bypass is engaged or not.
+            delay.processBlock (audio, midi);
+        }
+
+    private:
+        LatencyStub delay;
+        juce::AudioParameterBool* bypass = nullptr;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BypassParameterStub)
+    };
+
     /** Passes audio through with a chosen number of input and output channels.
 
         For wiring tests: a real chain contains mono plugins, and the host has to

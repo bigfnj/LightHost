@@ -113,6 +113,16 @@ namespace
             connect (previous, output);
         }
 
+        /** One lane holding a single plugin that owns its bypass parameter. */
+        void addLaneWithBypassParameter (int latency, bool bypassed)
+        {
+            auto node = graph.addNode (std::make_unique<BypassParameterStub> (latency));
+            node->setBypassed (bypassed);
+
+            connect (input, node->nodeID);
+            connect (node->nodeID, output);
+        }
+
         void connect (Graph::NodeID from, Graph::NodeID to)
         {
             for (int ch = 0; ch < 2; ++ch)
@@ -207,6 +217,33 @@ public:
 
             if (summed.has_value())
                 expectEquals (*summed, 256);
+        }
+
+        beginTest ("a lane bypassed through the plugin's own parameter stays aligned");
+        {
+            // The other bypass branch. With a bypass parameter present the graph
+            // does not bypass the node: the plugin keeps processing and keeps its
+            // latency, so the compensation must keep applying. Treating this as a
+            // zero-latency lane would pull it out of time with the other one and
+            // cancel rather than sum, which is why the assertion below is on the
+            // summed amplitude.
+            StereoGraph g;
+            g.addLaneWithBypassParameter (256, /*bypassed*/ false);
+            g.addLaneWithBypassParameter (256, /*bypassed*/ true);
+            g.prepare();
+
+            const auto signal = render (g.graph, 8);
+            logMessage ("bypass-parameter lane, non-zero samples:" + describeHits (signal));
+
+            const auto summed = findImpulse (signal, 1.5f);
+            expect (summed.has_value(),
+                    "a lane bypassed through its own parameter fell out of alignment");
+
+            if (summed.has_value())
+                expectEquals (*summed, 256);
+
+            expectEquals (g.graph.getLatencySamples(), 256,
+                          "a plugin bypassed through its own parameter keeps its latency");
         }
     }
 
