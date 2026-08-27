@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginChainStore.hpp"
+#include "PluginStateVault.hpp"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_core/juce_core.h>
@@ -59,7 +60,34 @@ namespace lighthost::selftest
         return description;
     }
 
-    [[nodiscard]] inline juce::String seedState() { return "c2VsZi10ZXN0LXN0YXRl"; }
+    /** The bytes the seeded plugin pretends to have saved. */
+    [[nodiscard]] inline juce::String seedStateBytes() { return "self-test-state"; }
+
+    /** The seeded state as 4.0.3 really wrote it.
+
+        This has to be whatever juce::MemoryBlock::toBase64Encoding produces --
+        a decimal length, a dot, then the data -- and not standard base64. It was
+        a hand-written standard-base64 string until 5.0.0, which decoded to
+        nothing, so every check below passed through the "could not decode, leave
+        it alone" path and the migration this seeds was never actually exercised.
+    */
+    [[nodiscard]] inline juce::String seedState()
+    {
+        const auto text = seedStateBytes();
+        const juce::MemoryBlock block (text.toRawUTF8(),
+                                       static_cast<size_t> (text.getNumBytesAsUTF8()));
+        return block.toBase64Encoding();
+    }
+
+    /** Where the state files live for a given settings file. Mirrors
+        IconMenu::stateVault, keyed off the settings filename so a -multi-instance
+        run has its own directory.
+    */
+    [[nodiscard]] inline lighthost::state::Vault vaultFor (const juce::File& settingsFile)
+    {
+        return lighthost::state::Vault (
+            settingsFile.getSiblingFile (settingsFile.getFileNameWithoutExtension() + ".state"));
+    }
 
     /** The 4.0.3 key format, written out here rather than borrowed from the store,
         so this seeds what that version really wrote.
@@ -119,8 +147,14 @@ namespace lighthost::selftest
         expectInt (fields::bypass, 1,    "bypass");
         expectInt (fields::nodeId, 77,   "node id");
 
-        if (settings.getValue (Store::keyFor (plugin, fields::state)) != seedState())
-            failures.add ("the saved plugin state did not survive migration");
+        // Since 5.0.0 the state deliberately does not stay here: it is moved into
+        // a file of its own, because keeping multi-megabyte blobs in a document
+        // that is rewritten on every save is what made a bypass toggle write
+        // seven megabytes. That the bytes arrived intact is checked against the
+        // vault in checkSeededStateSurvived, which has the settings path and can
+        // therefore find it.
+        if (settings.containsKey (Store::keyFor (plugin, fields::state)))
+            failures.add ("the saved plugin state was not moved out of the settings document");
 
         if (settings.getIntValue ("chainSettingsVersion", 0) != Store::kFormatVersion)
             failures.add ("the settings format version was not recorded, so migration will run again");
@@ -129,9 +163,13 @@ namespace lighthost::selftest
     }
 
     /** After shutdown, with the settings file closed: the seeded plugin never
-        loaded, so its saved state must still be on disk. Overwriting it with a
-        plugin's factory defaults is the data loss guarded against in
-        PluginState.hpp, and this is the end-to-end check of it.
+        loaded, so its saved state must still be on disk, byte for byte.
+
+        Overwriting it with a plugin's factory defaults is the data loss guarded
+        against in PluginState.hpp, and this is the end-to-end check of it. Since
+        5.0.0 it also covers the move into the state vault: the bytes have to come
+        back out of the file the migration wrote, which is the only automated
+        check that the migration's happy path runs at all.
     */
     [[nodiscard]] inline juce::StringArray checkSeededStateSurvived (const juce::File& settingsFile)
     {
@@ -143,8 +181,23 @@ namespace lighthost::selftest
             return failures;
         }
 
-        if (! settingsFile.loadFileAsString().contains (seedState()))
-            failures.add ("the saved state of a plugin that never loaded was overwritten");
+        const auto vault    = vaultFor (settingsFile);
+        const auto identity = lighthost::chain::Store::identityOf (seedDescription());
+        const auto stored   = vault.read (identity);
+
+        if (stored.getSize() == 0)
+        {
+            failures.add ("the saved state of a plugin that never loaded is not in the vault: "
+                          "expected " + vault.fileFor (identity).getFullPathName());
+            return failures;
+        }
+
+        const juce::String recovered (static_cast<const char*> (stored.getData()),
+                                     stored.getSize());
+
+        if (recovered != seedStateBytes())
+            failures.add ("the saved state of a plugin that never loaded came back as '"
+                          + recovered + "' rather than '" + seedStateBytes() + "'");
 
         return failures;
     }

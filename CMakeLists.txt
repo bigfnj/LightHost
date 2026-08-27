@@ -87,6 +87,8 @@ juce_add_gui_app(LightHost
 # ── Source files ────────────────────────────────────────────────────────────────
 target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
+    Source/LookAndFeel.hpp
+    Source/PluginStateVault.hpp
     Source/SelfTest.hpp
     Source/IconMenu.cpp
     Source/PluginWindow.cpp
@@ -207,6 +209,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/InstanceNameTests.cpp
         Tests/PluginChainStoreTests.cpp
         Tests/PluginStateTests.cpp
+        Tests/PluginStateVaultTests.cpp
         Tests/SampleRatePolicyTests.cpp
         Tests/StatusSinkTests.cpp
         Tests/StubProcessors.hpp

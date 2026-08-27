@@ -22,9 +22,38 @@ namespace lighthost::state
         failed         // decode produced nothing, or setStateInformation threw
     };
 
-    /** Applies base64-encoded state to a processor. Never throws: a throwing
-        plugin yields RestoreResult::failed, which the caller must treat as
-        "do not overwrite the saved blob".
+    /** Applies raw state bytes to a processor. Never throws: a throwing plugin
+        yields RestoreResult::failed, which the caller must treat as "do not
+        overwrite the saved blob".
+
+        This is the form state now arrives in. Since 5.0.0 it is read from a file
+        per plugin rather than base64 out of the settings document, so decoding
+        is no longer part of restoring.
+    */
+    [[nodiscard]] inline RestoreResult restoreInto (juce::AudioProcessor& processor,
+                                                    const juce::MemoryBlock& state)
+    {
+        if (state.getSize() == 0)
+            return RestoreResult::nothingSaved;
+
+        try
+        {
+            processor.setStateInformation (state.getData(), static_cast<int> (state.getSize()));
+            return RestoreResult::restored;
+        }
+        catch (...)
+        {
+            return RestoreResult::failed;
+        }
+    }
+
+    /** Applies base64-encoded state, as stored before 5.0.0. Kept because the
+        migration reads that format, and because state that could not be moved
+        out of the settings file is still loaded from it.
+
+        Note the asymmetry with the overload above: state that fails to decode is
+        `failed`, not `nothingSaved`. Something was stored and could not be used,
+        and the caller must not overwrite it.
     */
     [[nodiscard]] inline RestoreResult restoreInto (juce::AudioProcessor& processor,
                                                     const juce::String& base64State)
@@ -32,20 +61,12 @@ namespace lighthost::state
         if (base64State.isEmpty())
             return RestoreResult::nothingSaved;
 
-        try
-        {
-            juce::MemoryBlock block;
-            block.fromBase64Encoding (base64State);
+        juce::MemoryBlock block;
+        block.fromBase64Encoding (base64State);
 
-            if (block.getSize() == 0)
-                return RestoreResult::failed;
-
-            processor.setStateInformation (block.getData(), static_cast<int> (block.getSize()));
-            return RestoreResult::restored;
-        }
-        catch (...)
-        {
+        if (block.getSize() == 0)
             return RestoreResult::failed;
-        }
+
+        return restoreInto (processor, block);
     }
 }

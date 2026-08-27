@@ -42,7 +42,16 @@ public:
 
         setUsingNativeTitleBar (true);
         setResizable (true, false);
-        setResizeLimits (300, 400, 800, 1500);
+
+        // The maximum was a hard-coded 800x1500 inherited from 2016, which capped
+        // the window far below any modern display and truncated the Description
+        // column. Derive it from the whole desktop so a wide window is possible on
+        // a multi-monitor setup and the cap is never what stops a resize. The
+        // minimums are unchanged: they are what the table needs to stay usable.
+        const auto desktop = Desktop::getInstance().getDisplays().getTotalBounds (true);
+        setResizeLimits (300, 400,
+                         jmax (300, desktop.getWidth()),
+                         jmax (400, desktop.getHeight()));
         setTopLeftPosition (60, 60);
 
         restoreWindowStateFromString (getAppProperties().getUserSettings()->getValue ("listWindowPos"));
@@ -101,10 +110,47 @@ private:
                             browseAndScan();
                     });
             };
+
+            // juce::PluginListComponent hard-codes setRowHeight(20) and
+            // setHeaderHeight(22) in its own constructor. Those two metrics are
+            // most of why this table reads as cramped, and a look and feel is
+            // never consulted about them, so they are raised here, where the
+            // component is actually made.
+            getTableListBox().setRowHeight (26);
+            getTableListBox().setHeaderHeight (28);
+        }
+
+        void resized() override
+        {
+            PluginListComponent::resized();
+
+            // JUCE gives the Options button a 24px strip and then calls
+            // changeWidthToFitText on it, which shrinks it to the width of its
+            // own label. That leaves the smallest control in the application
+            // sitting in the corner as an awkward click target. Lay it out at a
+            // deliberate size instead, and hand the table back the difference.
+            //
+            // The base call above still runs, so any child JUCE adds to this
+            // component in a later version is still positioned by JUCE; only the
+            // two children it lays out today are overridden here.
+            auto bounds = getLocalBounds().reduced (kListMargin);
+            auto strip  = bounds.removeFromBottom (kOptionsHeight);
+
+            getOptionsButton().setBounds (strip.removeFromLeft (kOptionsWidth));
+
+            bounds.removeFromBottom (kOptionsGap);
+            getTableListBox().setBounds (bounds);
         }
 
     private:
         static constexpr int kScanCustomFolderID = 9999;
+
+        // kListMargin matches PluginListComponent::resized, so the table keeps
+        // the inset it already had; only the strip below it belongs to us.
+        static constexpr int kListMargin    = 2;
+        static constexpr int kOptionsWidth  = 110;
+        static constexpr int kOptionsHeight = 30;
+        static constexpr int kOptionsGap    = 6;
 
         AudioPluginFormatManager&    formatManager;
         KnownPluginList&             knownList;
@@ -239,6 +285,8 @@ IconMenu::IconMenu()
         flushSettings (*settings, "chain settings migration");
     }
 
+    migrateStateToVault();
+
     loadActivePlugins();
     activePluginList.addChangeListener (this);
 
@@ -350,6 +398,8 @@ void IconMenu::loadActivePlugins()
 
     pendingLoads.reserve (sorted.size());
 
+    const auto vault = stateVault();
+
     for (const auto& plugin : sorted)
     {
         auto nodeIdVal = store.readNodeId (plugin);
@@ -360,8 +410,21 @@ void IconMenu::loadActivePlugins()
             store.stageNodeId (plugin, nodeIdVal);
         }
 
+        auto savedState = vault.read (ChainStore::identityOf (plugin));
+
+        if (savedState.getSize() == 0)
+        {
+            // Falls back to the pre-5.0.0 key, so a migration that could not
+            // write its file presents as a plugin that still has its preset
+            // rather than one that lost it.
+            const auto legacy = store.readState (plugin);
+
+            if (legacy.isNotEmpty())
+                savedState.fromBase64Encoding (legacy);
+        }
+
         pendingLoads.push_back ({ plugin,
-                                  store.readState (plugin),
+                                  std::move (savedState),
                                   static_cast<uint32> (nodeIdVal) });
     }
 
@@ -420,7 +483,7 @@ void IconMenu::loadNextPlugin()
 void IconMenu::onPluginInstanceReady (std::unique_ptr<AudioProcessor> instance,
                                       AudioProcessorGraph::NodeID nodeId,
                                       int generation,
-                                      const juce::String& savedState)
+                                      const juce::MemoryBlock& savedState)
 {
     if (generation != pluginLoadGeneration)
         return;  // stale result — a newer load supersedes this one and owns the chain
@@ -473,13 +536,13 @@ void IconMenu::onPluginInstanceReady (std::unique_ptr<AudioProcessor> instance,
     loadNextPlugin();
 }
 
-// Restores base64 saved state into a live graph node. On failure the node keeps
-// its factory defaults and its id is recorded in statesNotRestored, so
+// Restores saved state into a live graph node. On failure the node keeps its
+// factory defaults and its id is recorded in statesNotRestored, so
 // savePluginStates() will not overwrite the good blob. The restore itself lives
 // in PluginState.hpp so its failure handling is unit tested.
 void IconMenu::restorePluginState (AudioProcessorGraph::Node& node,
                                    AudioProcessorGraph::NodeID nodeId,
-                                   const juce::String& savedState)
+                                   const juce::MemoryBlock& savedState)
 {
     auto* processor = node.getProcessor();
     if (processor == nullptr)
@@ -575,6 +638,87 @@ void IconMenu::flushSettings (juce::PropertiesFile& settings, const juce::String
                        + "). Recent changes may be lost when Light Host closes.");
 }
 
+lighthost::state::Vault IconMenu::stateVault() const
+{
+    const auto settingsFile = getAppProperties().getUserSettings()->getFile();
+
+    return lighthost::state::Vault (
+        settingsFile.getSiblingFile (settingsFile.getFileNameWithoutExtension() + ".state"));
+}
+
+//==============================================================================
+// Moves pre-5.0.0 state out of the settings document, one plugin at a time.
+//
+// Order matters and is the whole safety property: the file is written, then read
+// back and checked, and only then is the settings key dropped. A migration that
+// deletes first and writes second loses presets the moment a disk is full.
+void IconMenu::migrateStateToVault()
+{
+    auto* settings = getAppProperties().getUserSettings();
+    ChainStore store (*settings);
+    const auto vault = stateVault();
+
+    int moved  = 0;
+    int stayed = 0;
+
+    for (const auto& plugin : activePluginList.getTypes())
+    {
+        const auto legacy = store.readState (plugin);
+
+        if (legacy.isEmpty())
+            continue;
+
+        MemoryBlock block;
+        block.fromBase64Encoding (legacy);
+
+        if (block.getSize() == 0)
+        {
+            // Undecodable. Leave it: it is the only copy there is.
+            ++stayed;
+            continue;
+        }
+
+        const auto identity = ChainStore::identityOf (plugin);
+
+        if (vault.write (identity, block)
+            && vault.read (identity).getSize() == block.getSize())
+        {
+            store.stageState (plugin, {});
+            ++moved;
+        }
+        else
+        {
+            ++stayed;
+        }
+    }
+
+    if (moved > 0)
+    {
+        store.commit();
+        flushSettings (*settings, "moving plugin states out of the settings file");
+
+        juce::Logger::writeToLog ("IconMenu: moved saved state for " + juce::String (moved)
+                                  + " plugin(s) into " + vault.getDirectory().getFullPathName());
+    }
+
+    if (stayed > 0)
+    {
+        juce::Logger::writeToLog ("IconMenu: could not move saved state for "
+                                  + juce::String (stayed) + " plugin(s); it stays in the "
+                                  "settings file and is still loaded from there");
+
+        status.report (juce::String (stayed) + " plugin state(s) could not be moved out of the "
+                       "settings file. Nothing was lost - they are still loaded from it.");
+    }
+}
+
+void IconMenu::reportStatus (const juce::String& message)
+{
+    // status.onChange already fans out to the tray tooltip and the Preferences
+    // status row, so reporting is all this needs to do.
+    status.report (message);
+}
+
 void IconMenu::refreshTooltip()
 {
     const auto name = JUCEApplication::getInstance()->getApplicationName();
@@ -640,6 +784,14 @@ void IconMenu::onAllPluginsLoaded (int generation)
     reconnectGraph();
     refreshTooltip();
     juce::Logger::writeToLog ("IconMenu: loadActivePlugins complete");
+
+    if (applyInitiatedLoad)
+    {
+        applyInitiatedLoad = false;
+
+        if (preferencesWindow != nullptr)
+            preferencesWindow->setApplyFeedback ("Chain updated");
+    }
 }
 
 //==============================================================================
@@ -1143,8 +1295,14 @@ void IconMenu::deletePluginStates()
     auto* settings = getAppProperties().getUserSettings();
     ChainStore store (*settings);
 
+    const auto vault = stateVault();
+
     for (const auto& plugin : list)
-        store.stageState (plugin, {});
+    {
+        store.stageState (plugin, {});   // clears any un-migrated legacy blob
+        (void) vault.erase (ChainStore::identityOf (plugin));
+        lastWrittenState.erase (ChainStore::identityOf (plugin));
+    }
 
     store.commit();
     flushSettings (*settings, "clearing saved plugin states");
@@ -1155,6 +1313,7 @@ void IconMenu::savePluginStates()
     const auto& list = getTimeSortedList();
     auto* settings = getAppProperties().getUserSettings();
     ChainStore store (*settings);
+    const auto vault = stateVault();
 
     for (const auto& plugin : list)
     {
@@ -1181,7 +1340,33 @@ void IconMenu::savePluginStates()
         {
             MemoryBlock savedStateBinary;
             node->getProcessor()->getStateInformation (savedStateBinary);
-            store.stageState (plugin, savedStateBinary.toBase64Encoding());
+
+            const auto identity    = ChainStore::identityOf (plugin);
+            const auto print       = lighthost::state::Vault::fingerprint (savedStateBinary);
+            const auto alreadyHere = lastWrittenState.find (identity);
+
+            // Unchanged bytes are not rewritten. Before 5.0.0 every save wrote
+            // every plugin, so one bypass toggle rewrote the whole document;
+            // now a save that changed nothing touches no files at all.
+            if (alreadyHere != lastWrittenState.end()
+                && alreadyHere->second == print
+                && vault.has (identity))
+                continue;
+
+            if (vault.write (identity, savedStateBinary))
+            {
+                lastWrittenState[identity] = print;
+
+                // The pre-5.0.0 blob is only dropped once its replacement is on
+                // disk, so an interrupted upgrade never leaves neither copy.
+                store.stageState (plugin, {});
+            }
+            else
+            {
+                juce::Logger::writeToLog ("Could not write state file for " + plugin.name);
+                status.report ("Could not save settings for " + plugin.name
+                               + ". Its previously saved settings are unchanged.");
+            }
         }
         catch (const std::exception& e)
         {
@@ -1381,6 +1566,15 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
                                       ChainStore::entriesFor (newChain, bypassStates, lanes)))
     {
         juce::Logger::writeToLog ("IconMenu: Apply pressed with no plugin-chain changes");
+
+        // This path was silent, which is most of why Apply felt unpredictable: a
+        // click that changed nothing and a click that changed everything both
+        // produced no visible response. Note the wording -- device settings are
+        // committed by the caller before this runs, so the chain is the only
+        // thing that was unchanged.
+        if (preferencesWindow != nullptr)
+            preferencesWindow->setApplyFeedback ("Applied - chain unchanged");
+
         return;
     }
 
@@ -1432,9 +1626,17 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         refreshPreferencesIfOpen();
     };
 
+    const auto vault = stateVault();
+
     for (const auto& plugin : departing)
     {
         store.stageErase (plugin.description);
+
+        // The state file goes with the settings keys, or the directory
+        // accumulates orphans for plugins that are no longer in the chain.
+        const auto departingIdentity = ChainStore::identityOf (plugin.description);
+        (void) vault.erase (departingIdentity);
+        lastWrittenState.erase (departingIdentity);
 
         try
         {
@@ -1508,6 +1710,16 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     // ── Reload the graph ─────────────────────────────────────────────────────
     // Arriving plugins need their DLLs loaded, which loadActivePlugins does for
     // the whole chain. A reorder, a bypass or a lane change needs only a rewire.
+    // Arriving plugins load asynchronously, so the confirmation comes in two
+    // parts: this one immediately, and "Chain updated" from onAllPluginsLoaded
+    // once the DLLs are actually in. The flag keeps that second message off the
+    // startup load, which goes through the same completion handler.
+    applyInitiatedLoad = ! arriving.empty();
+
+    if (preferencesWindow != nullptr)
+        preferencesWindow->setApplyFeedback (arriving.empty() ? "Chain updated"
+                                                             : "Loading plugins...");
+
     if (! arriving.empty())
         loadActivePlugins();
     else

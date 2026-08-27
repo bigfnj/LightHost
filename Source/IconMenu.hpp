@@ -2,10 +2,12 @@
 
 #include "GainProcessor.hpp"
 #include "Lanes.hpp"
+#include "PluginStateVault.hpp"
 #include "StatusSink.hpp"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -34,6 +36,15 @@ public:
     */
     void showPreferencesWindow();
 
+    /** Reports a message through the same status sink the tray tooltip and the
+        Preferences status row already read.
+
+        Public because PluginHostApp needs it: a second launch is handled by the
+        application object, outside IconMenu entirely, and it is exactly the kind
+        of event the user has to be told about.
+    */
+    void reportStatus (const juce::String& message);
+
     // Menu action ID offsets — each plugin gets an ID in the range [offset, offset + maxPlugins)
     static constexpr int kEditOffset     = 1'000'000;
     static constexpr int kBypassOffset   = 2'000'000;
@@ -55,6 +66,10 @@ private:
     void loadActivePlugins();
     void cancelPluginLoading();
     void savePluginStates();
+
+    // Set when a chain apply started an asynchronous plugin load, so the
+    // completion handler can tell an apply apart from the startup load.
+    bool applyInitiatedLoad = false;
     void deletePluginStates();
     void setIcon();
     void handleDeletePlugin (int index);
@@ -160,7 +175,7 @@ private:
     struct LoadSpec
     {
         juce::PluginDescription description;
-        juce::String            savedState;
+        juce::MemoryBlock       savedState;
         juce::uint32            nodeId;
     };
 
@@ -177,10 +192,29 @@ private:
     void onPluginInstanceReady (std::unique_ptr<juce::AudioProcessor> instance,
                                 juce::AudioProcessorGraph::NodeID nodeId,
                                 int generation,
-                                const juce::String& savedState);
+                                const juce::MemoryBlock& savedState);
     void restorePluginState (juce::AudioProcessorGraph::Node& node,
                              juce::AudioProcessorGraph::NodeID nodeId,
-                             const juce::String& savedState);
+                             const juce::MemoryBlock& savedState);
+
+    /** Where this instance keeps its per-plugin state files.
+
+        Returned by value rather than held: a Vault is a File and nothing else,
+        so there is no lifetime question and no state to go stale. Keyed off the
+        settings filename, so a -multi-instance run does not share a state
+        directory with the primary configuration.
+    */
+    [[nodiscard]] lighthost::state::Vault stateVault() const;
+
+    /** One-shot move of pre-5.0.0 base64 state out of the settings document.
+        Writes the file first and only then drops the key.
+    */
+    void migrateStateToVault();
+
+    // Fingerprint of the bytes last written for each identity, so a save that
+    // changed nothing does not gzip and rewrite megabytes. In-memory only: a
+    // fresh process writes once per plugin and then settles.
+    std::map<juce::String, juce::uint64> lastWrittenState;
     void onAllPluginsLoaded (int generation);
 
     class PluginListWindow;

@@ -120,3 +120,25 @@ Phase numbers refer to the 5.0.0 plan.
 - **Out-of-process plugin hosting.** Light Host runs plugins in-process, so a
   plugin that crashes takes the host with it. Real sandboxing is a different
   application, not a fix.
+- **System-audio capture: re-check this on every JUCE bump.** Processing audio
+  from other applications currently needs a third-party virtual input device
+  (VB-CABLE or similar), and the Preferences window says so. That is a JUCE
+  limitation and not a Windows one, which is why it is worth re-checking rather
+  than treating as settled: WASAPI has supported loopback since Vista
+  (`AUDCLNT_STREAMFLAGS_LOOPBACK` on a render endpoint) and Windows 10 2004
+  added per-process loopback, but JUCE exposes neither. `WASAPIDeviceMode` is
+  `shared`, `exclusive` and `sharedLowLatency`, and `loopback` appears nowhere
+  in `juce_audio_devices` as of the vendored 9.0.1.
+
+  The check, after any change to `lib/juce`, is
+  `grep -ri loopback lib/juce/modules/juce_audio_devices`. A non-empty result
+  means a supported fix has become available, and both the hint text in
+  `PreferencesWindow.cpp` and this entry should be revisited.
+
+  Deliberately not worth hand-rolling in the meantime. It needs a fourth WASAPI
+  device mode, enumeration that presents render endpoints as inputs, and two
+  problems that are the actual work: a loopback capture and a render stream on
+  different endpoints are separate clock domains that drift, so it needs
+  continuous resampling; and a loopback stream delivers no packets at all while
+  nothing is playing to that endpoint, so the graph has to be fed synthesised
+  silence or it starves. Wiring stays as it is until JUCE does the work.

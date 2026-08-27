@@ -8,6 +8,109 @@ Work in progress on `main`. The version in `CMakeLists.txt` is still 4.0.3 and n
 5.0.0 tag exists: the version bump and the release are the last step, and the
 remaining work is listed in [BACKLOG.md](BACKLOG.md).
 
+### Changed — plugin state moved out of the settings document
+
+Measured on a real chain of five plugins, two of them sonible: `Light Host.settings`
+was 7,489,165 bytes, of which 7,477,351 were base64 plugin state. That is 99.84%
+of the document. `juce::PropertiesFile` rewrites the whole document on every
+save, so toggling one bypass wrote seven and a half megabytes on the message
+thread, and every one of those writes was another window in which an interrupted
+shutdown lost the lot.
+
+State now lives in one file per plugin under `Light Host.state/`, holding
+gzip-compressed raw bytes with no base64: a third of the saving is simply not
+paying base64's 33% inflation, the rest is compression, and on that measurement
+the largest blob came down to roughly 14% of its stored size. The settings
+document drops to about twelve kilobytes and stays readable XML, which is
+deliberate — reading it directly is how every persistence question in this
+project has actually been answered.
+
+Writes are also no longer amplified. Each save fingerprints the bytes and skips
+any plugin whose state has not changed, so a save that changed nothing touches no
+files, and a plugin removed from the chain takes its state file with it rather
+than leaving an orphan.
+
+Existing state is migrated once, on first launch, in an order that is the whole
+safety property: the file is written, read back and checked, and only then is the
+settings key dropped. A blob that will not decode or will not write is left
+exactly where it is and is still loaded from there. `Source/PluginStateVault.hpp`
+is the storage, tested on its own for round trips, truncated files, files written
+by a later version, and the empty cases.
+
+The self-test previously appeared to cover the seeded chain's saved state but did
+not: its seed was standard base64, which `juce::MemoryBlock::fromBase64Encoding`
+does not read, so every check passed through the "could not decode" path. The
+seed is now a real encoded blob, and the assertions require the state to have
+moved into the vault and to come back byte for byte.
+
+### Added — a look and feel of its own
+
+Every window was drawn by `juce::LookAndFeel_V4`, JUCE's default since 2017.
+Nothing was broken about it; it simply looked like a framework default, because
+it was one. `Source/LookAndFeel.hpp` sets a deliberate palette built on a single
+accent — the blue the bypass tick already used — and gives buttons and table
+headers rounded fills with distinct hover and pressed states, which is what makes
+a control look like something that can be pressed.
+
+It is all flat-fill paint-time work: no timers, no animation, no transparency and
+no images, because this application sits in the tray at no cost when idle and a
+look and feel must not be what changes that. The whole restyle added 12 KB to the
+binary.
+
+The plugin list also stopped being cramped. `juce::PluginListComponent`
+hard-codes `setRowHeight(20)` and `setHeaderHeight(22)` in its own constructor and
+a look and feel is never consulted about them, so they are raised where the
+component is made.
+
+### Fixed — controls that gave no sign of being pressed
+
+The per-plugin `Edit` button in the chain list was a rounded rectangle and a
+string drawn in `paint()`, identical whether or not it had been clicked, and it
+fired on mouse-down so the window opened before any pressed state could be seen.
+It is now named `Settings`, has hover and held states and a pointing-hand cursor,
+and fires on release — so the press is visible for as long as the mouse is held
+and releasing away from the button cancels it, which is what a `juce::Button`
+does. The lane button had the identical problem and gets the same treatment; its
+held state now also clears on every path out of its menu, including dismissal
+without a selection.
+
+### Fixed — Apply never said what it had done
+
+Applying was silent on success and silent on a no-op, so a click that changed
+everything and a click that changed nothing looked exactly alike. A transient
+confirmation now appears beside the button: `Chain updated`, `Loading plugins...`
+while new plugins are still loading, or `Applied - chain unchanged`. The last of
+those is worded carefully — device settings are committed on that path even when
+the chain is not.
+
+### Fixed — a second launch exited without saying so
+
+`anotherInstanceStarted` was not overridden, so launching a second copy handed its
+command line to the running instance and the new process exited with nothing in
+the log and nothing on screen. Double-clicking a freshly built copy while an older
+one was running therefore did visibly nothing, leaving the user to make every
+subsequent observation against the wrong process. It now says so, in the log and
+in the status row, and brings Preferences to front.
+
+### Fixed — two windows and a button were sized by constants, not by their content
+
+The plugin list window was capped at 800x1500 and Preferences at 900x1100, both
+inherited from 2016 when 800 pixels was a generous window; the cap truncated the
+plugin Description column on any modern display. Both now derive their maximum
+from the desktop. The `Options...` button was laid out by JUCE as a 24-pixel strip
+and then shrink-wrapped to the width of its own label by `changeWidthToFitText`,
+making it the smallest control in the application; it is now given a deliberate
+size.
+
+### Fixed — the note on system audio blamed the wrong layer
+
+The comment explaining why a virtual input device is needed said Windows offers no
+way to capture another application's playback. Windows has offered exactly that
+since Vista. The limitation is JUCE's: `WASAPIDeviceMode` is `shared`, `exclusive`
+and `sharedLowLatency`, and `loopback` appears nowhere in `juce_audio_devices`. The
+distinction matters because a JUCE update could remove it, so BACKLOG.md now
+carries the check to run on a bump.
+
 ### Fixed — parallel lanes were misaligned by the compensation meant to align them
 
 Versions up to 4.0.3 inserted their own `DelayProcessor` on shorter lanes.
