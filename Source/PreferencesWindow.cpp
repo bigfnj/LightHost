@@ -864,7 +864,9 @@ public:
         updateChainListHeight();
         area.removeFromTop (kGap);
         addPluginButton.setBounds (
-            area.removeFromTop (kRowH).removeFromRight (120).reduced (0, 3));
+            area.removeFromTop (kRowH)
+                .removeFromRight (kAddPluginW + 8)
+                .withSizeKeepingCentre (kAddPluginW, kPushH));
         area.removeFromTop (kGap);
 
         // ── LANE TRIM ─────────────────────────────────────────────────────────
@@ -927,7 +929,8 @@ public:
         // ── Buttons ───────────────────────────────────────────────────────────
         {
             auto row = area.removeFromTop (kBtnH);
-            applyButton.setBounds   (row.removeFromRight (90).reduced (4, 6));
+            applyButton.setBounds (row.removeFromRight (kApplyW + 8)
+                                      .withSizeKeepingCentre (kApplyW, kPushH));
             versionLabel.setBounds  (row.removeFromLeft (120).reduced (4, 6));
             applyFeedbackLabel.setBounds (row.reduced (6, 6));
         }
@@ -972,6 +975,20 @@ private:
     static constexpr int kGap       = 6;
     static constexpr int kBtnH      = 40;
     static constexpr int kMinChainH = 80;
+
+    // Push-button metrics. Apply was laid out at 28 high and "+ Add Plugin" at
+    // 22, which is the whole reason they read as different kinds of control:
+    // one looked like a button and the other like a caption. Both are now sized
+    // from kPushH, so changing one changes both. Widths differ only because the
+    // labels do.
+    static constexpr int kPushH      = 28;
+    static constexpr int kApplyW     = 82;
+    static constexpr int kAddPluginW = 116;
+
+    // "+ Add Plugin" shares a kRowH row with nothing else, and fixedLayoutHeight
+    // accounts for that row as kRowH. A push button taller than the row would
+    // overflow it and silently disagree with the reported height.
+    static_assert (kPushH <= kRowH, "a push button must fit the row it is laid out in");
 
     // LANE TRIM
     SectionLabel  laneTrimSectionLabel { "  LANE TRIM" };
