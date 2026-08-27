@@ -81,7 +81,8 @@ int main()
     };
 
     for (const auto* category : { "Gain", "GraphRender", "GraphTopology", "InstanceName",
-                                  "PluginChain", "PluginState", "SampleRate", "Status" })
+                                  "PluginChain", "PluginState", "PluginStateVault",
+                                  "SampleRate", "Status" })
     {
         runner.runTestsInCategory (category);
         collectResults();

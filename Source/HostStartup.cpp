@@ -2,6 +2,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "IconMenu.hpp"
 #include "InstanceName.hpp"
+#include "LookAndFeel.hpp"
 #include "SelfTest.hpp"
 
 #if ! (JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
@@ -117,9 +118,40 @@ public:
             || getMultiInstanceName().isNotEmpty();
     }
 
+    /** A second launch hands its command line here, and then that process exits.
+
+        This used to be unhandled, so the second process died silently: nothing
+        in the log, nothing on screen. Double-click a freshly built copy while an
+        older one is already running and the visible result is *nothing at all*,
+        which leaves the user believing they are running the build they just
+        launched when they are still running the old one. Every subsequent
+        observation is then made against the wrong process.
+
+        So say it, on the two surfaces that are always there: the log, and the
+        status row that the tray tooltip and Preferences both read.
+    */
+    void anotherInstanceStarted (const juce::String& commandLine) override
+    {
+        const auto arguments = commandLine.trim().isEmpty() ? juce::String ("no arguments")
+                                                           : commandLine.trim();
+
+        juce::Logger::writeToLog ("PluginHostApp: another instance was launched ("
+                                  + arguments + "). This instance is already running, so the "
+                                  "new process has exited without starting. Nothing has "
+                                  "changed, including which executable is running.");
+
+        if (iconMenu != nullptr)
+        {
+            iconMenu->reportStatus ("Light Host was already running - the copy you just "
+                                    "launched has exited. To run a different build, quit "
+                                    "from the tray first, or pass -multi-instance=NAME.");
+            iconMenu->showPreferencesWindow();
+        }
+    }
+
     std::unique_ptr<juce::ApplicationProperties> appProperties;
     std::unique_ptr<juce::FileLogger> fileLogger;
-    juce::LookAndFeel_V4 lookAndFeel;
+    lighthost::ui::LookAndFeel lookAndFeel;
 
     [[nodiscard]] juce::File getCurrentLogFile() const { return logFile; }
 

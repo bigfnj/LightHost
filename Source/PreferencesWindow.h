@@ -67,6 +67,15 @@ public:
     */
     void setStatusMessage (const juce::String& message);
 
+    /** Shows a short-lived confirmation beside the Apply button saying what the
+        click actually did.
+
+        Applying was silent on success and silent on a no-op, so the two were
+        indistinguishable. This is transient by design: a confirmation that stays
+        on screen stops being a confirmation and becomes furniture.
+    */
+    void setApplyFeedback (const juce::String& message);
+
 private:
     std::function<void()> onCloseFn;
 

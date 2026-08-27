@@ -1,5 +1,6 @@
 #include "PreferencesWindow.h"
 #include "GainProcessor.hpp"
+#include "LookAndFeel.hpp"
 #include "Lanes.hpp"
 #include <set>
 
@@ -42,10 +43,10 @@ private:
 // AudioChainListComponent
 //
 // Paint-based list of the staged plugin chain.  Each row shows:
-//   [checkbox]  [plugin name]  [Edit]  [drag handle ☰]
+//   [checkbox]  [plugin name]  [Lane N]  [Settings]  [drag handle ☰]
 //
 // Checkbox: active (filled blue + tick) = plugin active; unchecked = bypassed.
-// Drag handle: click-and-drag anywhere in the row (outside checkbox/Edit) to
+// Drag handle: click-and-drag anywhere in the row (outside the controls) to
 //              reorder.  A blue drop-indicator line previews the target slot.
 //==============================================================================
 class AudioChainListComponent final : public juce::Component
@@ -106,7 +107,7 @@ public:
             }
             else
             {
-                g.setColour (juce::Colour (0xff4a9eff));
+                g.setColour (juce::Colour (lighthost::ui::LookAndFeel::kAccent));
                 g.fillRoundedRectangle (checkArea, 3.0f);
                 // White tick mark
                 g.setColour (juce::Colours::white);
@@ -126,20 +127,18 @@ public:
                               getNameArea (i), juce::Justification::centredLeft, 1);
 
             // ── Edit button ────────────────────────────────────────────────
-            const auto editRect = getEditButtonArea (i);
-            g.setColour (bg.darker (0.18f));
-            g.fillRoundedRectangle (editRect.toFloat(), 3.0f);
-            g.setColour (txt.withAlpha (0.70f));
-            g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
-            g.drawText ("Edit", editRect, juce::Justification::centred);
+            drawRowButton (g, getEditButtonArea (i), "Settings", bg, txt,
+                           isHot (i, Control::settings),
+                           isHeld (i, Control::settings),
+                           0.18f);
             
             // ── Lane button ────────────────────────────────────────────────
-            const auto laneRect = getLaneButtonArea (i);
-            g.setColour (bg.darker (0.05f));
-            g.fillRoundedRectangle (laneRect.toFloat(), 3.0f);
-            g.setColour (txt.withAlpha (0.85f));
-            int ln = (static_cast<size_t>(i) < lanes.size()) ? lanes[static_cast<size_t>(i)] : 0;
-            g.drawText ("Lane " + juce::String(ln), laneRect, juce::Justification::centred);
+            const int ln = (static_cast<size_t> (i) < lanes.size())
+                               ? lanes[static_cast<size_t> (i)] : 0;
+            drawRowButton (g, getLaneButtonArea (i), "Lane " + juce::String (ln), bg, txt,
+                           isHot (i, Control::lane),
+                           isHeld (i, Control::lane),
+                           0.05f);
 
             // ── Drag handle (three horizontal bars, right edge) ────────────
             g.setColour (txt.withAlpha (0.28f));
@@ -173,6 +172,38 @@ public:
         }
     }
 
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const int  row = rowAt (e.getPosition());
+        const auto ctl = (row >= 0) ? controlAt (e.getPosition(), row) : Control::none;
+
+        if (row == hotRow && ctl == hotControl)
+            return;
+
+        const int previous = hotRow;
+        hotRow     = row;
+        hotControl = ctl;
+
+        setMouseCursor (ctl == Control::none ? juce::MouseCursor::NormalCursor
+                                            : juce::MouseCursor::PointingHandCursor);
+
+        // Only the rows whose appearance changed, rather than the whole list.
+        if (previous >= 0) repaintRow (previous);
+        if (hotRow  >= 0)  repaintRow (hotRow);
+    }
+
+    void mouseExit (const juce::MouseEvent&) override
+    {
+        if (hotRow < 0 && hotControl == Control::none)
+            return;
+
+        const int previous = hotRow;
+        hotRow     = -1;
+        hotControl = Control::none;
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+        if (previous >= 0) repaintRow (previous);
+    }
+
     void mouseDown (const juce::MouseEvent& e) override
     {
         const int row = e.y / kRowHeight;
@@ -203,9 +234,15 @@ public:
             return;
         }
 
-        // Lane button
+        // Lane button. The menu opens on press, which is the convention for a
+        // menu, so the held state simply lasts as long as the menu is open.
         if (getLaneButtonArea(row).contains(e.getPosition()))
         {
+            pressedControl = Control::lane;
+            pressedRow     = row;
+            pressedInside  = true;
+            repaintRow (row);
+
             juce::PopupMenu m;
             m.addItem(1, "Lane 0");
             m.addItem(2, "Lane 1");
@@ -216,7 +253,14 @@ public:
                 juce::PopupMenu::Options{}.withTargetScreenArea ({ e.getScreenX(), e.getScreenY(), 1, 1 }),
                 [safe, row] (int result)
                 {
-                    if (safe == nullptr || result == 0) return;
+                    if (safe == nullptr) return;
+
+                    // Released first, and unconditionally: the menu can be
+                    // dismissed without a selection, and every early return
+                    // below would otherwise leave the button looking held.
+                    safe->clearPressed();
+
+                    if (result == 0) return;
 
                     // The menu is asynchronous, so the chain can have changed
                     // while it was open and the row captured at click time has to
@@ -243,10 +287,16 @@ public:
             return;
         }
 
-        // Edit button
+        // Settings button. Deliberately does not act here: it arms, and fires on
+        // release, so the pressed state is visible for as long as the mouse is
+        // held and releasing away from the button cancels it. That is what a
+        // juce::Button does; a drawn control has to do it for itself.
         if (getEditButtonArea (row).contains (e.getPosition()))
         {
-            if (onEditClicked) onEditClicked (row);
+            pressedControl = Control::settings;
+            pressedRow     = row;
+            pressedInside  = true;
+            repaintRow (row);
             return;
         }
 
@@ -259,6 +309,21 @@ public:
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        // A held control un-presses when the mouse leaves it, so a button never
+        // claims a click that is not going to be delivered.
+        if (pressedControl != Control::none)
+        {
+            const bool inside = pressedRow >= 0
+                             && controlAt (e.getPosition(), pressedRow) == pressedControl;
+
+            if (inside != pressedInside)
+            {
+                pressedInside = inside;
+                repaintRow (pressedRow);
+            }
+            return;
+        }
+
         if (dragSourceRow < 0) return;
         const int newDropLine = juce::jlimit (0, static_cast<int> (items.size()),
                                               (e.y + kRowHeight / 2) / kRowHeight);
@@ -267,6 +332,20 @@ public:
 
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (pressedControl == Control::settings)
+        {
+            const int  row    = pressedRow;
+            const bool inside = row >= 0
+                             && getEditButtonArea (row).contains (e.getPosition());
+
+            clearPressed();
+
+            if (inside && row < static_cast<int> (items.size()) && onEditClicked)
+                onEditClicked (row);
+
+            return;
+        }
+
         if (dragSourceRow < 0) return;
 
         const int insertAt = juce::jlimit (0, static_cast<int> (items.size()),
@@ -299,9 +378,103 @@ public:
     }
 
 private:
+    // Which of the controls in a row the pointer is over, and which is held.
+    //
+    // These controls are painted, not juce::Buttons, because the chain is drawn
+    // as a list. A drawn control gets no hover or pressed state for free, which
+    // is exactly why the old "Edit" button looked inert: it was a rounded
+    // rectangle and a string, identical whether or not it had been clicked.
+    enum class Control { none, checkbox, lane, settings };
+
     int dragSourceRow = -1;
     int dragOffsetY   = 0;
     int dropLine      = -1;
+
+    int     hotRow         = -1;
+    Control hotControl     = Control::none;
+    int     pressedRow     = -1;
+    Control pressedControl = Control::none;
+    bool    pressedInside  = true;
+
+    [[nodiscard]] bool isHot (int row, Control c) const noexcept
+    {
+        return hotRow == row && hotControl == c;
+    }
+
+    [[nodiscard]] bool isHeld (int row, Control c) const noexcept
+    {
+        return pressedRow == row && pressedControl == c && pressedInside;
+    }
+
+    void clearPressed()
+    {
+        const int row  = pressedRow;
+        pressedRow     = -1;
+        pressedControl = Control::none;
+        pressedInside  = true;
+        if (row >= 0) repaintRow (row);
+    }
+
+    void repaintRow (int row)
+    {
+        repaint (0, row * kRowHeight, getWidth(), kRowHeight);
+    }
+
+    [[nodiscard]] int rowAt (juce::Point<int> p) const noexcept
+    {
+        if (p.y < 0) return -1;
+        const int row = p.y / kRowHeight;
+        return row < static_cast<int> (items.size()) ? row : -1;
+    }
+
+    [[nodiscard]] Control controlAt (juce::Point<int> p, int row) const noexcept
+    {
+        if (getCheckboxArea   (row).contains (p)) return Control::checkbox;
+        if (getLaneButtonArea (row).contains (p)) return Control::lane;
+        if (getEditButtonArea (row).contains (p)) return Control::settings;
+        return Control::none;
+    }
+
+    /** The three states a real button has, drawn by hand. */
+    void drawRowButton (juce::Graphics& g,
+                        juce::Rectangle<int> area,
+                        const juce::String& label,
+                        juce::Colour bg,
+                        juce::Colour txt,
+                        bool hot,
+                        bool held,
+                        float baseDarken) const
+    {
+        auto fill = bg.darker (baseDarken);
+        if (held)     fill = fill.darker (0.30f);
+        else if (hot) fill = fill.brighter (0.22f);
+
+        g.setColour (fill);
+        g.fillRoundedRectangle (area.toFloat(), 3.0f);
+
+        g.setColour (held ? juce::Colour (lighthost::ui::LookAndFeel::kAccent).withAlpha (0.95f)
+                          : txt.withAlpha (hot ? 0.42f : 0.18f));
+        g.drawRoundedRectangle (area.toFloat().reduced (0.5f), 3.0f, 1.0f);
+
+        // The label drops a pixel while held. It is a small thing, and it is most
+        // of what makes a click feel like it landed.
+        g.setColour (txt.withAlpha (held ? 0.95f : (hot ? 0.92f : 0.72f)));
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
+        g.drawText (label, held ? area.translated (0, 1) : area,
+                    juce::Justification::centred);
+    }
+
+    // Row layout, measured in from the right edge. paint() and the hit-testing
+    // both read these, so the drawn control and the clickable area cannot drift
+    // apart. "Settings" needs more room than "Edit" did, so everything to its
+    // left moved with it.
+    static constexpr int kButtonInsetY  = 7;
+    static constexpr int kSettingsWidth = 66;
+    static constexpr int kSettingsInset = 94;
+    static constexpr int kLaneWidth     = 56;
+    static constexpr int kLaneInset     = 158;
+    static constexpr int kNameLeft      = 34;
+    static constexpr int kNameRightGap  = 162;
 
     [[nodiscard]] juce::Rectangle<int> getCheckboxArea (int row) const noexcept
     {
@@ -309,19 +482,22 @@ private:
         return { 8, cy - 9, 18, 18 };
     }
 
-        [[nodiscard]] juce::Rectangle<int> getNameArea (int row) const noexcept
+    [[nodiscard]] juce::Rectangle<int> getNameArea (int row) const noexcept
     {
-        return { 34, row * kRowHeight, getWidth() - 34 - 118 - 26, kRowHeight };
+        return { kNameLeft, row * kRowHeight,
+                 juce::jmax (0, getWidth() - kNameLeft - kNameRightGap), kRowHeight };
     }
 
     [[nodiscard]] juce::Rectangle<int> getEditButtonArea (int row) const noexcept
     {
-        return { getWidth() - 80, row * kRowHeight + 7, 52, kRowHeight - 14 };
+        return { getWidth() - kSettingsInset, row * kRowHeight + kButtonInsetY,
+                 kSettingsWidth, kRowHeight - kButtonInsetY * 2 };
     }
 
     [[nodiscard]] juce::Rectangle<int> getLaneButtonArea (int row) const noexcept
     {
-        return { getWidth() - 140, row * kRowHeight + 7, 52, kRowHeight - 14 };
+        return { getWidth() - kLaneInset, row * kRowHeight + kButtonInsetY,
+                 kLaneWidth, kRowHeight - kButtonInsetY * 2 };
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioChainListComponent)
@@ -383,10 +559,18 @@ public:
         addAndMakeVisible (inputChannelLabel);
 
         #if JUCE_WINDOWS
-        // Windows offers no way to capture another application's playback, and
-        // JUCE's WASAPI backend has no loopback mode, so processing system audio
-        // requires a third-party virtual input device. Say so instead of leaving
-        // the user staring at a silent host. Hidden once one is installed.
+        // Processing audio from other applications needs a third-party virtual
+        // input device, so say so instead of leaving the user staring at a silent
+        // host. Hidden once one is installed.
+        //
+        // The reason is JUCE, not Windows, and the distinction matters because a
+        // JUCE update could remove it. Windows has been able to capture another
+        // application's playback since Vista: AUDCLNT_STREAMFLAGS_LOOPBACK on a
+        // render endpoint gives a copy of that endpoint's mix, and Windows 10
+        // 2004 added a per-process version. JUCE exposes none of it.
+        // WASAPIDeviceMode is shared, exclusive and sharedLowLatency, and
+        // "loopback" appears nowhere in juce_audio_devices as of the vendored
+        // 9.0.1. See BACKLOG.md under Deferred for what to re-check on a bump.
         virtualInputHint.setText ("No virtual input found. Processing audio from other "
                                   "apps needs one.",
                                   juce::dontSendNotification);
@@ -519,6 +703,13 @@ public:
                                     .withAlpha (0.45f));
         addAndMakeVisible (versionLabel);
 
+        // ── Apply confirmation (bottom, right of the version label) ───────────
+        applyFeedbackLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
+        applyFeedbackLabel.setJustificationType (juce::Justification::centredRight);
+        applyFeedbackLabel.setColour (juce::Label::textColourId,
+                                     juce::Colour (lighthost::ui::LookAndFeel::kAccent));
+        addAndMakeVisible (applyFeedbackLabel);
+
         // Device combos are staged — no immediate apply on change.
         // ChangeListener below keeps them in sync with external device events.
 
@@ -556,6 +747,28 @@ public:
             laneTrim.onCommitted (lane, static_cast<float> (laneTrimSliders[index].getValue()));
 
         laneTrimDirty[index] = false;
+    }
+
+    /** Shows a confirmation beside Apply, then clears it. */
+    void setApplyFeedback (const juce::String& message)
+    {
+        applyFeedbackLabel.setText (message, juce::dontSendNotification);
+
+        // A one-shot, not a repeating timer: nothing here animates, and the idle
+        // cost of this window has to stay at zero. The generation counter means a
+        // second Apply during the window replaces the message rather than having
+        // the first one clear the second one early.
+        ++applyFeedbackGeneration;
+        const auto generation = applyFeedbackGeneration;
+        juce::Component::SafePointer<PreferencesContentComponent> safe (this);
+
+        juce::Timer::callAfterDelay (kApplyFeedbackMs, [safe, generation]
+        {
+            if (safe == nullptr) return;
+            if (safe->applyFeedbackGeneration != generation) return;
+
+            safe->applyFeedbackLabel.setText ({}, juce::dontSendNotification);
+        });
     }
 
     /** Shows or hides the status row, and relays out around it. */
@@ -716,6 +929,7 @@ public:
             auto row = area.removeFromTop (kBtnH);
             applyButton.setBounds   (row.removeFromRight (90).reduced (4, 6));
             versionLabel.setBounds  (row.removeFromLeft (120).reduced (4, 6));
+            applyFeedbackLabel.setBounds (row.reduced (6, 6));
         }
     }
 
@@ -779,9 +993,13 @@ private:
     juce::Label    bufferSizeHeadLabel;
     juce::ComboBox bufferSizeCombo;
 
-    // Apply button + version label
+    // Apply button, version label, and the transient Apply confirmation
     juce::TextButton applyButton;
     juce::Label      versionLabel;
+    juce::Label      applyFeedbackLabel;
+
+    static constexpr int kApplyFeedbackMs = 2600;
+    int applyFeedbackGeneration = 0;
 
 
     //--------------------------------------------------------------------------
@@ -1247,7 +1465,14 @@ PreferencesWindow::PreferencesWindow (
     setContentOwned (scroller, true);
     setUsingNativeTitleBar (true);
     setResizable (true, false);
-    setResizeLimits (440, 400, 900, 1100);
+
+    // Same reasoning as the plugin list window: the old 900x1100 ceiling was a
+    // constant, not a layout constraint. The panel scrolls inside a viewport, so
+    // a taller window simply shows more of it.
+    const auto desktop = Desktop::getInstance().getDisplays().getTotalBounds (true);
+    setResizeLimits (440, 400,
+                     jmax (440, desktop.getWidth()),
+                     jmax (400, desktop.getHeight()));
     centreWithSize (kDefaultWidth, kDefaultHeight);
     setVisible (true);
 }
@@ -1275,4 +1500,11 @@ void PreferencesWindow::setStatusMessage (const juce::String& message)
     if (auto* scroller = dynamic_cast<PreferencesPanelViewport*> (getContentComponent()))
         if (scroller->panel != nullptr)
             scroller->panel->setStatusMessage (message);
+}
+
+void PreferencesWindow::setApplyFeedback (const juce::String& message)
+{
+    if (auto* scroller = dynamic_cast<PreferencesPanelViewport*> (getContentComponent()))
+        if (scroller->panel != nullptr)
+            scroller->panel->setApplyFeedback (message);
 }
