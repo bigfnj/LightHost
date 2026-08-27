@@ -1,5 +1,7 @@
 #pragma once
 
+#include "UiMetrics.hpp"
+
 #include <juce_gui_basics/juce_gui_basics.h>
 
 //==============================================================================
@@ -117,6 +119,16 @@ public:
     }
 
     //==========================================================================
+    /** JUCE lays out its own dialogs, and the only say we get in how big their
+        buttons are is here. This is what brings the Cancel button on the plugin
+        scan window, and any AlertWindow, to the same height as the buttons this
+        application lays out itself.
+    */
+    int getAlertWindowButtonHeight() override
+    {
+        return lighthost::ui::metrics::pushButtonHeight;
+    }
+
     juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override
     {
         const auto height = juce::jlimit (11.0f, 15.0f,

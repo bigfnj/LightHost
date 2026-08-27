@@ -2,6 +2,7 @@
 #include "GraphTopology.hpp"
 #include "PluginChainStore.hpp"
 #include "PluginState.hpp"
+#include "UiMetrics.hpp"
 #include "SampleRatePolicy.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
@@ -15,6 +16,8 @@
 #endif
 
 using namespace juce;
+
+namespace metrics = lighthost::ui::metrics;
 
 // Owns the per-plugin settings keys. Made where it is used rather than held as
 // state: it is a reference to the settings plus a staging area, and a long-lived
@@ -134,9 +137,10 @@ private:
             // component in a later version is still positioned by JUCE; only the
             // two children it lays out today are overridden here.
             auto bounds = getLocalBounds().reduced (kListMargin);
-            auto strip  = bounds.removeFromBottom (kOptionsHeight);
+            auto strip  = bounds.removeFromBottom (metrics::pushButtonStripHeight());
 
-            getOptionsButton().setBounds (strip.removeFromLeft (kOptionsWidth));
+            getOptionsButton().setBounds (
+                metrics::pushButton (strip.removeFromLeft (kOptionsWidth), kOptionsWidth));
 
             bounds.removeFromBottom (kOptionsGap);
             getTableListBox().setBounds (bounds);
@@ -149,7 +153,6 @@ private:
         // the inset it already had; only the strip below it belongs to us.
         static constexpr int kListMargin    = 2;
         static constexpr int kOptionsWidth  = 110;
-        static constexpr int kOptionsHeight = 30;
         static constexpr int kOptionsGap    = 6;
 
         AudioPluginFormatManager&    formatManager;
