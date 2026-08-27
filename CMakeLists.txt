@@ -90,6 +90,7 @@ target_sources(LightHost PRIVATE
     Source/LookAndFeel.hpp
     Source/PluginStateVault.hpp
     Source/SelfTest.hpp
+    Source/UiMetrics.hpp
     Source/IconMenu.cpp
     Source/PluginWindow.cpp
     Source/PreferencesWindow.cpp

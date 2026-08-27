@@ -1,10 +1,13 @@
 #include "PreferencesWindow.h"
 #include "GainProcessor.hpp"
 #include "LookAndFeel.hpp"
+#include "UiMetrics.hpp"
 #include "Lanes.hpp"
 #include <set>
 
 using namespace juce;
+
+namespace metrics = lighthost::ui::metrics;
 
 juce::ApplicationProperties& getAppProperties();
 juce::File getLogFile();
@@ -832,7 +835,8 @@ public:
         if (statusLabel.isVisible())
         {
             auto row = area.removeFromTop (kRowH);
-            showLogButton.setBounds (row.removeFromRight (90).reduced (0, 3));
+            showLogButton.setBounds (
+                metrics::pushButton (row.removeFromRight (kShowLogW + 8), kShowLogW));
             statusLabel.setBounds (row.reduced (2, 0));
             area.removeFromTop (kGap);
         }
@@ -851,7 +855,8 @@ public:
         if (virtualInputHint.isVisible())
         {
             auto row = area.removeFromTop (kRowH);
-            getCableButton.setBounds   (row.removeFromRight (110).reduced (0, 3));
+            getCableButton.setBounds (
+                metrics::pushButton (row.removeFromRight (kGetCableW + 8), kGetCableW));
             virtualInputHint.setBounds (row.reduced (2, 0));
             area.removeFromTop (kGap);
         }
@@ -864,9 +869,9 @@ public:
         updateChainListHeight();
         area.removeFromTop (kGap);
         addPluginButton.setBounds (
-            area.removeFromTop (kRowH)
-                .removeFromRight (kAddPluginW + 8)
-                .withSizeKeepingCentre (kAddPluginW, kPushH));
+            metrics::pushButton (area.removeFromTop (kRowH)
+                                     .removeFromRight (kAddPluginW + 8),
+                                 kAddPluginW));
         area.removeFromTop (kGap);
 
         // ── LANE TRIM ─────────────────────────────────────────────────────────
@@ -929,8 +934,8 @@ public:
         // ── Buttons ───────────────────────────────────────────────────────────
         {
             auto row = area.removeFromTop (kBtnH);
-            applyButton.setBounds (row.removeFromRight (kApplyW + 8)
-                                      .withSizeKeepingCentre (kApplyW, kPushH));
+            applyButton.setBounds (
+                metrics::pushButton (row.removeFromRight (kApplyW + 8), kApplyW));
             versionLabel.setBounds  (row.removeFromLeft (120).reduced (4, 6));
             applyFeedbackLabel.setBounds (row.reduced (6, 6));
         }
@@ -976,19 +981,21 @@ private:
     static constexpr int kBtnH      = 40;
     static constexpr int kMinChainH = 80;
 
-    // Push-button metrics. Apply was laid out at 28 high and "+ Add Plugin" at
-    // 22, which is the whole reason they read as different kinds of control:
-    // one looked like a button and the other like a caption. Both are now sized
-    // from kPushH, so changing one changes both. Widths differ only because the
-    // labels do.
-    static constexpr int kPushH      = 28;
+    // Push-button widths. The height is shared application-wide and lives in
+    // UiMetrics.hpp; only the widths are local, and they differ solely because
+    // the labels do.
     static constexpr int kApplyW     = 82;
     static constexpr int kAddPluginW = 116;
+    static constexpr int kShowLogW   = 90;
+    static constexpr int kGetCableW  = 110;
 
-    // "+ Add Plugin" shares a kRowH row with nothing else, and fixedLayoutHeight
-    // accounts for that row as kRowH. A push button taller than the row would
-    // overflow it and silently disagree with the reported height.
-    static_assert (kPushH <= kRowH, "a push button must fit the row it is laid out in");
+    // Three of these buttons share a kRowH row with a label, and
+    // fixedLayoutHeight accounts for those rows as kRowH. A push button taller
+    // than the row would overflow it and silently disagree with the reported
+    // height, which is the one thing the metrics comment above promises cannot
+    // happen.
+    static_assert (metrics::pushButtonHeight <= kRowH,
+                   "a push button must fit the row it is laid out in");
 
     // LANE TRIM
     SectionLabel  laneTrimSectionLabel { "  LANE TRIM" };
