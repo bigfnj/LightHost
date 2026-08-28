@@ -2,11 +2,18 @@
 
 ---
 
-## [Unreleased] — towards 5.0.0
+## [Unreleased]
 
-Work in progress on `main`. The version in `CMakeLists.txt` is still 4.0.3 and no
-5.0.0 tag exists: the version bump and the release are the last step, and the
-remaining work is listed in [BACKLOG.md](BACKLOG.md).
+Nothing yet.
+
+---
+
+## [5.0.0] — 2026-08-27
+
+The first release since 4.0.3. Plugin state moves out of the settings document
+into a compressed file per plugin, the application gets a look and feel of its
+own, and the three places that previously gave the user no feedback at all now
+say what happened. Upgrading migrates existing settings once, on first launch.
 
 ### Changed — plugin state moved out of the settings document
 

@@ -1,459 +1,440 @@
 # Light Host
 
-Light Host is a lightweight desktop audio plugin host built with **JUCE 9.0.1**. It is designed to live in the system tray on Windows or the menu bar on macOS, with no permanent main window. Audio flows through a realtime `AudioProcessorGraph` with support for parallel processing lanes and automatic delay compensation. Plugins can be added, removed, reordered, bypassed, edited, and assigned to lanes from the tray/menu UI and the Preferences window.
+**Your plugins, on your microphone, all the time — without opening a DAW.**
 
-Released version: **4.0.3**. `main` carries unreleased work towards 5.0.0, listed
-in [CHANGELOG.md](CHANGELOG.md); what is left before that release is in
-[BACKLOG.md](BACKLOG.md), and how a release is cut is in
-[RELEASING.md](RELEASING.md).
+Light Host is a tray-resident audio plugin host. It takes one audio input, runs it
+through a chain of VST/VST3/AU plugins, and sends the result to one audio output.
+That is the whole idea. There is no timeline, no mixer, no project file, and no
+main window — just a tray icon and the settings panel below.
 
-## What It Does
+Point it at your microphone, add a gate, an EQ and a compressor, send the result
+to a virtual cable, and every application on the machine hears your processed
+voice. Set it up once and forget it is running.
 
-- Hosts audio plugins in chained and parallel signal paths
-- Runs as a tray/menu-bar utility instead of a traditional DAW-style app
-- Supports up to four **parallel processing lanes** (Lane 0–3) with automatic
-  **Plugin Delay Compensation** so all lanes arrive sample-aligned at the output
-- Opens a unified Preferences window for:
-  - input/output device selection
-  - device API selection
-  - sample rate and buffer size
-  - plugin chain editing
-  - per-plugin lane assignment
-  - a trim per lane, for balancing the parallel paths
-- Supports plugin bypass, reorder, delete, and editor opening
-- Saves plugin state, device settings, plugin order, and lane assignments
-  between launches
-- Loads active plugins one at a time, keeping the message loop pumping between
-  them so startup stays responsive
+<p align="center">
+  <img src="docs/images/preferences.png" alt="The Light Host Preferences window: input device, plugin chain, lane trims, output device and device settings" width="520">
+</p>
 
-## Supported Plugin Formats
+---
 
-Platform support depends on the build target and available SDK support:
+## Contents
 
-- Windows: VST, VST3
-- macOS: VST, VST3, AU
-- Linux: VST, VST3
+- [Why you might want this](#why-you-might-want-this)
+- [Quick start](#quick-start)
+- [Adding plugins](#adding-plugins)
+- [Processing audio from other applications](#processing-audio-from-other-applications-windows)
+- [Lanes, trims and delay compensation](#lanes-trims-and-delay-compensation)
+- [Where your settings live](#where-your-settings-live)
+- [Running more than one instance](#running-more-than-one-instance)
+- [When something goes wrong](#when-something-goes-wrong)
+- [Known limitations](#known-limitations)
+- [Building from source](#building-from-source)
+- [Tests](#tests)
+- [Licence](#licence)
 
-## Audio Input on Windows (Important)
+---
 
-Light Host processes an **input** device. If you want to run plugins on a
-microphone or an instrument plugged into an audio interface, everything works out
-of the box: pick that interface as the input and you are done.
+## Why you might want this
 
-Running plugins on **audio coming from other applications** (a browser, a game, a
-media player) needs one extra piece. Windows provides no way for an application
-to capture another application's playback, and JUCE's WASAPI backend has no
-loopback mode, so Light Host cannot do it alone. You need a virtual audio device
-that presents a playback endpoint to other apps and a matching capture endpoint
-to Light Host.
+- **A permanent processing chain for your microphone.** Every app on the machine
+  gets the processed signal, not just the one you have open.
+- **No DAW tax.** A DAW to run three plugins on a mic means a project file, a
+  transport, and a window you have to keep alive. This is a tray icon.
+- **Parallel processing without a mixer.** Up to four lanes, summed at the output,
+  with automatic delay compensation so they stay sample-aligned.
+- **It stays out of the way.** No timers, no animation, no polling, no update
+  check, and no network access of any kind. Idle cost is nothing.
 
-The usual choice is **VB-CABLE** from VB-Audio:
+### What it is not
 
-1. Install [VB-CABLE](https://vb-audio.com/Cable/) (donationware; needs admin
-   rights and a reboot).
-2. In Windows Sound settings, set **CABLE Input** as the system playback device,
-   or set it per-application under Volume Mixer.
-3. In Light Host, choose **CABLE Output** as the input device and your real
-   speakers or headphones as the output.
+Not a DAW, not a recorder, and not a mixer. There is no MIDI routing, no
+side-chain, no metering and no recording. If you need those, you need a DAW.
+
+---
+
+## Quick start
+
+1. **Download** the archive for your platform from
+   [Releases](https://github.com/bigfnj/LightHost/releases), unzip it, and run it.
+   Nothing to install; the Windows build is a single self-contained `.exe`.
+2. **Left-click the tray icon** to open Preferences.
+3. **Pick your input and output** devices at the top and bottom of the panel.
+4. **Click `+ Add Plugin`.** The first time, Light Host needs to know what you
+   have installed — see [Adding plugins](#adding-plugins).
+5. **Click `Apply`.** It will tell you what it did.
+
+Your chain, plugin settings, lane assignments, bypass states, trims and device
+choices are all restored next launch.
+
+> **Quit from the tray menu**, not by killing the process. That is what writes
+> your plugin settings to disk.
+
+---
+
+## Adding plugins
+
+`+ Add Plugin` lists what Light Host already knows about. To scan for plugins, use
+**Edit Plugins** from the tray right-click menu:
+
+<p align="center">
+  <img src="docs/images/available-plugins.png" alt="The Available Plugins window listing scanned VST and VST3 plugins with name, format, category, manufacturer and description columns" width="720">
+</p>
+
+The `Options…` button holds the scanning controls, including a **Scan Custom
+Folder…** item for plugins installed somewhere non-standard:
+
+<p align="center">
+  <img src="docs/images/options-menu.png" alt="The Options menu showing list management and scan actions, including Scan Custom Folder" width="380">
+</p>
+
+Light Host does not prune your scanned list. A plugin that will not load is
+reported and skipped, and stays in the list so you can see it is there.
+
+### Supported formats
+
+| Platform | Formats |
+|---|---|
+| Windows | VST, VST3 |
+| macOS | VST, VST3, AU |
+| Linux | VST, VST3 |
+
+---
+
+## Processing audio from other applications (Windows)
+
+Running plugins on your **microphone or audio interface** works out of the box:
+select it as the input and you are done.
+
+Running plugins on **audio from other applications** — a browser, a game, a media
+player — needs one extra piece, and it is worth being precise about why.
+
+Windows *can* capture another application's playback: WASAPI has supported
+loopback since Vista, and Windows 10 2004 added a per-process version. **JUCE does
+not expose either.** So the limitation is in the framework Light Host is built on,
+not in the operating system, and a virtual audio device is the way around it
+today. If that ever changes, it is tracked in [BACKLOG.md](BACKLOG.md).
+
+The usual choice is **[VB-CABLE](https://vb-audio.com/Cable/)** (donationware;
+needs admin rights and a reboot). Its naming trips up nearly everyone, because the
+names are from the cable's point of view rather than yours:
+
+| VB-CABLE calls it | It actually is | You will find it in |
+|---|---|---|
+| **CABLE Input** | a playback device — audio goes *into* the cable here | your **Output** list |
+| **CABLE Output** | a recording device — audio comes *out* of the cable here | your **Input** list |
+
+So to process system audio:
+
+1. Set **CABLE Input** as the Windows playback device (or per-app in Volume Mixer).
+2. In Light Host, choose **CABLE Output** as the input and your real speakers as
+   the output.
 
 Audio then flows: application → CABLE Input → Light Host → your plugins → your
 speakers.
 
-Light Host does **not** bundle, download, or install VB-CABLE. It only detects
-whether a virtual input is present, and if none is, shows a **Get VB-CABLE**
-button in Preferences that opens the vendor's page in your browser. VoiceMeeter
-and other virtual audio drivers work equally well.
+To send your *processed microphone* to other apps, run it the other way: real
+microphone in, **CABLE Input** out, and point Teams, Discord or OBS at **CABLE
+Output**.
 
-## Key Behavior
+> **Check the Communications role.** Windows keeps a separate default recording
+> device for "Communications", and Teams, Zoom and most softphones use it. If it
+> still points at your raw microphone, those apps bypass your entire chain.
 
-- Left-click tray icon: opens Preferences
-- Right-click tray icon: opens the action menu
-- Plugins on the same lane are connected in series through a JUCE `AudioProcessorGraph`
-- Lanes run in parallel; their outputs sum automatically at the graph's output node
-- Editing the chain rewires only what changed and publishes one render sequence,
-  so a bypass toggle no longer clicks or drops out
-- Shorter lanes are delayed automatically so all lanes remain sample-aligned
-  (Plugin Delay Compensation, performed by JUCE's `AudioProcessorGraph`)
-- If all plugins are bypassed, input is wired directly to output
+Light Host does not bundle, download or install VB-CABLE. It only notices whether
+a virtual input exists, and offers a **Get VB-CABLE** button that opens the
+vendor's page. VoiceMeeter and other virtual audio drivers work equally well.
 
-## Lane Trim
+---
 
-Lanes are fed the same input and summed at the output, so four lanes carrying
-similar material sum coherently and arrive about 12 dB hot, and two lanes about
-6 dB. The **LANE TRIM** section in Preferences gives each lane a fader for that,
-from mute to +12 dB, unity by default so an existing setup sounds exactly as it
-did before.
+## Lanes, trims and delay compensation
 
-The trims apply as you drag them, because a level control you cannot hear while
-moving is not much use, and are written to disk when you let go. Double-click a
-fader to return it to unity. Each trim sits at its lane's summing point, after the
-last plugin on that lane, and ramps over 20 ms so a change does not click.
+Every plugin sits on a **lane** (0–3). Plugins on the same lane run in series;
+lanes run in parallel and sum at the output. One lane is an ordinary serial chain,
+which is what most setups want.
 
-A trim belongs to the lane, not to the plugins on it. Deleting every plugin from
-lane 2 leaves lane 2's trim where it was, ready for whatever you put there next,
-and moving a plugin to another lane hands it that lane's trim.
+**Delay compensation is automatic** and done by JUCE's `AudioProcessorGraph`: it
+accumulates each node's reported latency along every path, takes the maximum
+across paths feeding a node, and delays the shorter ones. All lanes arrive
+sample-aligned, and the host reports the slowest lane as its own latency.
+Bypassed plugins keep their latency, which is correct — a plugin that reports
+latency must produce the same latency when bypassed, so bypassing one does not
+shift its lane in time.
 
-## Lanes and PDC
+**Lane trims** exist because parallel lanes fed the same input sum coherently:
+four lanes of similar material arrive about 12 dB hot, two lanes about 6 dB. Each
+lane gets a fader from mute to +12 dB, unity by default. They apply as you drag —
+a level control you cannot hear while moving is not much use — and are written to
+disk when you let go. Double-click to return to unity. Each trim ramps over 20 ms
+so a change does not click.
 
-Each plugin row in the Preferences chain list has a **Lane** dropdown (Lane 0–3).
-Plugins on the same lane are chained in order; lanes are processed in parallel
-and summed at the output. Lane assignments persist between launches.
+A trim belongs to the lane, not the plugins on it. Empty lane 2 and its trim stays
+put for whatever you add next.
 
-Plugin Delay Compensation is automatic and is performed by JUCE's
-`AudioProcessorGraph`. When the graph builds its render sequence it accumulates
-each node's reported `getLatencySamples()` along every path, takes the maximum
-across the paths feeding a node, and inserts a delay on the shorter ones. All
-lanes therefore reach the summing point sample-aligned, and the host reports the
-slowest lane as its own latency.
+---
 
-Bypassed plugins keep their latency, which is the correct behaviour: a plugin
-that reports latency is required to produce the same latency when bypassed, so
-bypassing one does not shift its lane in time.
+## Where your settings live
 
-Versions up to 4.0.3 also inserted their own delay processor on shorter lanes.
-Because that processor delayed audio without reporting the delay, the graph saw a
-zero-latency lane and compensated a second time, so lanes ended up misaligned by
-the very amount the compensation was meant to remove. That code has been removed.
-`Tests/GraphRenderTests.cpp` now renders impulses through a real graph and asserts
-alignment, so a regression here fails the build.
+| | Path |
+|---|---|
+| Windows | `%APPDATA%\Light Host\` |
+| macOS | `~/Library/Preferences/` and `~/Library/Logs/Light Host/` |
+| Linux | `~/.config/Light Host/` |
 
-## Project Layout
+Two things live there:
 
-```text
-.
-├── Source/                 Application source
-├── Tests/                  Unit tests (juce::UnitTestRunner)
-├── Resources/              Icons and binary resources
-├── Utilities/              Helper scripts
-├── lib/                    Vendored JUCE + VST2 SDK
-├── CMakeLists.txt          Main build definition
-├── CMakePresets.json       Build presets
-├── CHANGELOG.md            Change history
-├── BACKLOG.md              Known bugs and remaining work
-├── RELEASING.md            How a release is cut
-└── README.md               This file
+- **`Light Host.settings`** — your chain, order, lanes, bypass states, trims and
+  device selection. Readable XML, and small: about twelve kilobytes.
+- **`Light Host.state/`** — one gzip-compressed file per plugin, holding that
+  plugin's own saved settings.
+
+Plugin state used to live base64-encoded inside the settings file. On a real chain
+of five plugins that made the file 7.5 MB, of which 99.84% was plugin state — and
+because `juce::PropertiesFile` rewrites the whole document on every save, toggling
+one bypass wrote seven and a half megabytes. Splitting them out means a bypass
+toggle writes twelve kilobytes, and only the plugin that actually changed is
+written at all.
+
+Upgrading from an earlier version migrates this once, on first launch. The file is
+written, read back and verified *before* the old copy is dropped, so a failed
+migration leaves your presets where they were rather than losing them.
+
+**Worth backing up.** `Light Host.state/` holds anything you have trained or
+tuned inside a plugin, and some of that is not quickly reproducible.
+
+> The tray menu has **Delete Plugin States** one item below **Quit**, with no
+> confirmation. It wipes every plugin's saved settings.
+
+---
+
+## Running more than one instance
+
+```bash
+Light Host -multi-instance=NAME
 ```
 
-## Build Requirements
+Starts a second, independent copy with its own settings file and its own state
+directory — so you can run one chain on a microphone and another on system audio
+without them fighting over one configuration.
+
+The name goes into a filename, so it is reduced to letters, digits, hyphens and
+underscores and capped at 32 characters. A name containing a path separator would
+otherwise write outside the settings folder; one containing a character the
+filesystem rejects would produce a file that could never be saved. A name that
+sanitises to nothing becomes `instance` rather than silently falling back to your
+main configuration.
+
+**Without that flag, a second launch does nothing.** It hands its command line to
+the copy already running and exits — which is normal single-instance behaviour,
+but it used to be completely silent, so launching a newly built copy looked like
+nothing had happened while you carried on inspecting the old one. It now says so,
+in the log and in the status row, and brings Preferences to front.
+
+---
+
+## When something goes wrong
+
+**Hover the tray icon.** When something has failed, the tooltip says what: a
+plugin that would not load, a plugin that refused its saved settings, an audio
+device that would not open, a settings file that could not be written. The same
+message sits at the top of Preferences with a **Show Log** button beside it,
+because a tooltip is only found by someone who already suspects something.
+
+**The log** is a single rotating file, trimmed to 256 KB on every launch:
+
+| | Path |
+|---|---|
+| Windows | `%APPDATA%\Light Host\LightHost.log` |
+| macOS | `~/Library/Logs/Light Host/LightHost.log` |
+| Linux | `~/.config/Light Host/LightHost.log` |
+
+It records startup and shutdown, audio configuration at startup and on every
+device change (driver, device names, active-versus-total channels, sample rate,
+buffer size), plugin loads and failures, graph rewiring, Preferences activity,
+Apply operations, and every exception caught around plugin state, plugin-list
+mutation and device switching. Each run starts with a
+`==== Light Host vX.Y.Z starting at <time> ====` banner.
+
+If the host disappears without a message, the log is the first place to look.
+
+---
+
+## Known limitations
+
+- **Stereo-focused routing.** Two channels in, two channels out.
+- **No metering.** Lane trims are set by ear or by watching your output device.
+- **No MIDI, no side-chain, no recording, no undo.**
+- **Plugins run in-process.** A plugin that crashes takes the host with it. Real
+  sandboxing is a different application, not a fix.
+- **Nothing is code-signed.** Windows shows a SmartScreen warning on first run;
+  macOS refuses the app until you right-click → Open or run
+  `xattr -dr com.apple.quarantine "Light Host.app"`.
+- **Renaming an audio device** after selecting it can orphan the selection, because
+  JUCE stores the device by display name rather than by a stable id.
+
+Known bugs, as distinct from missing features, are in [BACKLOG.md](BACKLOG.md).
+
+---
+
+## Building from source
+
+Light Host vendors JUCE 9.0.1 and the VST2 SDK, so there is nothing to fetch
+beyond a compiler and CMake.
 
 ### Windows
 
-- Visual Studio 2026
-- Windows SDK `10.0.26100.0`
+- Visual Studio 2026, Windows SDK `10.0.26100.0`
 - CMake `4.2+` (required by the Visual Studio 18 2026 generator)
-
-Recommended presets:
-
-- `default` for VS Debug
-- `release` for VS Release
-
-The C runtime is linked statically, so the resulting executable needs no Visual
-C++ redistributable and can be copied to another machine as a single file.
-
-### macOS
-
-- Xcode command line tools
-- Ninja
-- CMake `3.28+`
-
-Builds universal (`arm64;x86_64`) with a macOS 11 floor by default, so one binary
-runs on Apple Silicon and Intel. Override with `-DCMAKE_OSX_ARCHITECTURES=arm64`
-for a faster local build.
-
-Nothing here is code-signed. A locally built or downloaded app is quarantined by
-macOS until you either right-click and choose Open, or run
-`xattr -dr com.apple.quarantine "Light Host.app"`.
-
-### WSL / Linux / Native Ninja Builds
-
-- GCC or Clang
-- Ninja
-- CMake `3.28+`
-- `pkg-config`
-- ALSA/X11/font development packages
-
-Known required Linux packages for native configure/build:
-
-- `libasound2-dev`
-- `libfontconfig1-dev`
-- `libfreetype6-dev`
-- `libxcomposite-dev`
-- `libxcursor-dev`
-- `libxi-dev` (JUCE 9 added this; without it the build fails on
-  `X11/extensions/XInput2.h`)
-- `libxinerama-dev`
-- `libxkbcommon-dev`
-- `libxrandr-dev`
-- `libxrender-dev`
-
-## Build Presets
-
-Available configure presets:
-
-- `default`
-- `release`
-- `ninja-debug`
-- `ninja-release`
-- `ninja-relwithdebinfo`
-- `clang-debug`
-- `clang-release`
-- `mingw-release`
-
-### Examples
-
-Visual Studio:
-
-```bash
-cmake --preset default
-cmake --build --preset debug
-```
-
-Windows release:
 
 ```bash
 cmake --preset release
 cmake --build --preset release
 ```
 
-Native Ninja debug:
+The C runtime is linked statically, so the executable needs no Visual C++
+redistributable and can be copied to another machine as a single file.
+
+### macOS
+
+- Xcode command line tools, Ninja, CMake `3.28+`
+
+Builds universal (`arm64;x86_64`) with a macOS 11 floor, so one binary runs on
+Apple Silicon and Intel. Use `-DCMAKE_OSX_ARCHITECTURES=arm64` for a faster local
+build.
+
+### Linux / WSL
+
+- GCC or Clang, Ninja, CMake `3.28+`, `pkg-config`
 
 ```bash
-cmake --preset ninja-debug
-cmake --build build/ninja-debug -j2
-```
-
-Native Ninja release:
-
-```bash
+sudo apt install libasound2-dev libfontconfig1-dev libfreetype6-dev \
+  libxcomposite-dev libxcursor-dev libxi-dev libxinerama-dev \
+  libxkbcommon-dev libxrandr-dev libxrender-dev
 cmake --preset ninja-release
 cmake --build build/ninja-release -j2
 ```
 
+`libxi-dev` is needed by JUCE 9 and was not by JUCE 8; without it the build fails
+on `X11/extensions/XInput2.h`.
+
+### Presets
+
+`default` · `release` · `ninja-debug` · `ninja-release` · `ninja-relwithdebinfo` ·
+`clang-debug` · `clang-release` · `mingw-release`
+
+The built application lands in
+`build/<preset>/LightHost_artefacts/<config>/Light Host[.exe]`.
+
+---
+
 ## Tests
 
-Unit tests are built by default (`-DLIGHTHOST_BUILD_TESTS=OFF` to skip) and run
-via CTest. They use `juce::UnitTestRunner`, so there is no third-party test
-dependency.
+Unit tests build by default (`-DLIGHTHOST_BUILD_TESTS=OFF` to skip) and run under
+CTest. They use `juce::UnitTestRunner`, so there is no third-party dependency. No
+audio device and no real plugin are needed, so they run identically everywhere.
 
 ```bash
-cmake --build --preset release --target LightHostTests
+cmake --build --preset release
 ctest --test-dir build/release -C Release --output-on-failure
 ```
 
-Current coverage is parallel lane alignment, rendered through a real
-`AudioProcessorGraph` with stub processors that declare latency: passthrough,
-a single lane, two lanes of differing latency, four lanes of chained plugins
-with latencies that cross block boundaries, equal-latency lanes, and a bypassed
-lane. Each asserts that all lanes sum into one impulse on the same sample and
-that the host reports the slowest lane as its latency.
+What they cover:
 
-The second area is chain wiring, tested as a pure function over node facts with
-no graph at all: serial order within a lane, lanes staying parallel, mono sources
-duplicating into both destination channels, mono destinations taking one channel
-and no more, nodes that cannot carry audio being wired around, lane indices from
-a corrupt settings file being clamped rather than honoured, and two invariants
-the live rewiring depends on. Every connection must name a channel the node
-actually has, and the same chain must always produce the same wiring.
-
-The lane trim is rendered rather than reasoned about: unity leaves the signal
-untouched, minus six decibels halves it, the range is clamped, a change mid-stream
-ramps rather than steps (the largest sample-to-sample jump is asserted small
-enough to be inaudible), and re-preparing does not fade the lane in.
-
-Two smaller areas cover decisions that are hard to reach through the UI: the
-sample-rate correction policy, including the bound that stops a driver which never
-settles from being asked forever, and the status sink that collects failures for
-the tooltip.
-
-The third area is the chain settings store: identity surviving a plugin update
-and a rename while still telling apart two plugins inside one shell file, staged
-writes being invisible until commit and undone by rollback, an erase leaving no
-field behind, and the migration from the 4.0.3 key format carrying every value
-over exactly once.
-
-The fourth area is plugin state restore: a good blob round-trips, an empty blob
-reports "nothing saved" rather than failure, a plugin that throws out of
-`setStateInformation` reports failure without letting the exception escape, and
-the resulting rule (never save a node whose restore failed) leaves the stored
-preset intact.
-
-No audio device and no real plugin are needed, so these run identically on every
-platform. CI runs them on every push, and the Release workflow runs them before
-publishing an artifact.
+- **Lane alignment**, rendered through a real `AudioProcessorGraph` with stub
+  processors that declare latency — passthrough, one lane, two lanes of differing
+  latency, four chained lanes whose latencies cross block boundaries, equal-latency
+  lanes, and a bypassed lane. Each asserts one impulse on one sample and the
+  correct reported host latency.
+- **Chain wiring**, as a pure function over node facts with no graph at all:
+  serial order, parallel lanes, mono-to-stereo duplication, mono destinations,
+  nodes that cannot carry audio being wired around, corrupt lane indices being
+  clamped, and the two invariants live rewiring depends on.
+- **Lane trims**, rendered rather than reasoned about: unity is transparent, −6 dB
+  halves, the range clamps, a mid-stream change ramps instead of stepping, and
+  re-preparing does not fade the lane in.
+- **Chain settings**: identity surviving a plugin update and a rename while still
+  telling apart two plugins inside one shell file, staged writes invisible until
+  commit and undone by rollback, an erase leaving no field behind, ordering ties
+  broken deterministically, and the one-shot migration from the old key format.
+- **Plugin state**: a good blob round-trips, an empty one reports "nothing saved"
+  rather than failure, a plugin that throws out of `setStateInformation` reports
+  failure without letting the exception escape, and the resulting rule — never
+  save a node whose restore failed — leaves the stored preset intact.
+- **The state vault**: round trips, that compression is actually running, and the
+  three ways a file can be unusable (absent, truncated, written by a later
+  version) all reading as "nothing stored" rather than as garbage handed to a
+  plugin.
+- **Instance names**: every escape attempt a `-multi-instance` name could make.
+- Plus the sample-rate correction policy and the status sink.
 
 ### Startup smoke test
 
-`Light Host -self-test` runs the real application (real device manager, real
-graph, real tray icon, real message loop, real teardown), inspects its own log,
-prints `SELF-TEST PASS` or a list of failures, and exits non-zero on any problem.
-Settings and log go to a throwaway folder unique to the run, so a self-test can
-never read or overwrite your real configuration. The folder is deleted on success
-and kept on failure.
+```bash
+"Light Host" -self-test
+```
 
-Every self-test run starts from a seeded one-plugin chain written in the 4.0.3
-settings format, so it covers the one-shot settings migration, a plugin that
-cannot be instantiated being reported and skipped rather than stalling the load,
-and the rule that a plugin which never loaded keeps its saved state. The seeded
-plugin's format matches no registered format, so none of this needs a real plugin
-on disk.
+Runs the real application — real device manager, real graph, real tray icon, real
+message loop, real teardown — inspects its own log, prints `SELF-TEST PASS` or a
+list of failures, and exits non-zero on any problem. Settings and log go to a
+throwaway folder unique to the run, so it can never read or overwrite your real
+configuration; the folder is deleted on success and kept on failure.
 
-CTest registers three of these: a first run, an identical repeat, and one with
+Every run starts from a seeded one-plugin chain written in the old settings
+format, so it covers the one-shot migration, the move of plugin state into its own
+file, a plugin that cannot be instantiated being reported and skipped rather than
+stalling the load, and the rule that a plugin which never loaded keeps its saved
+state. The seeded plugin matches no registered format, so none of this needs a
+real plugin on disk.
+
+CTest registers three: a first run, an identical repeat, and one with
 `-multi-instance=`. They are labelled `smoke`, so `ctest -L unit` and
 `ctest -L smoke` can be run separately.
 
 This is the only automated check that exercises the destructor ordering in
-`~IconMenu` that prevents a shutdown crash. It is not a substitute for testing
-that by hand: on a machine with no audio device no callback thread ever starts,
-so the race the ordering guards against cannot occur. The smoke test proves the
+`~IconMenu` that prevents a shutdown crash — and it is not a substitute for
+testing that by hand. On a machine with no audio device no callback thread ever
+starts, so the race the ordering guards against cannot occur. It proves the
 ordering code runs cleanly, not that the race is fixed.
 
-On Linux this needs a display. JUCE does not degrade gracefully without one —
-the tray icon path dereferences a null X display and the process crashes — so
-CMake registers the smoke tests only when `xvfb-run` is present, and warns when
-it is not.
+On Linux this needs a display: JUCE does not degrade gracefully without one, so
+CMake registers the smoke tests only when `xvfb-run` is present.
 
-## Output
+---
 
-Typical app output locations:
+## Project layout
 
-- Visual Studio Debug: `build/default/LightHost_artefacts/Debug/Light Host`
-- Visual Studio Release: `build/release/LightHost_artefacts/Release/Light Host`
-- Ninja Debug: `build/ninja-debug/LightHost_artefacts/Debug/Light Host`
-- Ninja Release: `build/ninja-release/LightHost_artefacts/Release/Light Host`
+```text
+.
+├── Source/          Application source
+├── Tests/           Unit tests (juce::UnitTestRunner)
+├── Resources/       Icons and binary resources
+├── docs/images/     Screenshots used by this README
+├── Utilities/       Helper scripts
+├── lib/             Vendored JUCE 9.0.1 + VST2 SDK
+├── CMakeLists.txt   Build definition (the only place the version lives)
+├── CMakePresets.json
+├── CHANGELOG.md     What changed, and why
+├── BACKLOG.md       Known bugs and remaining work
+└── RELEASING.md     How a release is cut
+```
 
-On Windows the executable is `Light Host.exe`.
+---
 
-## Logging and Crash Triage
+## Licence
 
-LightHost writes a single rotating log file at `LightHost.log` under the JUCE system log folder:
-
-- Windows: `%APPDATA%\Light Host\LightHost.log` (typically `C:\Users\<you>\AppData\Roaming\Light Host\LightHost.log`)
-- macOS: `~/Library/Logs/Light Host/LightHost.log`
-- Linux: `~/.config/Light Host/LightHost.log`
-
-The log is trimmed to 256 KB on every launch, so the file cannot grow indefinitely. Each session begins with a `==== Light Host vX.Y.Z starting at <time> ====` banner so individual runs stay visually separable.
-
-The log records:
-
-- app startup/shutdown
-- audio configuration at startup and on every device change (driver, input/output device names, active-vs-total channel counts, sample rate, buffer size)
-- plugin load begin/end/failure
-- Preferences open/close
-- Apply operations
-- plugin editor open attempts
-- exception captures around plugin state save/restore, plugin-list mutation, and audio device switching
-
-If the host crashes without a message, the log should be the first place to check.
-
-## Known Limitations
-
-- Stereo-focused routing only
-- No metering: the lane trims are set by ear or by looking at your output device
-- No side-chain routing
-- No MIDI routing
-- No undo/redo for chain edits
-- No preset snapshot system
-- No plugin sandboxing or out-of-process isolation
-
-Known bugs, as opposed to missing features, are listed in [BACKLOG.md](BACKLOG.md).
-
-## Stability Notes
-
-Because Light Host runs plugins in-process, a plugin that crashes the host process can still take the application down. v4.0.3 closed out the host-side production-hardening backlog with exception protection around:
-
-- Preferences Apply (`setCurrentAudioDeviceType` / `setAudioDeviceSetup`)
-- plugin loading and state restore
-- plugin state save (`getStateInformation` and `saveIfNeeded`)
-- plugin editor creation (`PluginWindow::getWindowFor`)
-- plugin-list mutation (`activePluginList.addType` / `removeType`)
-
-All exception handlers log via `juce::Logger::writeToLog` so failures land in the log rather than silently corrupting state. A truly unstable plugin can still crash the process directly, because in-process hosting cannot fully sandbox plugin code.
-
-### Plugin loading
-
-Plugins are instantiated on the message thread via `createPluginInstanceAsync`,
-one at a time, each load starting from the previous one's completion callback.
-There is no loader thread: JUCE loads the DLL and calls the plugin factory on the
-message thread whichever thread asks, so a worker only slept while the message
-thread did the work, and cancelling one meant a blocking join during shutdown.
-Cancellation is now a generation counter bump, and a superseded callback drops
-its result when it arrives.
-
-### Failures are visible
-
-Hover the tray icon. When something has gone wrong, the tooltip says so instead of
-just naming the application: a plugin that would not load, a plugin that refused
-to restore its saved settings, an audio device that would not open, or a settings
-file that could not be written. Versions up to 4.0.3 discarded all of those:
-`AudioDeviceManager::initialise` returns a reason it could not open a device and
-that string was thrown away, and every one of the thirteen `saveIfNeeded()` calls
-ignored its result, so a full disk or a locked settings file lost every edit
-silently while the application went on looking healthy.
-
-The same message appears at the top of Preferences while a problem stands, with a
-**Show Log** button beside it, since a tooltip is only found by someone who already
-suspects something. The log holds the full history and the detail.
-
-## Running More Than One Instance
-
-`Light Host -multi-instance=NAME` starts a second, independent copy with its own
-settings file, so you can run one chain on a microphone and another on system
-audio without them fighting over one configuration.
-
-The name is used in the settings filename, so it is reduced to letters, digits,
-hyphens and underscores, and capped at 32 characters. Anything else is dropped: a
-name containing a path separator would otherwise write outside the settings
-folder, and one containing a character the filesystem rejects would produce a file
-that could never be saved. A name that survives sanitising to nothing becomes
-`instance` rather than falling back to the main configuration.
-
-### Chain settings survive a plugin update
-
-Each plugin's position, lane, bypass state, node id and saved preset are stored
-against an identity built from the plugin's file, its format and its unique id.
-Versions up to 4.0.3 built that key from the plugin's name and version instead,
-which had three consequences: updating a plugin changed its version and therefore
-orphaned everything the user had set for it, the same plugin installed in two
-folders shared one set of settings, and two plugins whose name and version
-happened to concatenate alike ("EQ" version "8" and "EQ8" with no version) also
-shared one set.
-
-Existing settings are migrated to the new keys once, on the first launch of 5.0.0,
-and the old keys are removed. Keys left over from plugins no longer in the chain
-are swept up at the same time, but only when the chain is not empty: an empty
-chain cannot be told apart from a chain whose saved list failed to load, and in
-that case those keys are the only surviving record of the settings.
-
-### Saved presets survive a failed restore
-
-If a plugin throws out of `setStateInformation`, it keeps its factory defaults.
-Saving that node back would overwrite the user's stored preset with defaults, so
-a transient load failure would become permanent data loss. `Source/PluginState.hpp`
-reports whether a restore actually happened, nodes whose restore failed are
-recorded, and the save path skips them so the stored blob is left intact.
-`Tests/PluginStateTests.cpp` pins that contract.
-
-## License
-
-Light Host's own source code is GPLv2-or-later, inherited from Rolando Islas's
+Light Host's own source is **GPLv2-or-later**, inherited from Rolando Islas's
 original Light Host.
 
-**The application as a whole is conveyed under AGPLv3.** Light Host links JUCE,
-which is AGPLv3 unless you hold a commercial JUCE licence, and this project does
-not. It also uses the Steinberg ASIO SDK under its GPLv3 option. GPLv2-or-later
-can be taken up to GPLv3, and GPLv3 and AGPLv3 code may be combined, so the
-result is distributable, but anyone receiving a Light Host binary receives
-AGPLv3 terms.
+**The application as a whole is conveyed under AGPLv3.** It links JUCE, which is
+AGPLv3 unless you hold a commercial JUCE licence, and this project does not. It
+also uses the Steinberg ASIO SDK under its GPLv3 option. GPLv2-or-later can be
+taken up to GPLv3, and GPLv3 and AGPLv3 may be combined, so the result is
+distributable — but anyone receiving a Light Host binary receives AGPLv3 terms.
 
 One exception: the Steinberg VST 2.4 SDK headers in `lib/vstsdk2.4` are governed
-by Steinberg's own SDK licensing agreement, which is not GPL-compatible and is
-not covered by the grant above. VST2 hosting is on by default
-(`JUCE_PLUGINHOST_VST=1`); building with it off and removing that directory
-gives a tree without the exception.
+by Steinberg's own agreement, which is not GPL-compatible and is not covered by
+the grant above. VST2 hosting is on by default (`JUCE_PLUGINHOST_VST=1`); building
+with it off and removing that directory gives a tree without the exception.
 
-See:
-
-- `license` — the full picture, including the VST2 exception
-- `agpl-3.0.txt` — AGPLv3, the licence the built application is conveyed under
-- `gpl.txt` — GPLv2, for Light Host's own source
-- `third_party` — every bundled component and its licence
+See [`license`](license) for the full picture including the VST2 exception,
+[`agpl-3.0.txt`](agpl-3.0.txt), [`gpl.txt`](gpl.txt), and
+[`third_party`](third_party) for every bundled component.

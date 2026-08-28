@@ -28,8 +28,15 @@ something, the same way the first CI run did.
    "Not yet verified" in [BACKLOG.md](BACKLOG.md), and the important one is that a
    real plugin has never been instantiated by this code.
 3. Bump `VERSION` in `CMakeLists.txt`. It is the only place the version lives;
-   everything else derives from it through `JUCE_APPLICATION_VERSION_STRING`,
-   except one prose mention in `README.md`.
+   everything else derives from it through `JUCE_APPLICATION_VERSION_STRING`.
+
+   > **Delete the build directory after bumping.** JUCE generates the Windows
+   > version resource (`LightHost_resources.rc`) through `juceaide` at configure
+   > time and does not regenerate it when only the project `VERSION` changes. An
+   > incremental build after a bump relinks without complaint and stamps the
+   > **old** version into the binary. Confirm before tagging with
+   > `(Get-Item "Light Host.exe").VersionInfo.FileVersion`. CI and the release
+   > pipeline are unaffected, because no job there caches its build directory.
 4. Rename the `## [Unreleased] — towards 5.0.0` heading in `CHANGELOG.md` to
    `## [5.0.0] — YYYY-MM-DD`, and open a fresh empty `[Unreleased]` above it.
 5. Commit, push, and wait for CI to pass on that commit.

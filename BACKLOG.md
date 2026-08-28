@@ -1,16 +1,12 @@
 # Backlog — Light Host
 
-State as of 2026-08-26. Everything below is what remains of the 5.0.0 release
-plan; what has already landed is in [CHANGELOG.md](CHANGELOG.md) under
-`[Unreleased]`.
+State as of 2026-08-27. What has already shipped is in
+[CHANGELOG.md](CHANGELOG.md); everything below is what is still outstanding.
 
 ## Where this stands
 
-`main` carries the 5.0.0 work but `CMakeLists.txt` still says `VERSION 4.0.3` and
-there is no 5.0.0 tag. The published release is still v4.0.3. The version bump,
-the changelog heading and the tag are the last step, deliberately, because the
-release workflow fires on a tag push and would otherwise publish work that has
-never been run against a real plugin.
+5.0.0 is tagged and released. `CMakeLists.txt` carries `VERSION 5.0.0`, which is
+the only place the version lives.
 
 ### Not yet verified
 
