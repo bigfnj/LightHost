@@ -27,9 +27,37 @@ the only place the version lives.
 
 ## Bugs
 
-None known as of 2026-08-26. Everything the audits turned up has been fixed and is
-described in `CHANGELOG.md` under `[Unreleased]`, which is the place to look before
-concluding a fault is new.
+One, below. Everything else the audits turned up has been fixed and is described
+in `CHANGELOG.md` under `[5.0.0]`, which is the place to look before concluding a
+fault is new.
+
+### Renaming an audio device silently selects a different one
+
+Confirmed on 2026-08-28 with the log to prove it, having previously only been a
+suspected limitation. `juce::AudioDeviceSetup` persists the chosen device as a
+display name, so renaming an endpoint in Windows while Light Host has it selected
+leaves a stored name that matches nothing. JUCE then falls back to the default
+device, and nothing tells the user:
+
+```
+AudioConfig [startup]:       output='J-Dizzle Mic Chain (VB-Audio Virtual Cable)'
+AudioConfig [device-change]: output='Speakers (Plugable Audio)'      <-- orphaned
+AudioConfig [device-change]: output='Speakers (Plugable Audio)'
+AudioConfig [device-change]: output='Speakers (Plugable Audio)'
+AudioConfig [device-change]: output='Mic Chain INPUT (VB-Audio Virtual Cable)'
+```
+
+For those three cycles a processed microphone chain was being sent to the room
+speakers instead of into a virtual cable. The user noticed and re-selected the
+device; nothing in the application would have told them otherwise, and the tooltip
+stayed clean because from JUCE's point of view a device opened successfully.
+
+This is the same class of fault as the plugin-identity keys fixed in 5.0.0:
+settings keyed on a display name are orphaned by a rename. The difference is that
+this one lives inside `juce::AudioDeviceManager` rather than in this project, so
+the fix is to store the endpoint id beside the name, and on startup prefer the id
+and fall back to the name. Reporting the fallback through the status sink would at
+least make it visible in the meantime, and is much the smaller change of the two.
 
 Two things worth knowing when reading an older audit of this project, because both
 have come up more than once:
@@ -116,6 +144,12 @@ Phase numbers refer to the 5.0.0 plan.
 - **Out-of-process plugin hosting.** Light Host runs plugins in-process, so a
   plugin that crashes takes the host with it. Real sandboxing is a different
   application, not a fix.
+- **Acoustic echo cancellation** — removing speaker bleed from the microphone —
+  was assessed and declined. It is not deferred pending effort; it is declined on
+  architecture, and the reasoning is in [DECISIONS.md](DECISIONS.md) so that it
+  does not have to be re-derived. The short version: it needs a reference signal,
+  which needs loopback, and even with loopback the microphone and the output are
+  on separate clocks.
 - **System-audio capture: re-check this on every JUCE bump.** Processing audio
   from other applications currently needs a third-party virtual input device
   (VB-CABLE or similar), and the Preferences window says so. That is a JUCE
