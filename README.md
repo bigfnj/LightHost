@@ -268,10 +268,18 @@ If the host disappears without a message, the log is the first place to look.
 - **Nothing is code-signed.** Windows shows a SmartScreen warning on first run;
   macOS refuses the app until you right-click → Open or run
   `xattr -dr com.apple.quarantine "Light Host.app"`.
-- **Renaming an audio device** after selecting it can orphan the selection, because
-  JUCE stores the device by display name rather than by a stable id.
+- **Renaming an audio device** after selecting it can orphan the selection,
+  because JUCE stores the device by display name rather than by a stable id. It
+  falls back to the default device without saying so — check the log if audio
+  turns up somewhere unexpected.
+- **No echo cancellation.** If your speakers are audible to your microphone,
+  Light Host cannot remove them: cancelling an echo requires knowing what was
+  played, and Light Host has no access to that. Use headphones, or leave your
+  conferencing application's echo cancellation switched on — it *does* know.
+  Assessed in detail in [DECISIONS.md](DECISIONS.md).
 
 Known bugs, as distinct from missing features, are in [BACKLOG.md](BACKLOG.md).
+Things deliberately not built, and why, are in [DECISIONS.md](DECISIONS.md).
 
 ---
 
@@ -414,6 +422,7 @@ CMake registers the smoke tests only when `xvfb-run` is present.
 ├── CMakePresets.json
 ├── CHANGELOG.md     What changed, and why
 ├── BACKLOG.md       Known bugs and remaining work
+├── DECISIONS.md     What was considered and not built, and why
 └── RELEASING.md     How a release is cut
 ```
 
