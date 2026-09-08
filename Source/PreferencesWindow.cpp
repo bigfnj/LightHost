@@ -517,6 +517,11 @@ private:
 // the previous AudioDeviceSelectorComponent).  Plugin chain + bypass state
 // are staged until the user clicks Apply.
 //==============================================================================
+// True while a Chain Test render is on the stack. File scope rather than a
+// member because the owning component does not outlive a Preferences close,
+// and the render must not be re-entered. Message thread only.
+static bool chainTestInFlight = false;
+
 class PreferencesContentComponent final : public juce::Component,
                                           private juce::ChangeListener
 {
@@ -1364,44 +1369,94 @@ private:
 
     void startChainTest (const juce::File& input, const juce::File& folder)
     {
+        if (chainTestInFlight)
+        {
+            setApplyFeedback ("Chain test already running");
+            return;
+        }
+
         const auto output = folder.getChildFile (input.getFileNameWithoutExtension()
                                                  + "-lighthost.wav");
 
         setApplyFeedback ("Rendering...");
         chainTestButton.setEnabled (false);
+        chainTestInFlight = true;
 
-        // callAsync for the same reason Apply uses it: the label repaints before
-        // the render blocks the message thread. Rendering runs far faster than
-        // real time, so a voice take is a moment -- but a very long file will
-        // make this window briefly unresponsive, which is the honest trade for
-        // not instantiating plugins off the message thread.
+        auto* settings = getAppProperties().getUserSettings();
+        const auto settingsFile = settings->getFile();
+        const auto stateDir = settingsFile.getSiblingFile (
+            settingsFile.getFileNameWithoutExtension() + ".state");
+
+        // The render stays on the message thread and keeps this window alive by
+        // pumping the dispatch loop while pacing waits. It is paced to real time,
+        // so a one-minute take takes a minute, and blocking for that long is not
+        // acceptable -- but neither was the obvious fix.
+        //
+        // Rendering on a background thread looked tidier and was not. Creating a
+        // plugin instance off the message thread posts an async message *to* the
+        // message thread and blocks on it with no timeout, so quitting mid-render
+        // hung that thread forever while it still held live plugin instances.
+        // It also read a settings object whose fallback set the app frees during
+        // shutdown, and logged through a logger shutdown deletes. Pumping the
+        // loop keeps all three on the thread that owns them.
+        //
+        // Pumping does mean re-entrancy is possible -- the user can click things
+        // mid-render -- which is what chainTestInFlight guards. Disabling the
+        // button is not enough, because closing and reopening Preferences builds
+        // a new one that is enabled.
         juce::Component::SafePointer<PreferencesContentComponent> safe (this);
 
-        juce::MessageManager::callAsync ([safe, input, output]
+        juce::MessageManager::callAsync ([safe, input, output, stateDir]
         {
-            if (safe == nullptr) return;
+            if (safe == nullptr)
+            {
+                chainTestInFlight = false;
+                return;
+            }
 
-            auto* settings = getAppProperties().getUserSettings();
-            const auto settingsFile = settings->getFile();
-            const auto stateDir = settingsFile.getSiblingFile (
-                settingsFile.getFileNameWithoutExtension() + ".state");
+            auto* props = getAppProperties().getUserSettings();
 
-            const auto result =
-                lighthost::render::renderFile (*settings, stateDir, input, output);
+            const auto result = lighthost::render::renderFile (
+                *props, stateDir, input, output, 480, {}, true, {},
+                [] (int ms)
+                {
+                    juce::MessageManager::getInstance()->runDispatchLoopUntil (ms);
+                });
+
+            chainTestInFlight = false;
+
+            if (safe == nullptr)
+                return;
 
             safe->chainTestButton.setEnabled (true);
 
-            if (result.ok)
-            {
-                safe->setApplyFeedback ("Rendered - " + juce::String (result.declaredLatency)
-                                        + " samples latency");
-                output.revealToUser();
-            }
-            else
+            if (! result.ok)
             {
                 safe->setApplyFeedback ("Render failed");
                 safe->setStatusMessage ("Chain test failed: " + result.message);
+                return;
             }
+
+            // A render that could not keep pace measured a starved plugin, which
+            // is worse than useless -- it looks like a result. Say so here rather
+            // than only in the log.
+            if (result.blocksBehind > 0)
+            {
+                safe->setApplyFeedback ("Rendered, but fell behind real time");
+                safe->setStatusMessage ("Chain test fell behind on "
+                                        + juce::String (result.blocksBehind) + " of "
+                                        + juce::String (result.blocksTotal)
+                                        + " blocks - a plugin doing background "
+                                          "inference was starved, so treat the "
+                                          "output as unreliable");
+            }
+            else
+            {
+                safe->setApplyFeedback ("Rendered - " + juce::String (result.declaredLatency)
+                                        + " samples latency");
+            }
+
+            output.revealToUser();
         });
     }
 
