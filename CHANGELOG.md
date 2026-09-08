@@ -8,6 +8,117 @@ Nothing yet.
 
 ---
 
+## [5.0.1] — 2026-09-08
+
+The offline render introduced after 5.0.0 was measuring nothing and reporting
+success. Everything here follows from that, plus two changes to the tray menu
+that exist because a destructive item sat one row below Quit.
+
+### Fixed — the render starved any plugin that does its work on a worker thread
+
+A render ran as fast as the CPU allowed, roughly thirty times real time. A plugin
+that runs neural inference on a background thread cannot keep up with that: its
+worker never finishes in time, it falls back to passing the dry signal through,
+and the render prints `RENDER OK` having measured a pass-through.
+
+The scale of the error is worth recording. A DeepFilterNet-based denoiser was
+measured at **0.55 dB** of noise reduction on a take with obvious keyboard noise,
+and on a quieter take it appeared to *raise* the noise floor by 8.5 dB. Paced to
+real time, the same plugin at the same settings removes **24.8 dB** of typing and
+**28.5 dB** of room tone while costing 1.7 dB of speech level. The conclusion
+drawn from the unpaced numbers — that the plugin was useless and should be
+removed from the chain — was wrong in every particular.
+
+Renders are therefore paced to real time by **default**, so a render takes as long
+as the audio it is rendering. `--fast` restores the old behaviour for plugins
+known to work synchronously, where it is around thirty times quicker. The default
+is the slow one because the failure mode of the fast one is a confident wrong
+answer, and there is no way to tell from the output that it happened.
+
+Every render now also reports a `realtime factor`, and says when it could not
+keep pace. That report is deliberately not phrased as a verdict: measurements
+here found a synchronous plugin falling behind on 998 of 10,224 blocks while
+producing bit-identical output, and an asynchronous one falling behind on 309 and
+producing different audio. Falling behind is a fact about the render loop, not
+about the result. Blocks inside the first second are excluded, because loading a
+model takes a moment and a warning that fires on healthy runs is a warning nobody
+reads.
+
+### Added — the render can set plugin parameters, and reports what they were
+
+Twice during the work above a conclusion was published from an assumption about
+what a knob was set to, and twice the assumption was wrong — including getting a
+parameter's direction exactly backwards. `--param "NAME=VALUE"` asks the plugin
+to interpret the text, `--param "NAME@0.25"` sets the raw normalised position,
+and every active plugin's parameters are now printed **after** its stored state is
+restored. A measurement is only worth as much as the settings it ran under, and
+reading those out of the plugin beats reading them off a screenshot.
+
+`=` binds at its first occurrence so a value containing `=` or `@` cannot hijack
+the split, values the plugin cannot parse are rejected rather than written
+(`juce::jlimit` passes NaN straight through, so an unparseable value would
+otherwise have reached the DSP with the render still reporting success), and a
+name matching no parameter is logged instead of silently ignored.
+
+### Added — `--chain` renders through any scanned plugin
+
+Comparing two plugins previously meant reconfiguring the chain being measured.
+`--chain "Alt Denoiser"` looks names up in the scanned plugin list rather than the
+saved chain, ignores stored bypass flags, and writes nothing — so a candidate can
+be A/B tested against the current setup without disturbing it.
+
+### Changed — Chain Test keeps the window responsive without leaving the message thread
+
+A paced render takes as long as the audio, which is far too long to block the
+Preferences window. The obvious fix — rendering on a background thread — is worse
+than what it replaces: `createInstanceFromDescription` called off the message
+thread posts a message *to* the message thread and blocks on it with no timeout,
+so quitting mid-render hangs that thread forever while it still holds live plugin
+instances. It would also read a settings object whose fallback set the app frees
+during shutdown, and log through a logger shutdown deletes.
+
+So the render stays on the message thread and keeps the window alive by pumping
+the dispatch loop while pacing waits. Pumping makes re-entrancy possible, which a
+flag guards; disabling the button is not enough, because closing and reopening
+Preferences builds a new one that is enabled. Chain Test also now reports when a
+render could not keep pace, which it previously swallowed.
+
+### Fixed — Apply discarded a plugin setting when the chain itself had not changed
+
+`applyPluginChain` returned early when the chain was unchanged, and that return
+sat in front of `savePluginStates`. The one case it was most likely to be reached
+in — a knob moved inside a plugin editor, then Apply — persisted nothing, and
+anything short of a clean quit lost the edit. Apply now saves on that path, which
+is free: `savePluginStates` already fingerprints each state and skips any whose
+bytes have not moved. The confirmation also stops describing what did not happen
+and says "Plugin settings saved".
+
+### Fixed — Delete Plugin States asks first, and could have deleted on Escape
+
+Erasing every saved plugin setting was a single click with no confirmation and no
+undo, and it sat directly below Quit in the tray menu. It was nearly clicked three
+times while reaching for Quit.
+
+It now names the plugins whose settings are about to go and says the action cannot
+be undone, because a generic "are you sure?" is easy to click through. Both the
+state vault and any un-migrated legacy blob are counted, so it cannot claim there
+is nothing to delete while something is still there.
+
+The button order is chosen per platform and the index to act on derived from it,
+which is not fussiness. `showAsync` reports the plain index of the clicked button,
+but the platforms disagree about what a *dismissal* reports: on Windows a dialog
+failure yields 0 and Escape is disabled, while on Linux the raw result is remapped
+`(raw + N - 1) % N` and Escape is bound to the second button, so both resolve to
+the last index. Cancel-first is safe on Windows and would have made **Escape
+delete every saved plugin state** on Linux. No single order is safe on both.
+
+### Changed — Quit is the last item in the tray menu
+
+Quit moved to the bottom and Delete Plugin States moved above Run at Startup, so
+nothing sits below Quit and nothing destructive sits beside it.
+
+---
+
 ## [5.0.0] — 2026-08-27
 
 The first release since 4.0.3. Plugin state moves out of the settings document
