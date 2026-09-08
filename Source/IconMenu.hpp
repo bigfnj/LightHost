@@ -70,6 +70,8 @@ private:
     // Set when a chain apply started an asynchronous plugin load, so the
     // completion handler can tell an apply apart from the startup load.
     bool applyInitiatedLoad = false;
+    /** Asks first, then calls deletePluginStates() if the answer is yes. */
+    void confirmDeletePluginStates();
     void deletePluginStates();
     void setIcon();
     void handleDeletePlugin (int index);
