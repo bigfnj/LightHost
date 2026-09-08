@@ -52,6 +52,10 @@ public:
                             const std::vector<bool>&,
                             const std::vector<int>&)> onApply,
         std::function<void (const juce::PluginDescription&)> onEditPlugin,
+        /** Total latency the graph declares, in samples. Read for display only:
+            plugin latency is inherent to the plugins and nothing the host can
+            compensate on a live monitoring path. */
+        std::function<int()> chainLatencySamples,
         std::function<void()> onClose);
 
     ~PreferencesWindow() override;

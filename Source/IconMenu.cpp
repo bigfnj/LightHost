@@ -774,6 +774,11 @@ void IconMenu::handleAsyncUpdate()
 {
     juce::Logger::writeToLog ("IconMenu: a plugin changed its reported latency; rewiring");
     reconnectGraph();
+
+    // The number on the Preferences panel is now stale. smartChain re-declares
+    // when its latency mode is switched, which is exactly the moment someone
+    // wants to see what it cost.
+    refreshPreferencesIfOpen();
 }
 
 //==============================================================================
@@ -1554,6 +1559,16 @@ void IconMenu::showPreferences()
         {
             if (auto* im = safe.getComponent())
                 im->openPluginEditorFor (pd);
+        },
+        [safe]() -> int
+        {
+            // Whatever the graph currently declares. Read for display only:
+            // this is inherent plugin delay on a live path, so there is nothing
+            // for the host to compensate and nothing for the user to set.
+            if (auto* im = safe.getComponent())
+                return im->graph.getLatencySamples();
+
+            return 0;
         },
         [safe]()
         {
