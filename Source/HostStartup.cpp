@@ -244,7 +244,26 @@ private:
         juce::Logger::writeToLog ("Render: " + input.getFullPathName()
                                   + " -> " + output.getFullPathName());
 
-        const auto result = lighthost::render::renderFile (*settings, stateDir, input, output);
+        const auto overrides = lighthost::render::parseOverrides (juce::JUCEApplication::getCommandLineParameterArray());
+
+        const auto paced = lighthost::render::isPaced (
+            juce::JUCEApplication::getCommandLineParameterArray());
+
+        std::printf ("  pacing           : %s\n",
+                     paced ? "real time"
+                           : "none (--fast; wrong for worker-thread plugins)");
+
+        const auto chainOverride = lighthost::render::parseChain (
+            juce::JUCEApplication::getCommandLineParameterArray());
+
+        if (! chainOverride.isEmpty())
+            std::printf ("  chain override   : %s\n",
+                         chainOverride.joinIntoString (" -> ").toRawUTF8());
+
+        const auto result = lighthost::render::renderFile (*settings, stateDir,
+                                                           input, output, 480,
+                                                           overrides, paced,
+                                                           chainOverride);
 
         if (result.ok)
         {
@@ -261,6 +280,29 @@ private:
                          result.sampleRate > 0.0
                              ? result.declaredLatency * 1000.0 / result.sampleRate : 0.0);
             std::printf ("  frames written   : %lld\n", (long long) result.framesWritten);
+
+            std::printf ("  realtime factor  : %.3f%s\n",
+                         result.realtimeFactor,
+                         // blocksTotal only counts up when pacing, so zero means
+                         // --fast. Printing "(kept pace)" there would be a lie of
+                         // exactly the kind this whole check exists to catch.
+                         ! result.wasPaced
+                             ? "  (unpaced - worker-thread plugins will misreport)"
+                             : (result.blocksBehind > 0 ? "" : "  (kept pace)"));
+
+            if (result.blocksBehind > 0)
+                std::printf ("  NOTE             : render fell behind real time on %d of %d "
+                             "blocks. Harmless for a plugin that does its work inline; "
+                             "if it runs inference on a worker thread, it was starved for "
+                             "that long and the result understates it.\n",
+                             result.blocksBehind, result.blocksTotal);
+
+            if (! result.parameterReport.isEmpty())
+            {
+                std::printf ("  active plugin parameters (after state restore):\n");
+                for (const auto& line : result.parameterReport)
+                    std::printf ("    %s\n", line.toRawUTF8());
+            }
         }
         else
         {
