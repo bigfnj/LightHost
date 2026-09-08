@@ -536,12 +536,14 @@ public:
         std::function<void (const std::vector<juce::PluginDescription>&,
                             const std::vector<bool>&,
                             const std::vector<int>&)> onApply,
-        std::function<void (const juce::PluginDescription&)> onEditPlugin)
+        std::function<void (const juce::PluginDescription&)> onEditPlugin,
+        std::function<int()> chainLatencySamples)
         : deviceManager (dm),
           knownPlugins   (knownPlugins_),
           laneTrim       (std::move (laneTrimIn)),
           onApplyFn      (std::move (onApply)),
-          onEditPluginFn (std::move (onEditPlugin))
+          onEditPluginFn (std::move (onEditPlugin)),
+          chainLatencyFn (std::move (chainLatencySamples))
     {
         // ── STATUS row ────────────────────────────────────────────────────────
         // Hidden until something goes wrong, then it sits above everything else.
@@ -704,6 +706,15 @@ public:
         bufferSizeHeadLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
         bufferSizeHeadLabel.setJustificationType (juce::Justification::centredRight);
 
+        addAndMakeVisible (latencyHeadLabel);
+        addAndMakeVisible (latencyValueLabel);
+        latencyHeadLabel.setText ("Latency:", juce::dontSendNotification);
+        latencyHeadLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
+        latencyHeadLabel.setJustificationType (juce::Justification::centredRight);
+        latencyValueLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
+        latencyValueLabel.setJustificationType (juce::Justification::centredLeft);
+        updateLatencyDisplay();
+
         // ── Apply button ──────────────────────────────────────────────────────
         applyButton.setButtonText ("Apply");
         applyButton.onClick = [this] { commitAllSettings(); };
@@ -752,6 +763,9 @@ public:
         chainList.syncBypassedSize();
         updateChainListHeight();
         chainList.repaint();
+
+        // The chain just changed, so its declared latency probably did too.
+        updateLatencyDisplay();
     }
 
     /** Writes a lane trim to disk, once, if it has moved since the last write. */
@@ -822,7 +836,8 @@ public:
         const int belowChain = kGap + kRowH + kGap           // Add Plugin row
             + kSectH + kGap + kRowH + kGap                    // LANE TRIM
             + kSectH + kGap + kRowH + kGap                    // OUTPUT
-            + kSectH + kGap + kRowH + kGap + kRowH + kGap + kRowH + kGap  // DEVICE SETTINGS
+            + kSectH + kGap + kRowH + kGap + kRowH + kGap + kRowH + kGap
+            + kRowH + kGap                                    // DEVICE SETTINGS
             + kBtnH + kPad;
 
         return aboveChain + belowChain;
@@ -948,6 +963,17 @@ public:
             bufferSizeCombo.setBounds     (row.removeFromLeft (280).reduced (4, 2));
         }
         area.removeFromTop (kGap);
+        {
+            // Directly under Buffer Size on purpose. Buffer Size is the only
+            // delay figure this panel used to show, and it is not the one that
+            // matters: a 10 ms buffer sat above a 94 ms plugin chain with
+            // nothing on screen to say so.
+            constexpr int kLabelW = 90;
+            auto row = area.removeFromTop (kRowH);
+            latencyHeadLabel.setBounds  (row.removeFromLeft (kLabelW));
+            latencyValueLabel.setBounds (row.removeFromLeft (340).reduced (4, 2));
+        }
+        area.removeFromTop (kGap);
 
         // ── Buttons ───────────────────────────────────────────────────────────
         {
@@ -969,6 +995,7 @@ private:
                         const std::vector<bool>&,
                         const std::vector<int>&)>    onApplyFn;
     std::function<void (const juce::PluginDescription&)> onEditPluginFn;
+    std::function<int()> chainLatencyFn;
 
     // INPUT
     SectionLabel   inputSectionLabel   { "  INPUT" };
@@ -1039,6 +1066,8 @@ private:
     juce::ComboBox sampleRateCombo;
     juce::Label    bufferSizeHeadLabel;
     juce::ComboBox bufferSizeCombo;
+    juce::Label    latencyHeadLabel;
+    juce::Label    latencyValueLabel;
 
     // Apply button, version label, and the transient Apply confirmation
     juce::TextButton applyButton;
@@ -1476,7 +1505,46 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster* source) override
     {
         if (source == &deviceManager)
+        {
             rebuildDeviceCombos();
+            updateLatencyDisplay();
+        }
+    }
+
+    /** Chain latency, device latency, and the sum -- which is the only one of
+        the three the user actually experiences.
+
+        Event driven rather than polled: the device broadcasts its changes, and
+        IconMenu refreshes this panel when a plugin re-declares its latency
+        (which smartChain does when its latency mode is switched). A timer would
+        be simpler and would burn cycles forever to catch an event that arrives
+        perhaps twice a session.
+    */
+    void updateLatencyDisplay()
+    {
+        const auto chainSamples = chainLatencyFn ? chainLatencyFn() : 0;
+
+        auto* device = deviceManager.getCurrentAudioDevice();
+        const auto rate = device != nullptr ? device->getCurrentSampleRate() : 0.0;
+
+        if (rate <= 0.0)
+        {
+            latencyValueLabel.setText ("no audio device", juce::dontSendNotification);
+            return;
+        }
+
+        const auto deviceSamples = device->getInputLatencyInSamples()
+                                 + device->getOutputLatencyInSamples();
+
+        const auto ms = [rate] (int samples)
+        {
+            return juce::String (samples * 1000.0 / rate, 1);
+        };
+
+        latencyValueLabel.setText (
+            ms (chainSamples) + " ms plugins + " + ms (deviceSamples)
+                + " ms device  =  " + ms (chainSamples + deviceSamples) + " ms",
+            juce::dontSendNotification);
     }
 
     void updateChainListHeight()
@@ -1623,6 +1691,7 @@ PreferencesWindow::PreferencesWindow (
                         const std::vector<bool>&,
                         const std::vector<int>&)> onApply,
     std::function<void (const juce::PluginDescription&)> onEditPlugin,
+    std::function<int()> chainLatencySamples,
     std::function<void()> onClose)
     : DocumentWindow ("Preferences",
                       juce::LookAndFeel::getDefaultLookAndFeel()
@@ -1632,7 +1701,8 @@ PreferencesWindow::PreferencesWindow (
 {
     auto* content = new PreferencesContentComponent (
         deviceManager, knownPlugins, activeChain, bypassStates, laneStates,
-        std::move (laneTrim), std::move (onApply), std::move (onEditPlugin));
+        std::move (laneTrim), std::move (onApply), std::move (onEditPlugin),
+        std::move (chainLatencySamples));
 
     // Height budget, from the constants in resized(). Above the chain: 10 pad +
     // 62 INPUT + 34 virtual-input hint when shown + 28 chain label = 134. Below
@@ -1684,6 +1754,7 @@ void PreferencesWindow::refreshPluginChain (const std::vector<juce::PluginDescri
     if (auto* scroller = dynamic_cast<PreferencesPanelViewport*> (getContentComponent()))
         if (scroller->panel != nullptr)
             scroller->panel->setChain (chain, bypassStates, laneStates);
+
 }
 
 void PreferencesWindow::setStatusMessage (const juce::String& message)
