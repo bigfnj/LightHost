@@ -10,20 +10,35 @@ the only place the version lives.
 
 ### Not yet verified
 
-- **No real plugin has ever been loaded through this code.** The tests use stub
-  processors and the self-test uses a deliberately unloadable plugin. Before
-  tagging: load a chain of real VST3s, toggle bypass, move a plugin between
-  lanes, quit, relaunch, and confirm order, lanes, bypass and presets survived.
-- **The settings migration has only been exercised on synthetic data** (unit
-  tests and the seeded self-test). It runs once, on first launch, against the
-  real settings file. Back that file up before the first run:
-  `%APPDATA%\Light Host\Light Host.settings` on Windows.
-- **Windows only.** Linux and macOS have never been built locally; CI is the only
-  evidence for those.
-- **The JUCE 9 manual checklist was never run.** 9.0.0 rewrote the SVG parser and
-  reworked the software renderer. Check the tray icon, the right-click menu,
-  Preferences and two or three plugin editors at 100% and 150% DPI, and in both a
-  light and a dark taskbar.
+- **Windows only for local builds.** Linux and macOS have never been built on a
+  developer machine; CI is the only evidence for those.
+- **The JUCE 9 manual checklist is only partly run.** 9.0.0 rewrote the SVG parser
+  and reworked the software renderer. The tray icon, right-click menu, Preferences
+  and several plugin editors have all been exercised in real use on Windows at
+  100% DPI. Still unchecked: 150% DPI, and a light taskbar.
+- **The delete-plugin-states confirmation has not been seen on Linux or macOS.**
+  Its button order is chosen per platform (see the comment in `IconMenu.cpp`)
+  because the platforms disagree about what a dismissed dialog reports. The
+  Windows path is exercised; the others are reasoned from JUCE's source, not
+  observed.
+
+### Verified 2026-09-08
+
+Recording these because they were open questions for a long time and the answers
+should not have to be rediscovered.
+
+- **Real plugins load and run.** Salvor, smartChain, Alt Denoiser and three Elgato
+  plugins have all been instantiated through this code, live and through the
+  offline render. Bypass, lane moves, quit and relaunch all survive; order, lanes
+  and state persist.
+- **The settings migration ran on a real settings file.** 7,489,165 bytes of
+  base64 plugin state migrated to the vault, leaving roughly twelve kilobytes of
+  readable XML. Not synthetic data.
+- **Declared latency is honest.** A chain declaring 4512 samples (94 ms) measured
+  80–84 ms by envelope cross-correlation, agreeing within the method's
+  resolution.
+- **The graph's inter-lane compensation is correct** and the host adds none of its
+  own, which is what fixed the double-padding bug from 4.0.3.
 
 ## Bugs
 
@@ -73,6 +88,18 @@ have come up more than once:
   `juce::KnownPluginList` and that container refuses a duplicate on the same field
   set the key is built from. Making it reachable and making it correct are the same
   piece of work: see the allocated slot ids under Deferred.
+
+### VST2 scanning does not descend into subdirectories
+
+`lastPluginScanPath_VST` defaults to `C:\Program Files\Steinberg\VstPlugins;C:\Program Files\VstPlugins`,
+and a scan of those paths finds nothing in `C:\Program Files\VstPlugins\ReaPlugs\`
+one level below. Nine ReaPlugs VST2 plugins were invisible to the host until the
+subdirectory was added to the scan path by hand, and an older settings file shows
+they had been found before — so this reads as a regression or a path default that
+never matched where installers actually put things.
+
+Either scan recursively, or say in the UI that the path is not recursive. Silently
+finding nothing looks like the plugins are unsupported.
 
 ## Features and refactors
 
