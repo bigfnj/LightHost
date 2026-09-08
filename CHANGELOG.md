@@ -8,6 +8,56 @@ Nothing yet.
 
 ---
 
+## [5.0.2] — 2026-09-08
+
+5.0.1 was tagged but never published: its release pipeline failed on macOS, and
+the failure was a flaky test rather than a real defect. This release fixes that,
+and adds a latency readout to Preferences.
+
+### Fixed — the startup self-test waited for a duration instead of a condition
+
+`scheduleSelfTestCheck` dwelled a flat 1500 ms and then read the log. That is
+ample on a developer machine and not always enough on a loaded CI runner. The
+macOS release job failed exactly the two assertions that depend on the
+asynchronous plugin load having finished — "a plugin that cannot be instantiated
+was not reported to the status sink" and "the load chain did not finish after a
+failed plugin load" — while the CI workflow passed on the very same commit.
+Windows and Linux passed both.
+
+It now polls for the completion marker and gives up after 20 seconds, saying so.
+Measured locally straight after the change, the marker appeared at about 2.6
+seconds, so the old dwell was already past its margin on Windows too and was
+passing on luck. A release gate that fails a coin toss teaches people to press
+re-run, which is how a real failure eventually gets waved through.
+
+### Added — Preferences reports the latency you actually experience
+
+Under Device Settings, a `Latency` row gives the chain's declared latency, the
+device's own input and output latency, and the sum. The panel previously showed
+`Buffer Size` and nothing else about delay, which is the one number that is not
+the answer: 480 samples reads as 10 ms while the chain above it was contributing
+94.
+
+It is event driven rather than polled — the device broadcasts its own changes,
+and `IconMenu` now refreshes the panel when a plugin re-declares its latency,
+which is the moment someone wants to see what a latency-mode switch cost. A timer
+would have been simpler and would have burned cycles forever to catch an event
+that arrives perhaps twice a session.
+
+Display only, on purpose. Plugin latency is inherent to the plugins; on a live
+monitoring path there is nothing for the host to compensate, and buffer size is a
+trade-off between latency and dropout risk that belongs to the user rather than
+to a host second-guessing it.
+
+### Changed — the README documents the render mode
+
+The offline render, the Chain Test button, and the `--param` / `--chain` /
+`--fast` flags all shipped in 5.0.1 undocumented. There is now a "Testing your
+chain on a file" section covering them, including why a render is paced to real
+time, and the delay-compensation section explains the new readout.
+
+---
+
 ## [5.0.1] — 2026-09-08
 
 The offline render introduced after 5.0.0 was measuring nothing and reporting

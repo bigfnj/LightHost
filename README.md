@@ -24,6 +24,7 @@ voice. Set it up once and forget it is running.
 - [Adding plugins](#adding-plugins)
 - [Processing audio from other applications](#processing-audio-from-other-applications-windows)
 - [Lanes, trims and delay compensation](#lanes-trims-and-delay-compensation)
+- [Testing your chain on a file](#testing-your-chain-on-a-file)
 - [Where your settings live](#where-your-settings-live)
 - [Running more than one instance](#running-more-than-one-instance)
 - [When something goes wrong](#when-something-goes-wrong)
@@ -160,6 +161,18 @@ Bypassed plugins keep their latency, which is correct — a plugin that reports
 latency must produce the same latency when bypassed, so bypassing one does not
 shift its lane in time.
 
+**Preferences shows what it costs.** Under Device Settings, the `Latency` row
+gives the chain's declared latency, the device's own input and output latency,
+and the sum — the figure you actually experience. It updates when a plugin
+re-declares its latency, so switching a plugin's latency mode shows the cost at
+the moment you change it. Note that `Buffer Size` above it is the *device* block
+size and not the answer: a 10 ms buffer sitting under a 94 ms plugin chain is a
+number that misleads if it is the only one on screen.
+
+It is a readout, not a setting. Plugin latency is inherent to the plugins, and on
+a live monitoring path there is nothing for the host to compensate — the only
+levers are which plugins you load and their own latency modes.
+
 **Lane trims** exist because parallel lanes fed the same input sum coherently:
 four lanes of similar material arrive about 12 dB hot, two lanes about 6 dB. Each
 lane gets a fader from mute to +12 dB, unity by default. They apply as you drag —
@@ -169,6 +182,74 @@ so a change does not click.
 
 A trim belongs to the lane, not the plugins on it. Empty lane 2 and its trim stays
 put for whatever you add next.
+
+---
+
+## Testing your chain on a file
+
+Judging a microphone chain by talking into it tells you very little. You cannot
+say the same sentence twice, so you cannot A/B two settings against identical
+audio, and level differences alone will convince you one of them is better. So
+the host can push a file through the chain you have configured and write the
+result.
+
+**In the app:** *Preferences → Chain Test*. It asks for an input file and an
+output folder, renders, then reveals the file. The window stays usable while it
+works.
+
+**From the command line:**
+
+```
+"Light Host" --render input.wav output.wav
+```
+
+It reports what it did — plugins active and bypassed, connection count, declared
+latency, frames written — along with every active plugin's parameter values, read
+back out of the plugin *after* its saved state was restored. A measurement is
+only worth as much as the settings it ran under, and reading those out of the
+plugin beats reading them off a screenshot.
+
+### It renders in real time, deliberately
+
+A render is paced so a minute of audio takes a minute. That looks wasteful and is
+not.
+
+Plugins that run neural inference do it on a worker thread. Rendered at thirty
+times real time that thread never keeps up, the plugin falls back to passing the
+dry signal through, and the render prints `RENDER OK` having measured nothing.
+This is not hypothetical. A DeepFilterNet-based denoiser measured **0.55 dB** of
+noise reduction that way, and on a quieter take it appeared to *raise* the noise
+floor by 8.5 dB. Paced to real time, the same plugin at the same settings removed
+**24.8 dB** of keyboard noise for 1.7 dB of speech level. Every conclusion drawn
+from the unpaced numbers was wrong, and none of them looked wrong at the time.
+
+`--fast` skips pacing for plugins known to work synchronously and is roughly
+thirty times quicker. Every render prints a `realtime factor` and says when it
+could not keep pace — phrased as an observation, not a verdict, because a
+synchronous plugin was measured falling behind on 998 of 10,224 blocks while
+producing bit-identical output.
+
+### Comparing plugins and settings
+
+| Flag | What it does |
+|---|---|
+| `--param "NAME=VALUE"` | Sets a parameter using the plugin's own text parser |
+| `--param "NAME@0.25"` | Sets the raw normalised position instead |
+| `--chain "A,B"` | Renders through these plugins instead of the saved chain |
+| `--fast` | Skips real-time pacing |
+
+`--chain` looks names up in the scanned plugin list rather than the saved chain,
+so a candidate can be measured against your current setup without being added to
+it first — comparing two plugins should not require reconfiguring the thing you
+are measuring.
+
+```
+"Light Host" --render take.wav out.wav --chain "Alt Denoiser" --param "Attenuation Limit=0"
+```
+
+A render writes nothing back: not settings, not plugin state, not node ids. It is
+safe to run against a live configuration, and it opens no audio devices, so it
+does not disturb a running instance.
 
 ---
 
