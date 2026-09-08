@@ -1,6 +1,7 @@
 #include "PreferencesWindow.h"
 #include "GainProcessor.hpp"
 #include "LookAndFeel.hpp"
+#include "OfflineRender.hpp"
 #include "UiMetrics.hpp"
 #include "Lanes.hpp"
 #include <set>
@@ -617,6 +618,13 @@ public:
         addPluginButton.onClick = [this] { showAddPluginMenu(); };
         addAndMakeVisible (addPluginButton);
 
+        chainTestButton.setButtonText ("Chain Test");
+        chainTestButton.setTooltip ("Renders an audio file through this chain offline and "
+                                    "writes the result next to it, so you can hear and "
+                                    "measure exactly what the chain does.");
+        chainTestButton.onClick = [this] { runChainTest(); };
+        addAndMakeVisible (chainTestButton);
+
         // ── LANE TRIM section ─────────────────────────────────────────────────
         // Lanes are fed the same input and summed at the output, so four lanes
         // carrying similar material arrive about 12 dB hot. These are the trims
@@ -868,10 +876,15 @@ public:
         chainViewport.setBounds (area.removeFromTop (chainViewH));
         updateChainListHeight();
         area.removeFromTop (kGap);
-        addPluginButton.setBounds (
-            metrics::pushButton (area.removeFromTop (kRowH)
-                                     .removeFromRight (kAddPluginW + 8),
-                                 kAddPluginW));
+        {
+            // One row, a button pinned to each end: the destructive-ish test on the
+            // left, the thing you reach for constantly on the right.
+            auto row = area.removeFromTop (kRowH);
+            chainTestButton.setBounds (
+                metrics::pushButton (row.removeFromLeft (kChainTestW + 8), kChainTestW));
+            addPluginButton.setBounds (
+                metrics::pushButton (row.removeFromRight (kAddPluginW + 8), kAddPluginW));
+        }
         area.removeFromTop (kGap);
 
         // ── LANE TRIM ─────────────────────────────────────────────────────────
@@ -967,6 +980,10 @@ private:
     AudioChainListComponent chainList;
     juce::Viewport          chainViewport;
     juce::TextButton        addPluginButton;
+    juce::TextButton        chainTestButton;
+
+    // Kept alive across the async file choosers.
+    std::unique_ptr<juce::FileChooser> chainTestChooser;
 
     // STATUS
     juce::Label      statusLabel;
@@ -986,6 +1003,7 @@ private:
     // the labels do.
     static constexpr int kApplyW     = 82;
     static constexpr int kAddPluginW = 116;
+    static constexpr int kChainTestW = 100;
     static constexpr int kShowLogW   = 90;
     static constexpr int kGetCableW  = 110;
 
@@ -1291,6 +1309,100 @@ private:
                 if (safe != nullptr)
                     safe->applyButton.setEnabled (true);
             });
+    }
+
+    //--------------------------------------------------------------------------
+    /** Runs an audio file through this chain and writes the result.
+
+        The render builds its own graph rather than borrowing the live one, so a
+        test can never disturb what is currently processing audio, and it writes
+        no settings and no plugin state. See OfflineRender.hpp for why that
+        matters.
+    */
+    void runChainTest()
+    {
+        chainTestChooser = std::make_unique<juce::FileChooser> (
+            "Choose an audio file to run through the chain",
+            juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+            "*.wav;*.aiff;*.aif;*.flac;*.mp3;*.ogg");
+
+        juce::Component::SafePointer<PreferencesContentComponent> safe (this);
+
+        chainTestChooser->launchAsync (
+            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [safe] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr) return;
+
+                const auto input = fc.getResult();
+                if (input == juce::File() || ! input.existsAsFile()) return;
+
+                safe->chooseChainTestOutput (input);
+            });
+    }
+
+    void chooseChainTestOutput (const juce::File& input)
+    {
+        chainTestChooser = std::make_unique<juce::FileChooser> (
+            "Choose a folder for the rendered result", input.getParentDirectory());
+
+        juce::Component::SafePointer<PreferencesContentComponent> safe (this);
+
+        chainTestChooser->launchAsync (
+            juce::FileBrowserComponent::openMode
+                | juce::FileBrowserComponent::canSelectDirectories,
+            [safe, input] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr) return;
+
+                const auto folder = fc.getResult();
+                if (folder == juce::File() || ! folder.isDirectory()) return;
+
+                safe->startChainTest (input, folder);
+            });
+    }
+
+    void startChainTest (const juce::File& input, const juce::File& folder)
+    {
+        const auto output = folder.getChildFile (input.getFileNameWithoutExtension()
+                                                 + "-lighthost.wav");
+
+        setApplyFeedback ("Rendering...");
+        chainTestButton.setEnabled (false);
+
+        // callAsync for the same reason Apply uses it: the label repaints before
+        // the render blocks the message thread. Rendering runs far faster than
+        // real time, so a voice take is a moment -- but a very long file will
+        // make this window briefly unresponsive, which is the honest trade for
+        // not instantiating plugins off the message thread.
+        juce::Component::SafePointer<PreferencesContentComponent> safe (this);
+
+        juce::MessageManager::callAsync ([safe, input, output]
+        {
+            if (safe == nullptr) return;
+
+            auto* settings = getAppProperties().getUserSettings();
+            const auto settingsFile = settings->getFile();
+            const auto stateDir = settingsFile.getSiblingFile (
+                settingsFile.getFileNameWithoutExtension() + ".state");
+
+            const auto result =
+                lighthost::render::renderFile (*settings, stateDir, input, output);
+
+            safe->chainTestButton.setEnabled (true);
+
+            if (result.ok)
+            {
+                safe->setApplyFeedback ("Rendered - " + juce::String (result.declaredLatency)
+                                        + " samples latency");
+                output.revealToUser();
+            }
+            else
+            {
+                safe->setApplyFeedback ("Render failed");
+                safe->setStatusMessage ("Chain test failed: " + result.message);
+            }
+        });
     }
 
     void updateChannelLabels()

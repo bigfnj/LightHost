@@ -88,6 +88,7 @@ juce_add_gui_app(LightHost
 target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
     Source/LookAndFeel.hpp
+    Source/OfflineRender.hpp
     Source/PluginStateVault.hpp
     Source/SelfTest.hpp
     Source/UiMetrics.hpp
