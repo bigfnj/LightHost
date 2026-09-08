@@ -3,6 +3,7 @@
 #include "IconMenu.hpp"
 #include "InstanceName.hpp"
 #include "LookAndFeel.hpp"
+#include "OfflineRender.hpp"
 #include "SelfTest.hpp"
 
 #if ! (JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
@@ -16,7 +17,8 @@ public:
 
     void initialise ([[maybe_unused]] const juce::String& commandLine) override
     {
-        selfTest = lighthost::selftest::isRequested (getCommandLineParameterArray());
+        selfTest    = lighthost::selftest::isRequested (getCommandLineParameterArray());
+        renderMode  = lighthost::render::isRequested (getCommandLineParameterArray());
 
         juce::PropertiesFile::Options options;
         options.applicationName     = getApplicationName();
@@ -64,6 +66,15 @@ public:
 
         if (instanceNameWarning.isNotEmpty())
             juce::Logger::writeToLog (instanceNameWarning);
+
+        // A render is not an application run: no audio device, no tray icon, no
+        // Preferences, and above all nothing written back. It reads the chain the
+        // user configured, pushes a file through it, and quits.
+        if (renderMode)
+        {
+            runRender();
+            return;
+        }
 
         juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
@@ -114,7 +125,11 @@ public:
         // A second instance normally hands off to the running one and quits. In
         // self-test mode that would exit 0 having done nothing, which is a false
         // pass — the worst kind of test result — so a self-test always runs.
+        // A render must never hand off either. Handing off would exit 0 having
+        // rendered nothing, which reads as success -- the same false pass the
+        // self-test guards against.
         return lighthost::selftest::isRequested (getCommandLineParameterArray())
+            || lighthost::render::isRequested (getCommandLineParameterArray())
             || getMultiInstanceName().isNotEmpty();
     }
 
@@ -158,7 +173,8 @@ public:
 private:
     std::unique_ptr<IconMenu> iconMenu;
 
-    bool selfTest = false;
+    bool selfTest   = false;
+    bool renderMode = false;
     juce::File logFile;
     juce::StringArray selfTestFailures;
     juce::String instanceNameWarning;
@@ -198,6 +214,65 @@ private:
         loop entirely, leaving the timer, the change listeners and the async
         plugin-load marshalling untested.
     */
+    /** Renders a file through the configured chain and quits.
+
+        Reports to stdout as well as the log, because this is run from a shell and
+        a result that only lands in a log file is a result nobody reads.
+    */
+    void runRender()
+    {
+        juce::String inPath, outPath;
+        lighthost::render::parseArguments (getCommandLineParameterArray(), inPath, outPath);
+
+        if (inPath.isEmpty() || outPath.isEmpty())
+        {
+            std::printf ("RENDER FAIL: usage: \"Light Host\" --render <input.wav> <output.wav>\n");
+            std::fflush (stdout);
+            setApplicationReturnValue (2);
+            quit();
+            return;
+        }
+
+        const juce::File input (juce::File::getCurrentWorkingDirectory().getChildFile (inPath));
+        const juce::File output (juce::File::getCurrentWorkingDirectory().getChildFile (outPath));
+
+        auto* settings = appProperties->getUserSettings();
+        const auto settingsFile = settings->getFile();
+        const auto stateDir = settingsFile.getSiblingFile (
+            settingsFile.getFileNameWithoutExtension() + ".state");
+
+        juce::Logger::writeToLog ("Render: " + input.getFullPathName()
+                                  + " -> " + output.getFullPathName());
+
+        const auto result = lighthost::render::renderFile (*settings, stateDir, input, output);
+
+        if (result.ok)
+        {
+            std::printf ("RENDER OK\n");
+            std::printf ("  input            : %s\n", input.getFullPathName().toRawUTF8());
+            std::printf ("  output           : %s\n", output.getFullPathName().toRawUTF8());
+            std::printf ("  sample rate      : %.0f Hz\n", result.sampleRate);
+            std::printf ("  plugins active   : %d\n", result.pluginsLoaded);
+            std::printf ("  plugins bypassed : %d\n", result.pluginsBypassed);
+            std::printf ("  plugins failed   : %d\n", result.pluginsFailed);
+            std::printf ("  connections      : %d\n", result.connections);
+            std::printf ("  declared latency : %d samples (%.2f ms)\n",
+                         result.declaredLatency,
+                         result.sampleRate > 0.0
+                             ? result.declaredLatency * 1000.0 / result.sampleRate : 0.0);
+            std::printf ("  frames written   : %lld\n", (long long) result.framesWritten);
+        }
+        else
+        {
+            std::printf ("RENDER FAIL: %s\n", result.message.toRawUTF8());
+        }
+
+        std::fflush (stdout);
+        juce::Logger::writeToLog ("Render: " + result.message);
+        setApplicationReturnValue (result.ok ? 0 : 1);
+        quit();
+    }
+
     void scheduleSelfTestCheck()
     {
         constexpr int kDwellMs   = 1500;
