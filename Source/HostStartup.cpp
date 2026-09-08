@@ -330,18 +330,52 @@ private:
                 iconMenu->showPreferencesWindow();
         });
 
-        juce::Timer::callAfterDelay (kDwellMs, [this]
+        // Wait for the condition, not for a duration.
+        //
+        // This used to be a flat 1500 ms dwell and then read the log. That is
+        // ample on a developer machine and not always enough on a loaded CI
+        // runner: the macOS release job failed exactly the two assertions that
+        // depend on the asynchronous plugin load having finished, while the CI
+        // workflow passed on the very same commit. A release gate that fails a
+        // coin toss teaches people to re-run it, which is how a real failure
+        // gets waved through.
+        //
+        // Polling for the completion marker is deterministic and usually faster
+        // than the old fixed wait. Giving up is still a failure, and says so.
+        juce::Timer::callAfterDelay (kDwellMs, [this] { awaitLoadComplete (0); });
+    }
+
+    void awaitLoadComplete (int waitedMs)
+    {
+        constexpr int kStepMs   = 100;
+        constexpr int kGiveUpMs = 20000;
+
+        const bool finished =
+            logFile.existsAsFile()
+            && logFile.loadFileAsString().contains ("loadActivePlugins complete");
+
+        if (! finished && waitedMs < kGiveUpMs)
         {
-            auto* settings = appProperties->getUserSettings();
+            juce::Timer::callAfterDelay (kStepMs, [this, waitedMs]
+            {
+                awaitLoadComplete (waitedMs + kStepMs);
+            });
+            return;
+        }
 
-            selfTestFailures.addArray (
-                lighthost::selftest::checkAfterStartup (logFile, settings->getFile()));
+        if (! finished)
+            juce::Logger::writeToLog ("SelfTest: gave up waiting for the plugin load after "
+                                      + juce::String (kGiveUpMs) + " ms");
 
-            selfTestFailures.addArray (
-                lighthost::selftest::checkSeededChainMigrated (*settings));
+        auto* settings = appProperties->getUserSettings();
 
-            quit();
-        });
+        selfTestFailures.addArray (
+            lighthost::selftest::checkAfterStartup (logFile, settings->getFile()));
+
+        selfTestFailures.addArray (
+            lighthost::selftest::checkSeededChainMigrated (*settings));
+
+        quit();
     }
 
     void finishSelfTest (const juce::File& settingsFile)
