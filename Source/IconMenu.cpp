@@ -1570,13 +1570,23 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     {
         juce::Logger::writeToLog ("IconMenu: Apply pressed with no plugin-chain changes");
 
-        // This path was silent, which is most of why Apply felt unpredictable: a
-        // click that changed nothing and a click that changed everything both
-        // produced no visible response. Note the wording -- device settings are
-        // committed by the caller before this runs, so the chain is the only
-        // thing that was unchanged.
+        // The chain is unchanged, but a plugin's own parameters may well not be.
+        // A user who moves a knob inside a plugin editor and presses Apply
+        // expects it kept, and this path used to return before saving anything --
+        // so that edit lived only in the running instance and was lost to
+        // anything short of a clean quit. It cost an afternoon: a plugin setting
+        // was changed, Apply was pressed, and every measurement afterwards was
+        // taken against the previous state still sitting in the vault.
+        //
+        // Saving unconditionally is cheap here because savePluginStates
+        // fingerprints each state and skips the ones whose bytes have not moved,
+        // so an Apply that really changed nothing writes nothing.
+        savePluginStates();
+
+        // Note the wording: device settings are committed by the caller before
+        // this runs, so the chain is the only thing that was unchanged.
         if (preferencesWindow != nullptr)
-            preferencesWindow->setApplyFeedback ("Applied - chain unchanged");
+            preferencesWindow->setApplyFeedback ("Plugin settings saved");
 
         return;
     }
