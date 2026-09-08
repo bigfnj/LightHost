@@ -1077,13 +1077,18 @@ void IconMenu::timerCallback()
         menu.addSubMenu (timeSorted[i].name, options);
     }
 
+    // Quit goes last, and Delete Plugin States is kept two rows and a separator
+    // away from it. The two used to be adjacent, with the destructive one
+    // underneath, so an over-shoot on the way to Quit landed on "throw away
+    // every plugin setting" -- which was nearly clicked three times before this
+    // was changed. Nothing below Quit, and nothing destructive beside it.
     menu.addSeparator();
+    menu.addItem (4, "Delete Plugin States");
     #if JUCE_WINDOWS
     menu.addItem (5, "Run at Startup", true, isStartupEnabled());
-    menu.addSeparator();
     #endif
+    menu.addSeparator();
     menu.addItem (3, "Quit");
-    menu.addItem (4, "Delete Plugin States");
 
     #if JUCE_MAC || JUCE_LINUX
     menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this),
@@ -1132,7 +1137,7 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     if (id == 1) { im->showPreferences(); return; }
     if (id == 2) { im->reloadPlugins();   return; }
     if (id == 3) { im->savePluginStates(); JUCEApplication::getInstance()->quit(); return; }
-    if (id == 4) { im->deletePluginStates(); im->loadActivePlugins(); return; }
+    if (id == 4) { im->confirmDeletePluginStates(); return; }
     #if JUCE_WINDOWS
     if (id == 5) { im->setStartupEnabled (! im->isStartupEnabled()); return; }
     #endif
@@ -1292,6 +1297,88 @@ void IconMenu::handleMovePlugin (int index, bool moveUp)
 }
 
 //==============================================================================
+void IconMenu::confirmDeletePluginStates()
+{
+    // Erasing every saved plugin setting was a single click with no undo, sat
+    // directly below Quit in the tray menu. The menu order has been fixed; this
+    // fixes the other half, because proximity was only half the problem.
+    //
+    // The dialog names the plugins rather than asking "are you sure?", since a
+    // generic question is easy to click through and the cost here is real: a
+    // trained curve that took a while to teach is gone with no way back.
+    const auto list = getTimeSortedList();
+    auto* settings = getAppProperties().getUserSettings();
+    ChainStore store (*settings);
+    const auto vault = stateVault();
+
+    juce::StringArray named;
+
+    for (const auto& plugin : list)
+    {
+        const auto identity = ChainStore::identityOf (plugin);
+
+        // Either store counts: the vault is where states live now, and a legacy
+        // blob in the settings file is one that has not been migrated yet.
+        if (vault.has (identity) || store.readState (plugin).isNotEmpty())
+            named.add (plugin.name);
+    }
+
+    if (named.isEmpty())
+    {
+        reportStatus ("No saved plugin states to delete");
+        return;
+    }
+
+    // Button ORDER is chosen per platform, and the index to act on is derived
+    // from that order rather than hard-coded, because the platforms disagree
+    // about what a dismissal reports.
+    //
+    //   Windows: button ids are 0..N-1 in order, Escape is disabled (no
+    //            TDF_ALLOW_DIALOG_CANCELLATION), and a TaskDialogIndirect
+    //            failure leaves the result at 0. So the destructive button
+    //            must not be index 0.
+    //   Linux:   the raw AlertWindow result is remapped (raw + N - 1) % N, and
+    //            the LookAndFeel binds Escape to the *second* button, while
+    //            userTriedToCloseWindow() exits with raw 0. Both resolve to the
+    //            LAST index, so the destructive button must not be last.
+    //
+    // No single order is safe on both, which is why this is not just
+    // "Cancel first" with a comment claiming Escape is harmless.
+   #if JUCE_LINUX || JUCE_BSD
+    const juce::StringArray order { "Delete", "Cancel" };
+   #else
+    const juce::StringArray order { "Cancel", "Delete" };
+   #endif
+
+    const auto deleteIndex = order.indexOf ("Delete");
+
+    auto options = juce::MessageBoxOptions()
+                       .withIconType (juce::MessageBoxIconType::WarningIcon)
+                       .withTitle ("Delete Plugin States")
+                       .withMessage ("This erases the saved settings for "
+                                     + juce::String (named.size())
+                                     + (named.size() == 1 ? " plugin:\n\n"
+                                                          : " plugins:\n\n")
+                                     + named.joinIntoString ("\n")
+                                     + "\n\nEach one goes back to its factory state. "
+                                       "This cannot be undone.");
+
+    for (const auto& text : order)
+        options = options.withButton (text);
+
+    juce::NativeMessageBox::showAsync (
+        options,
+        [safe = juce::Component::SafePointer<IconMenu> (this), deleteIndex] (int result)
+        {
+            if (result != deleteIndex || safe == nullptr)
+                return;
+
+            safe->deletePluginStates();
+            safe->loadActivePlugins();
+            safe->reportStatus ("Deleted saved plugin states");
+        });
+}
+
 void IconMenu::deletePluginStates()
 {
     const auto list = getTimeSortedList();
