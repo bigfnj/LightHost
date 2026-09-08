@@ -13,6 +13,97 @@ is no, and what would change it.
 
 ---
 
+## Denoiser selection — Salvor kept, three alternatives declined 2026-09-08
+
+### What was asked
+
+Which real-time speech denoiser should sit in the chain, given five candidates
+installed on the machine: Salvor (scintillator), Alt Denoiser (Altinus), Elgato
+Noise Removal, Elgato Voice Focus, and Cockos ReaFIR.
+
+### How it was measured
+
+A purpose-built 110-second take with the sections separated in time — silence,
+typing alone, claps and snaps, speech in a quiet room, speech with typing
+underneath — so that noise reduction and voice damage could be attributed
+separately rather than inferred from a mixture. Each candidate rendered twice
+through `--render --chain`, paced to real time, scored per section.
+
+The method matters more than the numbers, because the first version of it was
+wrong in a way that produced confident nonsense. See "Measuring a plugin that
+does its work on a worker thread" below.
+
+### The result
+
+| | Noise under speech | Voice damage | Latency | Repeatable |
+|---|---|---|---|---|
+| **Salvor** (chosen) | −5.08 dB | −1.73 dB | **10 ms** | no |
+| Alt Denoiser | −5.09 dB | −1.73 dB | 40 ms | yes |
+| Elgato Noise Removal | −0.52 dB | −0.11 dB | 0 ms | yes |
+| Elgato Voice Focus | 0.00 dB | 0.00 dB | 0 ms | — |
+
+**Salvor and Alt Denoiser are the same model** — both wrap DeepFilterNet3 — and
+score identically to two decimals on typing removal (−25.4 vs −25.5 dB), voice
+damage, and noise under speech. The decision is therefore latency against
+robustness, not audio quality.
+
+**Alt Denoiser declined on latency.** 40 ms against Salvor's 10 ms. Its
+advantages are real but not audible: a silence floor 32 dB deeper (−118 dB vs
+−86 dB, both far below hearing) and bit-identical repeatability. Salvor runs
+inference on a worker thread and its output varies run to run; under a soak test
+with 19 of 20 cores pegged it lost 2.4 dB of silence-floor depth and nothing
+else. Thirty milliseconds of conversational latency is worth more than 2.4 dB of
+an inaudible floor. **Revisit if artifacts are ever audible under load** — Alt
+Denoiser is provably immune, being synchronous.
+
+**Elgato Noise Removal declined as a complement.** It is a voice-activity gate
+(`VAD Threshold`, `VAD Release`), not a denoiser: it drove the typing-only
+section to digital zero but removed only 0.52 dB from under speech. Stacking it
+after Salvor was considered and rejected — Salvor already puts pauses at −86 dB,
+so the gate would buy an inaudible improvement while risking clipped word onsets,
+and Teams and Zoom run their own VAD anyway.
+
+**Elgato Voice Focus is unusable.** Inert with `Bypass` forced off and
+`Enhancement` at maximum: every metric 0.00. It is licence-gated internally and
+the activation has never completed. Not a settings problem; nothing to tune.
+
+**ReaFIR not tested.** Its noise profile is state, not a parameter — it must be
+trained through the GUI and frozen — so a default-state render would report zero
+reduction and mean nothing. A 2016 subtractive-FFT processor whose profile goes
+stale whenever the room changes was not worth the setup against a model that
+needs no training.
+
+### Settings that came out of it
+
+- Salvor `Attenuation Limit = 0`. The control caps reduction at that many dB and
+  **0 means no cap**: measured −6.02 dB at −6, −11.97 at −12, −17.56 at −18, and
+  −24.8 uncapped. 0 is best on both axes at once, giving the most reduction *and*
+  the least voice damage.
+- Microphone input gain **+22 dB** (93.2% on the Windows slider). This matters
+  more than any plugin setting: the same audio at +20 dB gave −11.2 dB of silence
+  reduction and at +22 dB gave −28.5 dB. Below roughly −34 dB RMS of speech the
+  model barely engages. Verified that analog gain scales captured noise like
+  digital gain, so the sweep's digitally-boosted proxy was sound.
+
+### Measuring a plugin that does its work on a worker thread
+
+Recorded here because the wrong answer was published twice before the method was
+fixed, and the failure is silent.
+
+An unpaced offline render runs about thirty times real time. A plugin doing
+neural inference on a background thread cannot keep up, falls back to passing the
+dry signal through, and the render reports success. Salvor measured **0.55 dB**
+of noise reduction that way, and on a quieter take appeared to *raise* the noise
+floor by 8.5 dB — which produced a confident recommendation to remove it from the
+chain. Paced, it removes 24.8 dB.
+
+The tell that something was wrong was not in the numbers. It was that 0.55 dB
+against obvious keyboard clatter is not a plausible result for any denoiser, so
+the method deserved suspicion before the plugin did. Renders are now paced by
+default for exactly this reason.
+
+---
+
 ## Acoustic echo cancellation — declined 2026-08-28
 
 ### What was asked
