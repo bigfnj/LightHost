@@ -73,3 +73,7 @@ AI_UNDERSTANDING*
 .gemini/
 .serena/
 *.agent-notes.md
+
+# Diagnostic captures written by the scripts in tools/. The scripts are worth
+# keeping; the audio they produce is not.
+tools/*.wav
