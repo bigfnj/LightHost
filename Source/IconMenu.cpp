@@ -256,7 +256,11 @@ IconMenu::IconMenu()
     }
 
     player.setProcessor (&graph);
-    deviceManager.addAudioCallback (&player);
+    // The tap is registered, not the player, so it can see the output buffer.
+    // AudioDeviceManager gives only its FIRST callback the real output buffer and
+    // hands every later one a temporary it sums, so a second callback registered
+    // alongside the player would measure silence.
+    deviceManager.addAudioCallback (&deviceTap);
     deviceManager.addChangeListener (this);
 
     logAudioConfig ("startup");
@@ -308,7 +312,7 @@ IconMenu::~IconMenu()
     // which is a guaranteed use-after-free on every shutdown path (visibly
     // crashes on system restart/shutdown where the OS disrupts audio in parallel).
     deviceManager.removeChangeListener (this);
-    deviceManager.removeAudioCallback (&player);
+    deviceManager.removeAudioCallback (&deviceTap);
     player.setProcessor (nullptr);
 
     // A plugin may have reported a latency change moments ago. Nothing should

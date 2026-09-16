@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GainProcessor.hpp"
+#include "DeviceTap.hpp"
 #include "Lanes.hpp"
 #include "PluginStateVault.hpp"
 #include "StatusSink.hpp"
@@ -86,6 +87,12 @@ private:
     [[nodiscard]] lighthost::gain::Processor* laneGainProcessor (int lane);
 
 public:
+    /** The device meters, for the Preferences UI. Both outlive any Preferences
+        window, because IconMenu owns it.
+    */
+    [[nodiscard]] lighthost::metering::Meter& getInputMeter()  noexcept { return deviceTap.getInputMeter(); }
+    [[nodiscard]] lighthost::metering::Meter& getOutputMeter() noexcept { return deviceTap.getOutputMeter(); }
+
     /** The stored trim for a lane, in decibels. For the Preferences UI. */
     [[nodiscard]] float getLaneGainDb (int lane) const;
 
@@ -146,6 +153,11 @@ private:
     juce::PopupMenu menu;
     juce::AudioProcessorGraph graph;
     juce::AudioProcessorPlayer player;
+
+    // Wraps the player so the device input and output can be metered. Declared
+    // after player because it holds a reference to it, and member construction
+    // follows declaration order.
+    lighthost::metering::DeviceTap deviceTap { player };
     NodeID inputNodeId;
     NodeID outputNodeId;
 

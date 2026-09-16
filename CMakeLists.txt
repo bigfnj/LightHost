@@ -90,6 +90,8 @@ target_sources(LightHost PRIVATE
     Source/LookAndFeel.hpp
     Source/OfflineRender.hpp
     Source/PluginStateVault.hpp
+    Source/DeviceTap.hpp
+    Source/SignalMetering.hpp
     Source/SelfTest.hpp
     Source/UiMetrics.hpp
     Source/IconMenu.cpp
@@ -213,6 +215,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/PluginStateTests.cpp
         Tests/PluginStateVaultTests.cpp
         Tests/SampleRatePolicyTests.cpp
+        Tests/SignalMeteringTests.cpp
         Tests/StatusSinkTests.cpp
         Tests/StubProcessors.hpp
     )
