@@ -288,7 +288,20 @@ private:
                          // exactly the kind this whole check exists to catch.
                          ! result.wasPaced
                              ? "  (unpaced - worker-thread plugins will misreport)"
-                             : (result.blocksBehind > 0 ? "" : "  (kept pace)"));
+                             : (result.pacingAbandoned || result.blocksBehind > 0
+                                    ? "" : "  (kept pace)"));
+
+            if (result.pacingAbandoned)
+                std::printf ("  WARNING          : pacing stopped taking effect part way "
+                             "through, so the rest of this render was unpaced. A plugin doing "
+                             "background inference was starved and these numbers understate "
+                             "it. This happens if the application was quitting mid-render.\n");
+
+            if (result.pluginsStateNotRestored > 0)
+                std::printf ("  WARNING          : %d plugin(s) rejected their saved state and "
+                             "rendered at factory defaults, so the parameters below are NOT the "
+                             "configuration under test.\n",
+                             result.pluginsStateNotRestored);
 
             if (result.blocksBehind > 0)
                 std::printf ("  NOTE             : render fell behind real time on %d of %d "

@@ -77,6 +77,17 @@ struct Result
     /// Whether pacing was in effect at all. Distinguishes "paced and kept up"
     /// from "never paced", which a zero blocksBehind cannot.
     bool wasPaced = false;
+
+    /// Active plugins that rejected their saved state and are therefore
+    /// rendering at factory defaults. Non-zero means parameterReport describes
+    /// something other than the configuration under test.
+    int pluginsStateNotRestored = 0;
+
+    /// Set when the caller's wait function stopped waiting -- which happens if
+    /// the application is quitting mid-render. Pacing has collapsed at that
+    /// point and the remainder of the render is unpaced, so blocksBehind cannot
+    /// be trusted to notice.
+    bool pacingAbandoned = false;
 };
 
 /** Renders `input` through the chain in `settings` and writes `output`.
@@ -125,7 +136,15 @@ struct Result
     result.sampleRate = sampleRate;
 
     juce::AudioBuffer<float> source (inputChannels, static_cast<int> (totalFrames));
-    reader->read (&source, 0, static_cast<int> (totalFrames), 0, true, inputChannels > 1);
+
+    // juce::AudioBuffer does not zero on construction, so a failed read leaves
+    // uninitialised memory here. Rendering that and reporting success would be a
+    // measurement of nothing at all, dressed as a result.
+    if (! reader->read (&source, 0, static_cast<int> (totalFrames), 0, true, inputChannels > 1))
+    {
+        result.message = "could not decode " + input.getFullPathName();
+        return result;
+    }
 
     // ── the chain, exactly as configured ────────────────────────────────────
     const chain::Store store (settings);
@@ -190,10 +209,16 @@ struct Result
     // hears means feeding blocks at the rate the user's hardware would.
     graph.setNonRealtime (! paced);
 
-    graph.addNode (std::make_unique<Graph::AudioGraphIOProcessor> (
-                       Graph::AudioGraphIOProcessor::audioInputNode), kInputNodeId);
-    graph.addNode (std::make_unique<Graph::AudioGraphIOProcessor> (
-                       Graph::AudioGraphIOProcessor::audioOutputNode), kOutputNodeId);
+    // Checked, because without both IO nodes every connection below is refused
+    // and the render writes silence while reporting a connection count.
+    if (graph.addNode (std::make_unique<Graph::AudioGraphIOProcessor> (
+                           Graph::AudioGraphIOProcessor::audioInputNode), kInputNodeId) == nullptr
+        || graph.addNode (std::make_unique<Graph::AudioGraphIOProcessor> (
+                              Graph::AudioGraphIOProcessor::audioOutputNode), kOutputNodeId) == nullptr)
+    {
+        result.message = "could not create the graph's input and output nodes";
+        return result;
+    }
 
     for (int lane = 0; lane < kNumLanes; ++lane)
         if (auto node = graph.addNode (std::make_unique<gain::Processor>(), laneGainNodeId (lane)))
@@ -228,8 +253,20 @@ struct Result
         instance->setNonRealtime (! paced);
 
         const auto stored = vault.read (chain::Store::identityOf (pd));
+
         if (stored.getSize() > 0)
-            (void) state::restoreInto (*instance, stored);
+        {
+            // Counted, not discarded. A plugin whose setStateInformation throws
+            // renders at factory defaults, and parameterReport below would then
+            // print those defaults as though they were the settings under test.
+            // That is the precise shape of the mistake this file exists to stop.
+            if (state::restoreInto (*instance, stored) == state::RestoreResult::failed)
+            {
+                ++result.pluginsStateNotRestored;
+                juce::Logger::writeToLog ("Render: " + pd.name + " rejected its saved state;"
+                                          " it is rendering at factory defaults");
+            }
+        }
 
         // Overrides land after the stored state, so they win. Sweeping one knob
         // across its range is the only reliable way to find out what it does
@@ -348,10 +385,26 @@ struct Result
             layout.laneGainNodeIds[static_cast<size_t> (lane)] = laneGainNodeId (lane);
 
     const auto desired = topology::buildConnections (layout);
-    (void) topology::applyConnections (graph, desired);
+    const auto diff = topology::applyConnections (graph, desired);
     graph.rebuild();
 
-    result.connections     = static_cast<int> (desired.size());
+    // A refused connection means a lane has gone silent. GraphTopology.hpp says
+    // the caller logs it rather than dropping it, and the live path does; this
+    // used to drop it and then report the count it *wanted* rather than the one
+    // it got, which is a silent lane reported as a working chain.
+    result.connections = static_cast<int> (desired.size() - diff.refused.size());
+
+    for (const auto& refused : diff.refused)
+        juce::Logger::writeToLog ("Render: the graph refused a connection from node "
+                                  + juce::String (refused.source.nodeID.uid) + " ch "
+                                  + juce::String (refused.source.channelIndex) + " to node "
+                                  + juce::String (refused.destination.nodeID.uid) + " ch "
+                                  + juce::String (refused.destination.channelIndex));
+
+    if (! diff.refused.empty())
+        result.message = juce::String (static_cast<int> (diff.refused.size()))
+                       + " connection(s) refused; part of the chain is not carrying audio";
+
     result.declaredLatency = graph.getLatencySamples();
 
     // ── push the file through ───────────────────────────────────────────────
@@ -390,10 +443,26 @@ struct Result
             {
                 const auto ms = juce::roundToInt (audioMs - elapsedMs);
 
+                const auto beforeWaitMs = juce::Time::getMillisecondCounterHiRes();
+
                 if (wait)
                     wait (ms);
                 else
                     juce::Thread::sleep (ms);
+
+                // Confirmed against the clock rather than trusted. The GUI's
+                // wait pumps the message loop, and runDispatchLoopUntil returns
+                // immediately for ever once a quit is pending -- so every later
+                // wait becomes a no-op, the render silently stops being paced,
+                // and blocksBehind cannot notice because audio time can no
+                // longer fall behind a clock nothing is waiting on. That would
+                // report "kept pace" for an unpaced render, inverting the one
+                // indicator built to say the result is untrustworthy.
+                if (ms >= 4
+                    && juce::Time::getMillisecondCounterHiRes() - beforeWaitMs < ms * 0.5)
+                {
+                    result.pacingAbandoned = true;
+                }
             }
             else if (position > static_cast<juce::int64> (sampleRate))
             {
@@ -465,15 +534,32 @@ struct Result
         return result;
     }
 
-    writer->writeFromAudioSampleBuffer (rendered, 0, rendered.getNumSamples());
+    // Checked, and the writer is closed before the file is judged. A full disk
+    // reports a short write here; reporting framesWritten from the in-memory
+    // buffer instead would print a frame count for a file that is not on disk.
+    const auto wrote = writer->writeFromAudioSampleBuffer (rendered, 0,
+                                                           rendered.getNumSamples());
     writer.reset();
+
+    if (! wrote)
+    {
+        result.message = "could not write " + output.getFullPathName()
+                       + " (out of disk space, or the path is not writable)";
+        return result;
+    }
 
     result.framesWritten = rendered.getNumSamples();
     result.ok = true;
-    result.message = "rendered " + juce::String (result.pluginsLoaded) + " active plugin(s), "
-                   + juce::String (result.pluginsBypassed) + " bypassed, "
-                   + juce::String (result.connections) + " connections, declared latency "
-                   + juce::String (result.declaredLatency) + " samples";
+
+    // A refused connection has already put its explanation in message, and it
+    // survives: a render that produced a file from a partly-wired graph is still
+    // a result, but not one to quote without the caveat.
+    if (result.message.isEmpty())
+        result.message = "rendered " + juce::String (result.pluginsLoaded) + " active plugin(s), "
+                       + juce::String (result.pluginsBypassed) + " bypassed, "
+                       + juce::String (result.connections) + " connections, declared latency "
+                       + juce::String (result.declaredLatency) + " samples";
+
     return result;
 }
 

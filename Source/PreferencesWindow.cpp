@@ -1469,7 +1469,27 @@ private:
             // A render that could not keep pace measured a starved plugin, which
             // is worse than useless -- it looks like a result. Say so here rather
             // than only in the log.
-            if (result.blocksBehind > 0)
+            //
+            // pacingAbandoned comes first because it is the worse case and the
+            // one blocksBehind cannot see: the wait stopped taking effect, so
+            // audio time could no longer fall behind and the counter stayed at
+            // zero for a render that was not paced at all.
+            if (result.pacingAbandoned)
+            {
+                safe->setApplyFeedback ("Rendered, but pacing stopped");
+                safe->setStatusMessage ("Chain test stopped being paced part way through, so "
+                                        "the rest of it ran faster than real time and any "
+                                        "plugin doing background inference was starved. "
+                                        "Treat the output as unreliable and run it again.");
+            }
+            else if (result.pluginsStateNotRestored > 0)
+            {
+                safe->setApplyFeedback ("Rendered at factory defaults");
+                safe->setStatusMessage (juce::String (result.pluginsStateNotRestored)
+                                        + " plugin(s) rejected their saved state, so this "
+                                          "render is not of your saved configuration.");
+            }
+            else if (result.blocksBehind > 0)
             {
                 safe->setApplyFeedback ("Rendered, but fell behind real time");
                 safe->setStatusMessage ("Chain test fell behind on "
