@@ -70,61 +70,6 @@ bool PluginWindow::containsActiveWindows()
 }
 
 //==============================================================================
-// A concrete PropertyComponent for displaying program names
-class ProgramPropertyComponent final : public PropertyComponent
-{
-public:
-    explicit ProgramPropertyComponent (const String& name)
-        : PropertyComponent (name) {}
-
-    void refresh() override {}
-
-private:
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ProgramPropertyComponent)
-};
-
-// A simple editor that displays the program list as properties
-class ProgramAudioProcessorEditor final : public AudioProcessorEditor
-{
-public:
-    explicit ProgramAudioProcessorEditor (AudioProcessor* const p)
-        : AudioProcessorEditor (p)
-    {
-        jassert (p != nullptr);
-        setOpaque (true);
-        addAndMakeVisible (panel);
-
-        Array<PropertyComponent*> programs;
-        const auto numPrograms = p->getNumPrograms();
-        int totalHeight = 0;
-
-        for (int i = 0; i < numPrograms; ++i)
-        {
-            auto name = p->getProgramName (i).trim();
-            if (name.isEmpty())
-                name = "Unnamed";
-
-            auto* pc = new ProgramPropertyComponent (name);
-            programs.add (pc);
-            totalHeight += pc->getPreferredHeight();
-        }
-
-        panel.addProperties (programs);
-        setSize (400, jlimit (25, 400, totalHeight));
-    }
-
-    void paint (Graphics& g) override
-    {
-        g.fillAll (getLookAndFeel().findColour (ResizableWindow::backgroundColourId));
-    }
-    void resized() override           { panel.setBounds (getLocalBounds()); }
-
-private:
-    PropertyPanel panel;
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ProgramAudioProcessorEditor)
-};
-
-//==============================================================================
 PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node::Ptr node,
                                           WindowFormatType type)
 {
@@ -161,12 +106,7 @@ PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node::Ptr node,
         }
 
         if (ui == nullptr)
-        {
-            if (type == Generic || type == Parameters)
-                ui = new GenericAudioProcessorEditor (*processor);   // JUCE 8: takes reference
-            else if (type == Programs)
-                ui = new ProgramAudioProcessorEditor (processor);
-        }
+            ui = new GenericAudioProcessorEditor (*processor);   // JUCE 8: takes reference
     }
     catch (const std::exception& e)
     {

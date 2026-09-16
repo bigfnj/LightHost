@@ -6,13 +6,19 @@
 class PluginWindow final : public juce::DocumentWindow
 {
 public:
+    /** Normal asks the plugin for its own editor and falls back to Generic when
+        it has none, so those two are the only kinds that can exist.
+
+        There were two more, Programs and Parameters, with an editor class behind
+        Programs. Nothing ever passed them: both call sites pass Normal. They are
+        gone rather than kept for a caller that never arrived -- the window-position
+        property keys below are derived from this enum, so a dead value here is a
+        dead settings key too.
+    */
     enum WindowFormatType
     {
         Normal = 0,
-        Generic,
-        Programs,
-        Parameters,
-        NumTypes
+        Generic
     };
 
     PluginWindow (juce::Component* pluginEditor, juce::AudioProcessorGraph::Node::Ptr, WindowFormatType);
@@ -41,12 +47,9 @@ private:
 {
     switch (type)
     {
-        case PluginWindow::Normal:     return "Normal";
-        case PluginWindow::Generic:    return "Generic";
-        case PluginWindow::Programs:   return "Programs";
-        case PluginWindow::Parameters: return "Parameters";
-        case PluginWindow::NumTypes:   return {};
-        default:                       return {};
+        case PluginWindow::Normal:  return "Normal";
+        case PluginWindow::Generic: return "Generic";
+        default:                    return {};
     }
 }
 

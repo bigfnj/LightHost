@@ -47,9 +47,18 @@ namespace lighthost::state
         }
     }
 
-    /** Applies base64-encoded state, as stored before 5.0.0. Kept because the
-        migration reads that format, and because state that could not be moved
-        out of the settings file is still loaded from it.
+    /** Applies base64-encoded state, as stored before 5.0.0.
+
+        Used only by the tests. The claim this comment used to make -- that the
+        migration reads that format through here, and that un-migrated state is
+        still loaded through here -- was not true of either caller: both
+        IconMenu::migrateStateToVault and IconMenu::loadActivePlugins decode the
+        base64 themselves and then call the MemoryBlock overload above.
+
+        Kept rather than deleted because it is the only place the decode-failure
+        rule is stated once and tested, and because those two call sites should
+        eventually come through here instead of repeating the decode. Recorded in
+        BACKLOG.md so that is a decision rather than a leftover.
 
         Note the asymmetry with the overload above: state that fails to decode is
         `failed`, not `nothingSaved`. Something was stored and could not be used,

@@ -173,7 +173,6 @@ private:
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPluginList;
     juce::KnownPluginList activePluginList;
-    juce::KnownPluginList::SortMethod pluginSortMethod = juce::KnownPluginList::sortByManufacturer;
     juce::PopupMenu menu;
     juce::AudioProcessorGraph graph;
     juce::AudioProcessorPlayer player;

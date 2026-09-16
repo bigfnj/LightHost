@@ -877,7 +877,6 @@ public:
 
         // Begin drag (rest of row)
         dragSourceRow = row;
-        dragOffsetY   = e.y - row * kRowHeight;
         dropLine      = row;
         repaint();
     }
@@ -962,7 +961,6 @@ private:
     enum class Control { none, checkbox, lane, settings };
 
     int dragSourceRow = -1;
-    int dragOffsetY   = 0;
     int dropLine      = -1;
 
     int     hotRow         = -1;
