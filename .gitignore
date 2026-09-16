@@ -77,3 +77,9 @@ AI_UNDERSTANDING*
 # Diagnostic captures written by the scripts in tools/. The scripts are worth
 # keeping; the audio they produce is not.
 tools/*.wav
+
+# The render-regression baseline hash. Local by nature: it depends on which
+# plugins are installed on this machine and on a voice recording that must not
+# go into a public repo, so the input lives outside the tree and the hash is
+# captured per-machine. tools/render-regression.sh writes it.
+tools/render-regression.sha256
