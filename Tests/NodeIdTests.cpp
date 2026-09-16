@@ -36,6 +36,19 @@ namespace
 
     using NodeID = juce::AudioProcessorGraph::NodeID;
 
+    /** A node id as something expectEquals can report on failure.
+
+        NodeID::uid is juce::uint32, and juce::String has operator<< for int,
+        int64 and uint64 but not for unsigned int -- so passing a uid straight to
+        expectEquals is an ambiguous overload. MSVC picks one and compiles it;
+        GCC and Clang both refuse, which is how this reached CI having built
+        clean locally. int64 holds every uid exactly, so nothing is lost.
+    */
+    [[nodiscard]] juce::int64 uid (NodeID id)
+    {
+        return static_cast<juce::int64> (id.uid);
+    }
+
     /** A description differing from another only in the fields identity ignores. */
     juce::PluginDescription describe (const juce::String& file,
                                      const juce::String& format,
@@ -70,10 +83,10 @@ public:
             // file, and the reserved ids have to stay clear of them across
             // versions, so these are part of the on-disk contract rather than
             // an implementation detail.
-            expectEquals (ids::input.uid,  static_cast<juce::uint32> (1'000'000));
-            expectEquals (ids::output.uid, static_cast<juce::uint32> (1'000'001));
-            expectEquals (ids::laneGain (0).uid, static_cast<juce::uint32> (1'000'010));
-            expectEquals (ids::probe (0).uid,    static_cast<juce::uint32> (1'000'100));
+            expectEquals (uid (ids::input),        juce::int64 { 1'000'000 });
+            expectEquals (uid (ids::output),       juce::int64 { 1'000'001 });
+            expectEquals (uid (ids::laneGain (0)), juce::int64 { 1'000'010 });
+            expectEquals (uid (ids::probe (0)),    juce::int64 { 1'000'100 });
         }
 
         beginTest ("every reserved id is distinct");
@@ -88,11 +101,11 @@ public:
                 expect (seen.insert (ids::probe (i).uid).second,
                         "a probe id collided with another reserved id");
 
-            const auto expected = 2u
-                                + static_cast<unsigned> (lighthost::kMaxLane + 1)
-                                + static_cast<unsigned> (ids::maxProbes);
+            const auto expected = juce::int64 { 2 }
+                                + lighthost::kMaxLane + 1
+                                + ids::maxProbes;
 
-            expectEquals (static_cast<unsigned> (seen.size()), expected);
+            expectEquals (static_cast<juce::int64> (seen.size()), expected);
         }
 
         beginTest ("the lane band cannot grow into the probe band");
@@ -126,9 +139,10 @@ public:
             // it. Without the clamp, a negative lane produces a huge unsigned id
             // and a large one walks into the probe band -- both of which land on
             // some other node rather than failing.
-            expectEquals (ids::laneGain (-1).uid,   ids::laneGain (0).uid);
-            expectEquals (ids::laneGain (-9999).uid, ids::laneGain (0).uid);
-            expectEquals (ids::laneGain (9999).uid, ids::laneGain (lighthost::kMaxLane).uid);
+            expectEquals (uid (ids::laneGain (-1)),    uid (ids::laneGain (0)));
+            expectEquals (uid (ids::laneGain (-9999)), uid (ids::laneGain (0)));
+            expectEquals (uid (ids::laneGain (9999)),
+                          uid (ids::laneGain (lighthost::kMaxLane)));
 
             for (int lane : { -5, -1, 0, 1, 9999 })
                 expect (ids::laneGain (lane).uid >= ids::laneGain (0).uid
@@ -138,18 +152,21 @@ public:
 
         beginTest ("an out-of-range probe index is clamped, not wrapped");
         {
-            expectEquals (ids::probe (-1).uid, ids::probe (0).uid);
-            expectEquals (ids::probe (ids::maxProbes).uid, ids::probe (ids::maxProbes - 1).uid);
-            expectEquals (ids::probe (1'000'000).uid, ids::probe (ids::maxProbes - 1).uid);
+            expectEquals (uid (ids::probe (-1)), uid (ids::probe (0)));
+            expectEquals (uid (ids::probe (ids::maxProbes)),
+                          uid (ids::probe (ids::maxProbes - 1)));
+            expectEquals (uid (ids::probe (1'000'000)),
+                          uid (ids::probe (ids::maxProbes - 1)));
         }
 
         beginTest ("consecutive ids are consecutive, so the bands stay readable");
         {
             for (int lane = 1; lane <= lighthost::kMaxLane; ++lane)
-                expectEquals (ids::laneGain (lane).uid, ids::laneGain (lane - 1).uid + 1);
+                expectEquals (uid (ids::laneGain (lane)),
+                              uid (ids::laneGain (lane - 1)) + 1);
 
             for (int i = 1; i < ids::maxProbes; ++i)
-                expectEquals (ids::probe (i).uid, ids::probe (i - 1).uid + 1);
+                expectEquals (uid (ids::probe (i)), uid (ids::probe (i - 1)) + 1);
         }
 
         //======================================================================

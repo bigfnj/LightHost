@@ -125,7 +125,18 @@ remember.
   be automated — they need a person looking at a display that is configured that
   way. Recorded in [RELEASING.md](RELEASING.md) as pre-release checks rather than
   as perpetually open backlog items.
-- **Linux and macOS are built by CI on every push**, on all three platforms,
-  including the unit, GUI and smoke suites. No developer machine here has ever
-  built them, and CI is stronger evidence than a local build would be, so this is
-  not an open item.
+- **Linux and macOS are built by CI on every push**, including the unit, GUI and
+  smoke suites. No developer machine here has ever built them, and there is no
+  GCC or Clang on the development box, so CI is not merely the best evidence for
+  those platforms -- it is the only evidence, and it arrives after the push
+  rather than before it.
+
+  That is a real gap and 5.2.0 fell into it: `expectEquals` was handed a
+  `juce::uint32`, MSVC picked an `operator<<` overload and compiled it, and both
+  GCC and Clang correctly refused because `juce::String` has overloads for `int`,
+  `int64` and `uint64` but not for `unsigned int`. A clean local build and 1120
+  passing tests said nothing about it. The tripwire worked as intended -- the tag
+  was held until CI was green, which is the whole point of that rule -- but if
+  MSVC-only divergence happens a third time, installing Clang locally and
+  exercising the `clang-release` preset before pushing is the fix. Two instances
+  is not yet a pattern.
