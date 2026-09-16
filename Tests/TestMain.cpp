@@ -39,7 +39,21 @@ int main (int argc, char** argv)
     // Two sets, because they need different environments. The default set runs
     // anywhere; --gui constructs real windows and is registered as a separate
     // CTest entry behind the xvfb check, so it never runs on a headless runner.
-    const bool guiOnly = argc > 1 && juce::String (argv[1]) == "--gui";
+    const juce::String requested = argc > 1 ? juce::String (argv[1]) : juce::String();
+
+    if (requested.isNotEmpty() && requested != "--gui")
+    {
+        // Refused rather than ignored. Ignoring it ran the headless set and
+        // exited 0, so a typo in the --gui argument in CMakeLists.txt would have
+        // turned the unit-gui entry into a silent duplicate of unit that passed
+        // -- the same "looks exactly like success" failure the category check
+        // below exists to prevent, arriving from the argument side.
+        std::printf ("UNKNOWN ARGUMENT: %s (expected --gui, or none)\n",
+                     requested.toRawUTF8());
+        return 2;
+    }
+
+    const bool guiOnly = requested == "--gui";
 
     // Brings up the MessageManager. Nothing here posts messages, but JUCE
     // subsystems and the leak detector expect an initialised environment.
@@ -93,19 +107,37 @@ int main (int argc, char** argv)
 
     const juce::StringArray needsDisplay { "PluginWindowGui" };
 
+    juce::StringArray emptyCategories;
+
     for (const auto& category : (guiOnly ? needsDisplay : headless))
     {
         runner.runTestsInCategory (category);
+
+        // Per category, not just overall. Categories are matched by string, so a
+        // renamed or misspelled one runs nothing -- and the total-based check
+        // below only notices when EVERY category is empty, which means one
+        // misspelling among fifteen used to pass silently.
+        if (runner.getNumResults() == 0)
+            emptyCategories.add (category);
+
         collectResults();
     }
 
     std::printf ("\n==== %d passed, %d failed ====\n", totalPasses, totalFailures);
 
-    // A category is matched by string. A renamed or misspelled one silently runs
-    // nothing, which would otherwise look exactly like success.
+    if (! emptyCategories.isEmpty())
+    {
+        std::printf ("NO TESTS IN CATEGORY: %s\n"
+                     "    Either the name is misspelled here or the test that "
+                     "registers it was removed.\n",
+                     emptyCategories.joinIntoString (", ").toRawUTF8());
+        juce::Logger::setCurrentLogger (nullptr);
+        return 1;
+    }
+
     if (totalPasses == 0 && totalFailures == 0)
     {
-        std::printf ("NO ASSERTIONS RAN: a category above matches no registered test\n");
+        std::printf ("NO ASSERTIONS RAN\n");
         juce::Logger::setCurrentLogger (nullptr);
         return 1;
     }

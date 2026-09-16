@@ -432,7 +432,7 @@ Things deliberately not built, and why, are in [DECISIONS.md](DECISIONS.md).
 
 ## Building from source
 
-Light Host vendors JUCE 9.0.1 and the VST2 SDK, so there is nothing to fetch
+Light Host vendors JUCE 9.0.2 and the VST2 SDK, so there is nothing to fetch
 beyond a compiler and CMake.
 
 ### Windows
@@ -485,7 +485,15 @@ The built application lands in
 
 Unit tests build by default (`-DLIGHTHOST_BUILD_TESTS=OFF` to skip) and run under
 CTest. They use `juce::UnitTestRunner`, so there is no third-party dependency. No
-audio device and no real plugin are needed, so they run identically everywhere.
+audio device and no real plugin are needed anywhere.
+
+Two CTest entries, because one group needs more than the other. `unit` needs
+nothing and runs on all three platforms. `unit-gui` constructs real editor
+windows, so it needs a display and is registered on Windows and macOS only —
+JUCE's X11 backend cannot create a window from a console application, which is
+what the test binary is. CMake prints a notice at configure time rather than
+skipping it quietly, and Linux window creation is covered by the smoke test
+below, which runs the real application under `xvfb`.
 
 ```bash
 cmake --build --preset release
@@ -519,6 +527,22 @@ What they cover:
   version) all reading as "nothing stored" rather than as garbage handed to a
   plugin.
 - **Instance names**: every escape attempt a `-multi-instance` name could make.
+- **Signal metering**: that a peak survives the blocks after it, that reading is
+  not destructive so two components watching one meter agree, that RMS is only
+  computed while something is watching, and that a probe passes audio through
+  bit-unchanged with no declared latency.
+- **Reserved node ids**: the published numbers, which are an on-disk contract;
+  that the lane, probe and IO bands cannot overlap; and that an out-of-range lane
+  or probe index is clamped rather than wrapped into another band.
+- **Audio device substitution**: that an opened device which is not the one
+  requested is reported and names both, and — mostly — that it stays quiet when
+  it should, including a capitalisation-only rename and an input-only setup.
+- **Confirmation button order**: both platform rules from one build, because they
+  disagree about which index a dismissed dialog reports and the destructive
+  button must sit on neither.
+- **Plugin editor windows**: that an editor constructor which throws yields no
+  window instead of taking the process down, and (in `unit-gui`) that asking
+  twice for a plugin with no native editor reuses one window.
 - Plus the sample-rate correction policy and the status sink.
 
 ### Startup smoke test
@@ -564,7 +588,7 @@ CMake registers the smoke tests only when `xvfb-run` is present.
 ├── Resources/       Icons and binary resources
 ├── docs/images/     Screenshots used by this README
 ├── Utilities/       Helper scripts
-├── lib/             Vendored JUCE 9.0.1 + VST2 SDK
+├── lib/             Vendored JUCE 9.0.2 + VST2 SDK
 ├── CMakeLists.txt   Build definition (the only place the version lives)
 ├── CMakePresets.json
 ├── CHANGELOG.md     What changed, and why

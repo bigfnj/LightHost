@@ -41,10 +41,20 @@
 // the user actually chose, and comparing it against what is open tells us both
 // halves: that a substitution happened, and what went missing.
 //
-// That window is not open forever. autoMatchSampleRate and the Preferences Apply
-// path both pass treatAsChosenDevice = true, and the first one to run replaces
-// the stored name with the fallback device's. Hence the check runs on every
-// device change as well as at startup, rather than only once.
+// That window is not open forever, and this is the honest limit of the
+// approach. autoMatchSampleRate, the Preferences Apply path, and any change made
+// in the device panel -- including one as incidental as a buffer size -- all call
+// setAudioDeviceSetup with treatAsChosenDevice = true, which calls updateXml()
+// and adopts the FALLBACK device as the stored choice. Once that has happened
+// the requested name is gone, the comparison finds nothing wrong, and a
+// substitution that is still in force becomes undetectable.
+//
+// So the check runs at startup, on every device change, and before the
+// Preferences window writes device state -- i.e. at every point where the
+// evidence still exists. What it cannot do is notice a substitution after JUCE
+// has overwritten the record of what was asked for. Reporting it while the
+// evidence exists is a large improvement on never reporting it, and closing the
+// remaining gap needs the request tracked separately from JUCE's own state.
 //
 // WHY COMPARISON IS FUZZY
 //

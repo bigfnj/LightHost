@@ -51,12 +51,20 @@ public:
     */
     void reportStatus (const juce::String& message);
 
-    // Menu action ID offsets — each plugin gets an ID in the range [offset, offset + maxPlugins)
-    static constexpr int kEditOffset     = 1'000'000;
-    static constexpr int kBypassOffset   = 2'000'000;
-    static constexpr int kDeleteOffset   = 3'000'000;
-    static constexpr int kMoveUpOffset   = 4'000'000;
-    static constexpr int kMoveDownOffset = 5'000'000;
+    // Menu action ID bands. Each action gets a band, and a plugin's item within
+    // it is `offset + chainIndex`, so the band has to be wider than any chain.
+    //
+    // The stride is named because the dispatch in menuInvocationCallback needs
+    // the WIDTH, and it used to reach for kEditOffset -- which is the right
+    // number only because it happens to equal the spacing. The comment here
+    // pointed at a "maxPlugins" that has never existed.
+    static constexpr int kMenuBandStride = 1'000'000;
+
+    static constexpr int kEditOffset     = 1 * kMenuBandStride;
+    static constexpr int kBypassOffset   = 2 * kMenuBandStride;
+    static constexpr int kDeleteOffset   = 3 * kMenuBandStride;
+    static constexpr int kMoveUpOffset   = 4 * kMenuBandStride;
+    static constexpr int kMoveDownOffset = 5 * kMenuBandStride;
 
 private:
     using NodeID = juce::AudioProcessorGraph::NodeID;
@@ -171,11 +179,6 @@ private:
         comparison is against the stored request and saving overwrites it.
     */
     void reportDeviceSubstitutionIfAny (const juce::String& contextLabel);
-
-    // The last substitution reported, so a condition that persists across device
-    // changes is stated once rather than on every change. Empty when the open
-    // devices are the ones that were asked for.
-    juce::String lastDeviceSubstitution;
 
     // Watching hosted plugins for changes that invalidate the routing.
     //

@@ -190,9 +190,13 @@ otherwise never be looked at again.
 
 Extracting an `AudioEngine`, allocated slot ids, duplicate plugins in one chain,
 endpoint-id device selection, dry/wet per lane, a spectrum signal view,
-out-of-process hosting, and code signing. Each is recorded in
-[DECISIONS.md](DECISIONS.md) with what was asked, why the answer is no, and what
-would change it.
+and out-of-process hosting. Each is recorded in [DECISIONS.md](DECISIONS.md) with
+what was asked, why the answer is no, and what would change it.
+
+Code signing is declined too, and lives in [README.md](README.md) beside the
+SmartScreen warning it explains rather than in `DECISIONS.md`: the reason is a
+recurring certificate subscription tied to a verified identity, which is not a
+fact about this code.
 
 The `AudioEngine` entry is worth reading if the idea comes back: the plan as
 written would have introduced a new data race rather than removing one, because a

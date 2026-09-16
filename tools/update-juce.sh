@@ -67,7 +67,8 @@ grep -E "JUCE_(MAJOR_VERSION|MINOR_VERSION|BUILDNUMBER)" \
 echo
 echo "checking whether JUCE has gained system-audio loopback support:"
 if grep -ri loopback "$ROOT/lib/juce/modules/juce_audio_devices"; then
-  echo "  ^^ loopback now appears in juce_audio_devices -- see BACKLOG.md (Deferred)"
+  echo "  ^^ loopback now appears in juce_audio_devices -- see the system-audio"
+  echo "     capture entry in DECISIONS.md, which this check exists to revisit"
 else
   echo "  nothing (as expected) -- WASAPI loopback is still not exposed by JUCE"
 fi

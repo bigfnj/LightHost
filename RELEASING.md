@@ -109,6 +109,19 @@ None of these are automated, and two of them need a person looking at a display.
   Windows ships both, the icon is a single bitmap for both, and an icon that is
   legible on dark and invisible on light is a defect that only a person at the
   display will see.
+- **Run the render regression.** Nothing in a normal release should change a
+  sample, and this is the only check that proves it:
+
+  ```bash
+  tools/render-regression.sh check <input.wav>
+  ```
+
+  Capture a baseline first if there is not one on this machine. Both the input
+  and the baseline hash are deliberately local — the input is a voice recording
+  and this repository is public, and the hash depends on which plugins are
+  installed — so a fresh clone has to capture its own before the check means
+  anything. If a sample did change and that was intended, re-capture in the same
+  commit and say why.
 
 ---
 

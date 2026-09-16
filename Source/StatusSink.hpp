@@ -55,6 +55,7 @@ namespace lighthost::status
         }
 
         [[nodiscard]] bool hasProblem() const noexcept       { return ! problems.empty(); }
+        /** For tests. Nothing shipped reads this. */
         [[nodiscard]] int  totalReported() const noexcept    { return total; }
 
         /** The most recent problem, or an empty string if there has been none. */

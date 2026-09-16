@@ -56,8 +56,8 @@ gating machinery to do it already exists.
 Split `deviceManager`, `player` and `graph` out of `IconMenu` into a separate
 `AudioEngine` class. `Source/IconMenu.cpp` is 2,200 lines, and the split would
 both shorten it and create a seam a unit test could reach without constructing a
-device manager and a tray icon. It is the remainder of the 5.0.0 plan's Phase 5
-and is still listed in [BACKLOG.md](BACKLOG.md).
+device manager and a tray icon. It is the remainder of the 5.0.0 plan's Phase 5,
+carried in [BACKLOG.md](BACKLOG.md) until this decision cleared it.
 
 ### Why the answer is no
 
@@ -67,7 +67,7 @@ plus the member declaration order in `Source/IconMenu.hpp`.
 
 **1. The real-time thread has to be severed first.** `deviceManager` is declared
 before `graph`, `player` and `deviceTap`, so it is destroyed after all three.
-Until `deviceManager.removeAudioCallback (&deviceTap)` returns, the device's
+Until `deviceManager.removeAudioCallback (&deviceTap)` (the 3.2.0 changelog entry says `&player`, correct for the time — `DeviceTap` was inserted between the device and the player in 5.1.0) returns, the device's
 callback thread is still running `DeviceTap` → `AudioProcessorPlayer` → `graph`
 on objects that are about to be destroyed. `removeAudioCallback` blocks on JUCE's
 own lock until any in-flight callback has finished, which is what makes every
@@ -93,8 +93,8 @@ plugin up with `graph.getNodeForId` and asks the processor for
 `getStateInformation`, which only an existing plugin can answer. That is why it
 is the last statement of the destructor body rather than the first.
 
-**Constraint 4 is what makes the split actively dangerous.** The plan in the
-backlog is to move the detach sequence "wholesale into `AudioEngine`'s
+**Constraint 4 is what makes the split actively dangerous.** The plan the
+backlog carried was to move the detach sequence "wholesale into `AudioEngine`'s
 destructor". If `AudioEngine` is a member of `IconMenu`, the body of `~IconMenu`
 runs *before* `~AudioEngine` — so `savePluginStates()` would be calling
 `getStateInformation` on plugins that are still being driven by a live audio
@@ -106,7 +106,7 @@ shape is an explicit, idempotent `engine.detach()` as the first statement of
 nobody did.
 
 **The sanitiser gate offered to justify that risk cannot be built.** The backlog
-proposes running the smoke test under a sanitiser as part of the gate. No CI
+proposed running the smoke test under a sanitiser as part of the gate. No CI
 runner has an audio device, so `getCurrentAudioDevice()` returns null and no
 callback thread ever starts. `Source/SelfTest.hpp` says so in its own header
 comment: "This proves the ordering code runs without faulting; it does not
@@ -127,8 +127,8 @@ redone every time a vendor ships an update.
 `/fsanitize=address`. An instrumented job would be building something other than
 the binary that goes out.
 
-**There is no user-visible payoff.** Every other remaining item in the backlog
-changes what the application does. This one changes how long a file is, which is
+**There is no user-visible payoff.** Every other backlog item cleared in 5.2.0
+either changed what the application does or closed a verification gap. This one changes how long a file is, which is
 a readability preference, paid for with the worst failure mode in the project.
 
 Two of the three seams the refactor would create have already been collected
@@ -162,8 +162,8 @@ order, lane, bypass and saved state.
 ### Why the answer is no
 
 **Both are blocked on the same thing: the chain no longer being a
-`juce::KnownPluginList`.** That is recorded in [BACKLOG.md](BACKLOG.md) under
-Deferred as two separate items, which understates how tightly they are coupled.
+`juce::KnownPluginList`.** The backlog carried them as two
+separate deferred items, which understated how tightly they are coupled.
 
 **The key scheme does collide, and the container is currently hiding it.**
 `chain::Store::identityOf` in `Source/PluginChainStore.hpp` hashes
@@ -313,8 +313,7 @@ block sits above both.
 
 **Out-of-process plugin hosting.** It is the one item here with a real benefit:
 plugins run in-process, so a plugin that crashes takes the host with it, and a
-child process would make that survivable. It is also a different application, as
-[BACKLOG.md](BACKLOG.md) already records — IPC carrying audio under a real-time
+child process would make that survivable. It is also a different application — IPC carrying audio under a real-time
 deadline, embedding a plugin editor across a process boundary, and a new failure
 mode to design for when the child dies and the chain has to carry on without it.
 Real sandboxing is not a fix to this program; it is a different one.
@@ -452,15 +451,15 @@ of the four: a new concept in a pure function, plus its tests.
 `juce::AudioDeviceManager`, initialised as `initialise (2, 2, …)`. AEC needs the
 microphone and the reference arriving together. A second device would have to be
 opened independently and handed across on a lock-free ring buffer. That is
-strictly larger than the `AudioEngine` extraction in BACKLOG.md, which already
-carries a warning about being the riskiest refactor in the project.
+strictly larger than the `AudioEngine` extraction declined above, which the
+backlog itself warned was the riskiest refactor in the project.
 
 **3. JUCE exposes no loopback.** `WASAPIDeviceMode` is `shared`, `exclusive` and
 `sharedLowLatency`; the string `loopback` appears nowhere in
 `juce_audio_devices`. Windows itself has supported loopback since Vista
 (`AUDCLNT_STREAMFLAGS_LOOPBACK` on a render endpoint) and added a per-process API
 in Windows 10 2004, so this is a framework gap rather than a platform one — see
-the re-check note under Deferred in BACKLOG.md. Without it, the reference has to
+the standing-checks note in BACKLOG.md. Without it, the reference has to
 come from a hand-rolled WASAPI backend or from a virtual cable carrying a copy of
 the output.
 

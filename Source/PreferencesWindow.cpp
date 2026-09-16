@@ -420,8 +420,12 @@ private:
             if (taps[i].meter == nullptr)
                 continue;
 
-            // Destructive read, so it happens every tick regardless of whether
-            // anything is redrawn.
+            // Every tick regardless of whether anything is redrawn, because the
+            // fall ballistics below advance per tick. NOT because the read
+            // consumes anything: Meter::read is const and takes nothing away --
+            // that is the property the 5.1.0 fix established, after a
+            // destructive read meant two components watching one meter each saw
+            // half of what arrived.
             const auto r = taps[i].meter->read();
             auto& row = readings[i];
 
@@ -1159,7 +1163,8 @@ public:
         // 2004 added a per-process version. JUCE exposes none of it.
         // WASAPIDeviceMode is shared, exclusive and sharedLowLatency, and
         // "loopback" appears nowhere in juce_audio_devices as of the vendored
-        // 9.0.1. See BACKLOG.md under Deferred for what to re-check on a bump.
+        // 9.0.2. See the standing checks in BACKLOG.md, and the loopback grep
+        // tools/update-juce.sh runs on every bump.
         virtualInputHint.setText ("No virtual input found. Processing audio from other "
                                   "apps needs one.",
                                   juce::dontSendNotification);

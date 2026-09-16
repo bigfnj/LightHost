@@ -147,16 +147,97 @@ public:
 
             // New session: the plugin now throws on restore.
             StateStub reopened (/*throwOnRestore*/ true);
-            const bool restoreOk = restoreInto (reopened, savedBlob) == RestoreResult::restored;
+            const auto result = restoreInto (reopened, savedBlob);
+            const bool restoreOk = result == RestoreResult::restored;
 
             expect (! restoreOk, "precondition: the restore should have failed");
 
             // The guard: only a successful restore may be saved back.
+            // The caller's rule, asserted directly rather than modelled: a
+            // restore that did not succeed must be reported as `failed`, because
+            // that is the value IconMenu::savePluginStates keys on to skip the
+            // node and leave the stored blob alone. Reporting `nothingSaved`
+            // here would let the save overwrite a real preset with defaults.
+            //
+            // This used to build blobOnDisk behind `if (restoreOk)`, which the
+            // expect above had already established was false -- so the final
+            // comparison was savedBlob against savedBlob and could not fail.
+            expect (result == RestoreResult::failed,
+                    "a refused restore must report failed, not nothingSaved, or "
+                    "savePluginStates will overwrite the stored preset");
+
             juce::String blobOnDisk = savedBlob;
             if (restoreOk)
                 blobOnDisk = base64Of (reopened);   // would clobber with defaults
 
             expectEquals (blobOnDisk, savedBlob, "the user's saved state was overwritten");
+        }
+
+        //======================================================================
+        // decodeLegacyState, directly.
+        //
+        // It had no test of its own, and it is the whole of the 5.2.0 preset-loss
+        // fix: the load path used to discard the result of fromBase64Encoding,
+        // which turned an undecodable blob into an empty MemoryBlock. That was
+        // then reported as "nothing was saved" rather than "this failed", so the
+        // node never reached statesNotRestored and the next save wrote factory
+        // defaults over the user's only copy.
+        //
+        // The three outcomes cannot be distinguished through the RestoreResult
+        // façade, because it collapses nothingSaved and an empty block onto the
+        // same value. So they are asserted here.
+        beginTest ("an empty string means nothing was ever stored");
+        {
+            juce::MemoryBlock block;
+
+            expect (decodeLegacyState (juce::String(), block) == DecodeResult::nothingSaved);
+            expectEquals ((int) block.getSize(), 0);
+
+            // The distinction that matters: nothing was stored, so saving over it
+            // later is harmless. Compare with the failed case below.
+        }
+
+        beginTest ("state that will not decode is failed, not nothingSaved");
+        {
+            // A string of only invalid characters. This is the case that cost a
+            // preset: it decodes to zero bytes, and calling that "nothing saved"
+            // licenses the caller to overwrite it.
+            juce::MemoryBlock block;
+
+            expect (decodeLegacyState ("!!!!", block) == DecodeResult::failed,
+                    "an undecodable blob reported as nothingSaved is how a real "
+                    "preset gets replaced with factory defaults");
+            expectEquals ((int) block.getSize(), 0,
+                          "a failed decode must not leave partial bytes behind");
+        }
+
+        beginTest ("valid base64 round-trips to the original bytes");
+        {
+            juce::MemoryBlock original;
+            original.append ("some plugin state", 17);
+
+            juce::MemoryBlock decoded;
+            expect (decodeLegacyState (original.toBase64Encoding(), decoded)
+                        == DecodeResult::decoded);
+
+            expectEquals ((int) decoded.getSize(), (int) original.getSize());
+            expect (decoded == original);
+        }
+
+        beginTest ("the destination is cleared before every attempt");
+        {
+            // The caller reuses one MemoryBlock across chain entries, so a
+            // failed decode must not leave the previous plugin's state in it --
+            // which would restore one plugin's preset into another.
+            juce::MemoryBlock block;
+            block.append ("previous plugin state", 21);
+
+            expect (decodeLegacyState (juce::String(), block) == DecodeResult::nothingSaved);
+            expectEquals ((int) block.getSize(), 0, "stale bytes survived a decode");
+
+            block.append ("previous plugin state", 21);
+            expect (decodeLegacyState ("!!!!", block) == DecodeResult::failed);
+            expectEquals ((int) block.getSize(), 0, "stale bytes survived a failed decode");
         }
     }
 };

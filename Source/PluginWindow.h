@@ -58,6 +58,14 @@ private:
     }
 }
 
+// Where a window remembers its position, per window type. Read back by the
+// constructor, so the next editor for the same plugin reopens where it was.
+//
+// There was a third, "uiopen_", recording whether a window was open. Nothing
+// ever read it, and nothing could have: these live on
+// AudioProcessorGraph::Node::properties, which graph.clear() destroys on every
+// chain reload, so the flag never survived long enough to restore anything. The
+// position keys work because they are read during the window's own construction,
+// while the node is alive.
 [[nodiscard]] inline juce::String getLastXProp (PluginWindow::WindowFormatType type) { return "uiLastX_" + toString (type); }
 [[nodiscard]] inline juce::String getLastYProp (PluginWindow::WindowFormatType type) { return "uiLastY_" + toString (type); }
-[[nodiscard]] inline juce::String getOpenProp  (PluginWindow::WindowFormatType type) { return "uiopen_"  + toString (type); }

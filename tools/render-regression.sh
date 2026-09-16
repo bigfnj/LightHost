@@ -61,8 +61,13 @@ if [[ ! -f "$input" ]]; then
     exit 2
 fi
 
-out=$(mktemp -t render-regression-XXXXXX).wav
-trap 'rm -f "$out"' EXIT
+# The extension has to be added by moving the file, not by concatenating onto
+# the command substitution: "$(mktemp ...).wav" leaves mktemp's own file behind
+# and traps a path that was never created.
+tmp=$(mktemp -t render-regression-XXXXXX)
+out="$tmp.wav"
+mv "$tmp" "$out"
+trap 'rm -f "$tmp" "$out"' EXIT
 
 echo "rendering through '$chain' (paced, so this runs in real time)..."
 "$exe" --render "$input" "$out" --chain "$chain"

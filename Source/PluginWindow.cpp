@@ -27,7 +27,6 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
     setTopLeftPosition (owner->properties.getWithDefault (getLastXProp (type), Random::getSystemRandom().nextInt (500)),
                         owner->properties.getWithDefault (getLastYProp (type), Random::getSystemRandom().nextInt (500)));
 
-    owner->properties.set (getOpenProp (type), true);
     setVisible (true);
 
     getActiveWindows().add (this);
@@ -163,6 +162,5 @@ void PluginWindow::moved()
 
 void PluginWindow::closeButtonPressed()
 {
-    owner->properties.set (getOpenProp (type), false);
     delete this;
 }

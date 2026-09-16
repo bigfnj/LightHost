@@ -17,8 +17,10 @@
 //
 // REALTIME RULES
 //
-// processBlock is the only realtime-critical code in this project now that the
-// hand-rolled delay compensation is gone. It allocates nothing, takes no locks,
+// processBlock runs on the audio thread. It is not the only code here that
+// does -- Meter::measure, Probe::processBlock and DeviceTap's device callback
+// all do too since 5.1.0, and Source/SignalMetering.hpp states the same rules
+// for them. It was the only one when this was written. It allocates nothing, takes no locks,
 // and does no I/O. The target comes across from the message thread as a relaxed
 // atomic and is ramped, because a gain applied as a step produces a click, and a
 // click is what a user will report as a bug in the plugin they were listening to.

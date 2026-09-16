@@ -205,9 +205,8 @@ public:
 
             expectEquals (getLastXProp (PluginWindow::Normal),  juce::String ("uiLastX_Normal"));
             expectEquals (getLastYProp (PluginWindow::Generic), juce::String ("uiLastY_Generic"));
-            expectEquals (getOpenProp  (PluginWindow::Normal),  juce::String ("uiopen_Normal"));
 
-            expect (getOpenProp (PluginWindow::Normal) != getOpenProp (PluginWindow::Generic),
+            expect (getLastXProp (PluginWindow::Normal) != getLastXProp (PluginWindow::Generic),
                     "the two window types must not share a stored position");
         }
     }
@@ -293,10 +292,13 @@ public:
             expect (! PluginWindow::containsActiveWindows());
         }
 
-        beginTest ("the window records that it is open, and where");
+        beginTest ("a moved window records its position against the type used");
         {
-            // IconMenu reads these back to restore editors, so they are part of
-            // the contract rather than an implementation detail.
+            // Read back by the constructor, so an editor reopens where it was.
+            // Recorded against Generic, not Normal: the stub has no native
+            // editor, so getWindowFor falls back and the window's type is
+            // Generic -- storing under the requested type would put the position
+            // in a key the next window does not read.
             Graph graph;
             auto node = graph.addNode (std::make_unique<lighthost::test::PassthroughStub>(),
                                        Graph::NodeID { 1 });
@@ -304,8 +306,12 @@ public:
             auto* window = PluginWindow::getWindowFor (node, PluginWindow::Normal);
             expect (window != nullptr);
 
-            expect (node->properties.getWithDefault (getOpenProp (PluginWindow::Generic), false),
-                    "the open flag was not recorded against the type actually used");
+            window->setTopLeftPosition (123, 456);
+
+            expectEquals ((int) node->properties.getWithDefault (
+                              getLastXProp (PluginWindow::Generic), -1), 123);
+            expectEquals ((int) node->properties.getWithDefault (
+                              getLastYProp (PluginWindow::Generic), -1), 456);
 
             PluginWindow::closeAllCurrentlyOpenWindows();
         }

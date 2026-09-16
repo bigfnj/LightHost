@@ -187,8 +187,6 @@ private:
 
             void run() override
             {
-                const auto before = knownList.getNumTypes();
-
                 for (int i = 0; i < formatManager.getNumFormats(); ++i)
                 {
                     auto* fmt = formatManager.getFormat (i);
@@ -213,12 +211,9 @@ private:
                     // that was scanned cleanly.
                     failed.addArray (scanner.getFailedFiles());
                 }
-
-                added = jmax (0, knownList.getNumTypes() - before);
             }
 
             [[nodiscard]] const StringArray& getFailedFiles() const noexcept { return failed; }
-            [[nodiscard]] int getNumAdded() const noexcept                   { return added; }
 
         private:
             AudioPluginFormatManager& formatManager;
@@ -226,7 +221,6 @@ private:
             File                      deadMansPedal;
             File                      scanDir;
             StringArray               failed;
-            int                       added = 0;
         };
 
         //----------------------------------------------------------------------
@@ -249,7 +243,7 @@ private:
                         return;                       // cancelled from the dialog
 
                     rememberSearchPath (dir);
-                    reportScanOutcome (dir, job.getNumAdded(), job.getFailedFiles());
+                    reportScanOutcome (dir, job.getFailedFiles());
                 });
         }
 
@@ -287,19 +281,19 @@ private:
 
         /** Reports a scan that did not go cleanly. A scan that worked says
             nothing: the table itself is the result.
+
+            Deliberately says nothing about how many plugins were found. It used
+            to report "No plugins found" whenever the known-plugin count had not
+            grown, and that count does not grow on a successful rescan either --
+            scanNextFile skips what is already listed, and an updated plugin is
+            replaced in place rather than added. So the one case this was meant
+            to help, re-scanning a folder after updating a plugin in it, was told
+            that nothing was there.
         */
-        void reportScanOutcome (const File& dir, int added, const StringArray& failed)
+        void reportScanOutcome (const File& dir, const StringArray& failed)
         {
-            if (! report)
+            if (! report || failed.isEmpty())
                 return;
-
-            if (failed.isEmpty())
-            {
-                if (added == 0)
-                    report ("No plugins found in " + dir.getFileName());
-
-                return;
-            }
 
             StringArray names;
 
@@ -495,10 +489,20 @@ void IconMenu::loadActivePlugins()
     PluginWindow::closeAllCurrentlyOpenWindows();
     graph.clear();
 
-    graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
-        AudioProcessorGraph::AudioGraphIOProcessor::audioInputNode),  kInputNodeId);
-    graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
-        AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode), kOutputNodeId);
+    // Checked, like createLaneGainNodes and syncProbeNodes already are. Without
+    // an IO node reconnectGraph simply skips the wiring it cannot do, so the
+    // failure presents as a host that is running and passing no audio at all.
+    const auto inputNode = graph.addNode (
+        std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
+            AudioProcessorGraph::AudioGraphIOProcessor::audioInputNode), kInputNodeId);
+
+    const auto outputNode = graph.addNode (
+        std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
+            AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode), kOutputNodeId);
+
+    if (inputNode == nullptr || outputNode == nullptr)
+        status.report ("The audio graph could not be built, so no audio is being"
+                       " passed. Restarting Light Host is the only fix.");
 
     inputNodeId  = kInputNodeId;
     outputNodeId = kOutputNodeId;
@@ -1254,22 +1258,25 @@ void IconMenu::reportDeviceSubstitutionIfAny (const juce::String& contextLabel)
         lighthost::device::requestedFrom (stored.get()),
         { setup.inputDeviceName, setup.outputDeviceName });
 
-    const auto described = message.value_or (juce::String());
+    if (! message.has_value())
+        return;                 // the requested devices are the ones that are open
 
-    // Said once per distinct substitution. The stored request is not rewritten
-    // by the fallback, so without this every subsequent device change would
-    // repeat the same sentence for as long as the device stayed missing.
-    if (described == lastDeviceSubstitution)
+    // Deduplicated against what the status row is actually SHOWING, not against
+    // a remembered string.
+    //
+    // The sink surfaces only its most recent problem, and both the tray tooltip
+    // and the Preferences status row read that one string. Remembering the last
+    // substitution instead meant a plugin-state failure arriving afterwards
+    // replaced this message everywhere and the early return then stopped it ever
+    // being said again -- leaving a substituted microphone with no indication
+    // anywhere but the log. Comparing against the visible text repeats it when
+    // something else has taken the row, and stays quiet while it is still up.
+    if (*message == status.mostRecent())
         return;
 
-    lastDeviceSubstitution = described;
-
-    if (described.isEmpty())
-        return;                 // resolved: the requested devices are open again
-
     juce::Logger::writeToLog ("IconMenu: device substitution at " + contextLabel
-                              + ": " + described);
-    reportStatus (described);
+                              + ": " + *message);
+    reportStatus (*message);
 }
 
 //==============================================================================
@@ -1430,16 +1437,27 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
     if (id == 5) { im->setStartupEnabled (! im->isStartupEnabled()); return; }
     #endif
 
-    // Plugin actions
-    if (id >= kDeleteOffset && id < kDeleteOffset + kEditOffset)
+    // Plugin actions.
+    //
+    // The width of each band is kMenuBandStride, not kEditOffset. These read
+    // "id < kDeleteOffset + kEditOffset" and worked only because kEditOffset
+    // happens to equal the spacing between the offsets: respace them, or insert
+    // a sixth action, and the bands overlap so a Move Up click dispatches to
+    // handleDeletePlugin. Silent, and destructive.
+    const auto inBand = [id] (int offset)
+    {
+        return juce::isPositiveAndBelow (id - offset, kMenuBandStride);
+    };
+
+    if (inBand (kDeleteOffset))
         im->handleDeletePlugin (id - kDeleteOffset);
-    else if (id >= kMoveDownOffset && id < kMoveDownOffset + kEditOffset)
+    else if (inBand (kMoveDownOffset))
         im->handleMovePlugin (id - kMoveDownOffset, false);
-    else if (id >= kMoveUpOffset && id < kMoveUpOffset + kEditOffset)
+    else if (inBand (kMoveUpOffset))
         im->handleMovePlugin (id - kMoveUpOffset, true);
-    else if (id >= kBypassOffset && id < kBypassOffset + kEditOffset)
+    else if (inBand (kBypassOffset))
         im->handleBypassPlugin (id - kBypassOffset);
-    else if (id >= kEditOffset && id < kEditOffset + kEditOffset)
+    else if (inBand (kEditOffset))
         im->handleEditPlugin (id - kEditOffset);
 
     im->startTimer (50);
@@ -1451,10 +1469,11 @@ void IconMenu::handleDeletePlugin (int index)
     const auto timeSorted = getTimeSortedList();
 
     // juce::isPositiveAndBelow rather than a hand-written pair of comparisons.
-    // This bounds check was spelled out four times in this file, and BACKLOG.md
-    // wanted regression tests for all four -- which would have meant testing a
-    // copy of an expression JUCE already provides and tests. One library call
-    // per site leaves nothing bespoke to regress.
+    // This bounds check was spelled out six times in this file, and BACKLOG.md
+    // wanted regression tests for the four in the handleXxx methods -- which
+    // would have meant testing a local copy of an expression JUCE already
+    // provides and tests. One library call per site leaves nothing bespoke to
+    // regress.
     if (! juce::isPositiveAndBelow (index, timeSorted->size()))
         return;
 
@@ -1476,9 +1495,16 @@ void IconMenu::handleDeletePlugin (int index)
     // a delete left an orphan lane key for the next plugin to inherit.
     store.stageErase (pluginToDelete);
 
-    // Remove from the list first. It is the mutation that can throw (its change
-    // listener writes the XML), and nothing destructive should happen until it
-    // has succeeded.
+    // Remove from the list first, so nothing destructive happens until it has
+    // succeeded.
+    //
+    // Note what this try/catch does NOT cover, because the comment here used to
+    // claim otherwise: the change listener that writes the XML does not run
+    // inside it. ChangeBroadcaster::sendChangeMessage is an async update, so the
+    // listener -- and the settings write it performs -- happens later on the
+    // message thread, outside this scope. removeType itself only takes a lock
+    // and mutates an Array, so in practice there is nothing here to throw. The
+    // guard is kept because a rollback is the correct response if it ever does.
     try
     {
         activePluginList.removeType (pluginToDelete);  // triggers changeListener → persists XML
@@ -1486,6 +1512,7 @@ void IconMenu::handleDeletePlugin (int index)
     catch (const std::exception& e)
     {
         store.rollback();
+        sortedPluginCache.reset();   // as applyPluginChain's abandon path does
         juce::Logger::writeToLog ("activePluginList.removeType threw std::exception for "
                                   + pluginToDelete.name + ": " + juce::String (e.what())
                                   + "; the plugin's settings were left untouched");
@@ -1495,6 +1522,7 @@ void IconMenu::handleDeletePlugin (int index)
     catch (...)
     {
         store.rollback();
+        sortedPluginCache.reset();
         juce::Logger::writeToLog ("activePluginList.removeType threw unknown exception for "
                                   + pluginToDelete.name
                                   + "; the plugin's settings were left untouched");
@@ -1568,7 +1596,7 @@ void IconMenu::handleMovePlugin (int index, bool moveUp)
 
     const int neighborIndex = moveUp ? index - 1 : index + 1;
 
-    if (neighborIndex < 0 || neighborIndex >= static_cast<int> (timeSorted.size()))
+    if (! juce::isPositiveAndBelow (neighborIndex, timeSorted.size()))
         return;
 
     const auto target   = timeSorted[static_cast<size_t> (index)];
@@ -1885,6 +1913,11 @@ void IconMenu::showPreferences()
                 // promises, and leaves a reopened window showing the toggle off
                 // while the nodes are still in there.
                 im->setSignalViewEnabled (false);
+
+                // Before the write below, for the same reason as the other two
+                // sites: the comparison is against the stored request, and this
+                // overwrites it.
+                im->reportDeviceSubstitutionIfAny ("preferences-close");
 
                 // Persist audio device state when the window is closed
                 auto audioState = im->deviceManager.createStateXml();
