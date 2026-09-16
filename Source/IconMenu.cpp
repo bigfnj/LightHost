@@ -1621,28 +1621,15 @@ void IconMenu::confirmDeletePluginStates()
         return;
     }
 
-    // Button ORDER is chosen per platform, and the index to act on is derived
-    // from that order rather than hard-coded, because the platforms disagree
-    // about what a dismissal reports.
-    //
-    //   Windows: button ids are 0..N-1 in order, Escape is disabled (no
-    //            TDF_ALLOW_DIALOG_CANCELLATION), and a TaskDialogIndirect
-    //            failure leaves the result at 0. So the destructive button
-    //            must not be index 0.
-    //   Linux:   the raw AlertWindow result is remapped (raw + N - 1) % N, and
-    //            the LookAndFeel binds Escape to the *second* button, while
-    //            userTriedToCloseWindow() exits with raw 0. Both resolve to the
-    //            LAST index, so the destructive button must not be last.
-    //
-    // No single order is safe on both, which is why this is not just
-    // "Cancel first" with a comment claiming Escape is harmless.
-   #if JUCE_LINUX || JUCE_BSD
-    const juce::StringArray order { "Delete", "Cancel" };
-   #else
-    const juce::StringArray order { "Cancel", "Delete" };
-   #endif
+    // Which button goes where, and which index means "do it", both come from
+    // Source/ConfirmPolicy.hpp -- the platforms disagree about what a dismissed
+    // dialog reports, and they disagree in opposite directions. It is a pure
+    // function so CI checks both rules on every platform, rather than the rule
+    // being confirmable only by a person clicking a dialog on a Linux box.
+    const auto order = lighthost::confirm::buttonOrder (
+        lighthost::confirm::thisPlatform(), "Delete", "Cancel");
 
-    const auto deleteIndex = order.indexOf ("Delete");
+    const auto deleteIndex = lighthost::confirm::destructiveIndex (order, "Delete");
 
     auto options = juce::MessageBoxOptions()
                        .withIconType (juce::MessageBoxIconType::WarningIcon)

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GainProcessor.hpp"
+#include "ConfirmPolicy.hpp"
 #include "DevicePolicy.hpp"
 #include "DeviceTap.hpp"
 #include "Lanes.hpp"

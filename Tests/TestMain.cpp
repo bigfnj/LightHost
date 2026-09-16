@@ -34,8 +34,13 @@ namespace
     };
 }
 
-int main()
+int main (int argc, char** argv)
 {
+    // Two sets, because they need different environments. The default set runs
+    // anywhere; --gui constructs real windows and is registered as a separate
+    // CTest entry behind the xvfb check, so it never runs on a headless runner.
+    const bool guiOnly = argc > 1 && juce::String (argv[1]) == "--gui";
+
     // Brings up the MessageManager. Nothing here posts messages, but JUCE
     // subsystems and the leak detector expect an initialised environment.
     const juce::ScopedJuceInitialiser_GUI juceInit;
@@ -80,10 +85,15 @@ int main()
         }
     };
 
-    for (const auto* category : { "DevicePolicy", "Gain", "GraphRender", "GraphTopology",
-                                  "InstanceName", "Metering",
-                                  "PluginChain", "PluginState", "PluginStateVault",
-                                  "SampleRate", "Status" })
+    const juce::StringArray headless { "ConfirmPolicy", "DevicePolicy", "Gain",
+                                       "GraphRender", "GraphTopology", "InstanceName",
+                                       "Metering", "NodeIds", "PluginChain", "PluginState",
+                                       "PluginStateVault", "PluginWindow",
+                                       "SampleRate", "Status" };
+
+    const juce::StringArray needsDisplay { "PluginWindowGui" };
+
+    for (const auto& category : (guiOnly ? needsDisplay : headless))
     {
         runner.runTestsInCategory (category);
         collectResults();

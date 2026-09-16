@@ -208,15 +208,19 @@ if(LIGHTHOST_BUILD_TESTS)
     )
 
     target_sources(LightHostTests PRIVATE
+        Source/PluginWindow.cpp
         Tests/TestMain.cpp
+        Tests/ConfirmPolicyTests.cpp
         Tests/DevicePolicyTests.cpp
         Tests/GainProcessorTests.cpp
         Tests/GraphRenderTests.cpp
         Tests/GraphTopologyTests.cpp
         Tests/InstanceNameTests.cpp
+        Tests/NodeIdTests.cpp
         Tests/PluginChainStoreTests.cpp
         Tests/PluginStateTests.cpp
         Tests/PluginStateVaultTests.cpp
+        Tests/PluginWindowTests.cpp
         Tests/SampleRatePolicyTests.cpp
         Tests/SignalMeteringTests.cpp
         Tests/StatusSinkTests.cpp
@@ -235,6 +239,12 @@ if(LIGHTHOST_BUILD_TESTS)
         # juce::UnitTest itself is always available.
         JUCE_APPLICATION_NAME_STRING="LightHostTests"
         JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
+
+        # PluginWindow::closeAllCurrentlyOpenWindows pumps the message queue
+        # inside a JUCE_MODAL_LOOPS_PERMITTED block, and the default is 0. Without
+        # this, the tests would compile that block out and assert against a
+        # function the application never runs.
+        JUCE_MODAL_LOOPS_PERMITTED=1
     )
 
     target_link_libraries(LightHostTests PRIVATE
@@ -278,6 +288,14 @@ if(LIGHTHOST_BUILD_TESTS)
     endif()
 
     if(LIGHTHOST_SMOKE_AVAILABLE)
+        # The window-creating half of the PluginWindow tests. Separate from
+        # `unit` because constructing a DocumentWindow needs a display server:
+        # folded into the main run it would segfault on a headless Linux runner,
+        # and skipping it silently there would be worse than not having it.
+        add_test(NAME unit-gui
+                 COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHostTests> --gui)
+        set_tests_properties(unit-gui PROPERTIES LABELS unit TIMEOUT 120)
+
         add_test(NAME smoke-startup
                  COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHost> -self-test)
         set_tests_properties(smoke-startup PROPERTIES LABELS smoke TIMEOUT 90)

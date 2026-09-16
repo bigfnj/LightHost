@@ -1,6 +1,11 @@
 #pragma once
 
-#include <juce_audio_utils/juce_audio_utils.h>
+// Deliberately NOT juce_audio_utils. Nothing here uses a symbol from it -- the
+// window needs juce_gui_extra for DocumentWindow and juce_audio_processors for
+// GenericAudioProcessorEditor and the graph -- and including it would make the
+// test target link juce_audio_devices, with its whole set of platform audio
+// backends, to test a window.
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 
 class PluginWindow final : public juce::DocumentWindow
