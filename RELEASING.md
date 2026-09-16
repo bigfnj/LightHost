@@ -36,6 +36,22 @@ push to `main`. It is not the release workflow, but it is the same compilers and
 the same test suite, so a green CI run on the exact commit being tagged is the
 evidence that the release build will get that far.
 
+**Read the run's conclusion; do not trust `gh run watch --exit-status`.** It
+returned exit code 0 for two separate runs that had failed, on 2026-09-16. Ask
+for the field instead:
+
+```bash
+gh run view <run-id> --json conclusion,jobs --jq '"run: \(.conclusion)", (.jobs[] | "  \(.name): \(.conclusion)")'
+```
+
+A gate that reports success on a failed run is worse than no gate, and this is
+the one gate standing between you and a repeat of v5.0.1.
+
+Local green is not evidence for the other two platforms. There is no GCC or
+Clang on the development machine, so an MSVC-only compile error reaches CI
+having passed everything locally — that happened twice during 5.2.0, once on an
+ambiguous `operator<<` overload MSVC resolves and GCC and Clang refuse.
+
 ---
 
 ## Cutting a release
