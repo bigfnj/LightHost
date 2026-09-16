@@ -9,6 +9,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
+#include <array>
 #include <map>
 #include <set>
 #include <vector>
@@ -81,8 +82,9 @@ private:
     void handleEditPlugin (int index);
     void handleMovePlugin (int index, bool moveUp);
 
-    // Lane trims. Four gain nodes at reserved ids, one at each lane's summing
-    // point. See Source/GainProcessor.hpp for why they exist.
+    // Lane trims. One gain node per lane at a reserved id, at that lane's
+    // summing point. See Source/GainProcessor.hpp for why they exist. Said
+    // "four" until Lanes.hpp existed to stop exactly that kind of prose copy.
     [[nodiscard]] static NodeID laneGainNodeId (int lane);
 
     // Metering probes, on reserved ids above the lane trims. Bounded so the
@@ -92,6 +94,13 @@ private:
     [[nodiscard]] static NodeID probeNodeId (int index);
     void syncProbeNodes();
     bool signalViewEnabled = false;
+
+    // The probe meters live HERE, not inside the Probe processors, because the
+    // graph destroys every processor on a chain reload while the signal view is
+    // still holding pointers to them. Owning them at this level makes them as
+    // long-lived as the device meters, which is what makes handing a raw pointer
+    // to the UI safe.
+    std::array<lighthost::metering::Meter, lighthost::nodeids::maxProbes> probeMeters;
     void createLaneGainNodes();
     [[nodiscard]] lighthost::gain::Processor* laneGainProcessor (int lane);
 
@@ -103,8 +112,6 @@ public:
         rebuild, which the diffing in reconnectGraph makes inaudible.
     */
     void setSignalViewEnabled (bool shouldBeEnabled);
-
-    [[nodiscard]] bool isSignalViewEnabled() const noexcept { return signalViewEnabled; }
 
     /** The meter for the probe sitting after chain position `index`, or nullptr
         when the signal view is off or that position has no probe.

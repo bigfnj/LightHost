@@ -9,9 +9,11 @@
 // Two properties here are load-bearing and neither is obvious from reading the
 // class:
 //
-//   The peak is a max-since-last-read, not the last block's peak. A UI frame
-//   arrives roughly every 40 ms and a block every 10 ms, so "last block" would
-//   throw away three peaks in four -- including the one that clipped.
+//   The peak is held and decayed by the meter, not by whoever draws it, and
+//   reading does not consume it. A UI frame arrives roughly every 40 ms and a
+//   block every 10 ms, so reporting only the last block's peak would discard
+//   three in four -- including the one that clipped -- and a destructive read
+//   meant two components watching one meter each saw half of what arrived.
 //
 //   The probe must be perfectly transparent. It sits in the live signal path
 //   whenever the signal view is open, so a single altered sample would mean
@@ -70,7 +72,6 @@ public:
 
             expectWithinAbsoluteError (r.peakDb, lighthost::metering::kFloorDb, 0.01f);
             expect (! r.clipped);
-            expect (! r.active);
             expect (! r.rmsValid, "nothing has watched it, so there is no RMS to report");
         }
 
@@ -85,7 +86,6 @@ public:
             const auto r = meter.read();
 
             expectWithinAbsoluteError (r.peakDb, -6.02f, 0.05f);
-            expect (r.active);
         }
 
         beginTest ("RMS is only measured while something is watching");
@@ -134,7 +134,7 @@ public:
                                        "a silent second channel must not drag the level down");
         }
 
-        beginTest ("the peak is the maximum since the last read, not the last block");
+        beginTest ("the peak survives the blocks after it, not just its own");
         {
             Meter meter;
 
@@ -143,22 +143,68 @@ public:
             feedConstant (meter, 0.01f);
             feedConstant (meter, 0.01f);
 
+            // The spike was -1.94 dBFS and three quiet blocks have passed, so
+            // the held peak has decayed by about 3 x 0.45 dB. What matters is
+            // that it is still clearly there: reporting only the last block
+            // would have shown -40 and lost the event entirely.
             const auto r = meter.read();
-            expectWithinAbsoluteError (r.peakDb, -1.94f, 0.05f,
-                                       "the spike was dropped, so a clip between UI frames "
-                                       "would be missed");
+            expectWithinAbsoluteError (r.peakDb, -1.94f - 3.0f * 0.45f, 0.15f,
+                                       "the spike did not survive the blocks after it, so a "
+                                       "peak between two UI frames would be missed");
         }
 
-        beginTest ("reading clears the peak, so a level that stops falls back");
+        beginTest ("reading does not consume the peak, so two readers agree");
+        {
+            // The device meters have two readers whenever the signal view is
+            // open: the meter under the device, and the matching row of the
+            // column. When read() cleared the peak, each stole what the other
+            // would have shown and both sagged.
+            Meter meter;
+            feedSingleSpike (meter, 0.8f);
+
+            const auto first  = meter.read();
+            const auto second = meter.read();
+
+            expectWithinAbsoluteError (first.peakDb, -1.94f, 0.05f);
+            expectWithinAbsoluteError (second.peakDb, first.peakDb, 1.0e-6f,
+                                       "a second reader saw a different level");
+        }
+
+        beginTest ("the held peak decays as blocks arrive, not as it is read");
         {
             Meter meter;
+            feedSingleSpike (meter, 1.0f);
 
-            feedSingleSpike (meter, 0.8f);
-            (void) meter.read();   // takes the peak, which is the point
+            const auto atPeak = meter.read().peakDb;
+            expectWithinAbsoluteError (atPeak, 0.0f, 0.05f);
 
-            const auto second = meter.read();
-            expectWithinAbsoluteError (second.peakDb, lighthost::metering::kFloorDb, 0.01f);
-            expect (! second.active, "nothing arrived between the two reads");
+            // Twenty quiet blocks is about 9 dB of decay at 0.45 dB per block.
+            for (int i = 0; i < 20; ++i)
+                feedConstant (meter, 0.0f);
+
+            const auto later = meter.read().peakDb;
+            expect (later < atPeak - 5.0f, "the peak did not fall");
+            expect (later > atPeak - 20.0f, "the peak fell far too fast to read");
+        }
+
+        beginTest ("RMS stops being reported once nothing is watching");
+        {
+            // It used to latch, so a reader arriving later was shown a figure
+            // frozen from the last time something watched.
+            Meter meter;
+
+            {
+                const Meter::Watch watch (&meter);
+
+                for (int i = 0; i < 40; ++i)
+                    feedConstant (meter, 0.5f);
+
+                expect (meter.read().rmsValid);
+            }
+
+            feedConstant (meter, 0.5f);
+            expect (! meter.read().rmsValid,
+                    "RMS was still reported with no watcher");
         }
 
         beginTest ("clipping latches, and survives reads until it is cleared");
@@ -184,7 +230,6 @@ public:
 
             const auto r = meter.read();
             expect (! r.clipped, "0.99 is -0.09 dBFS, which is hot but not clipped");
-            expect (r.active);
         }
 
         beginTest ("reset forgets the latch and the level");
@@ -219,7 +264,6 @@ public:
             meter.measure (empty);
 
             const auto r = meter.read();
-            expect (! r.active);
             expect (! r.clipped);
         }
 
@@ -228,7 +272,8 @@ public:
         {
             // It sits in the live path whenever the signal view is open, so one
             // altered sample would mean opening a window changed the sound.
-            Probe probe;
+            Meter meter;
+            Probe probe (meter);
             probe.prepareToPlay (kSampleRate, kBlockSize);
 
             juce::AudioBuffer<float> audio (2, kBlockSize);
@@ -251,7 +296,8 @@ public:
 
         beginTest ("the probe reports no latency, so it cannot disturb compensation");
         {
-            Probe probe;
+            Meter meter;
+            Probe probe (meter);
             probe.prepareToPlay (kSampleRate, kBlockSize);
 
             expectEquals (probe.getLatencySamples(), 0,
@@ -261,7 +307,8 @@ public:
 
         beginTest ("the probe's meter sees what passed through it");
         {
-            Probe probe;
+            Meter meter;
+            Probe probe (meter);
             probe.prepareToPlay (kSampleRate, kBlockSize);
 
             juce::AudioBuffer<float> audio (2, kBlockSize);
@@ -272,13 +319,14 @@ public:
 
             probe.processBlock (audio, midi);
 
-            const auto r = probe.getMeter().read();
+            const auto r = meter.read();
             expectWithinAbsoluteError (r.peakDb, -12.04f, 0.05f);
         }
 
         beginTest ("preparing a probe clears a stale reading");
         {
-            Probe probe;
+            Meter meter;
+            Probe probe (meter);
             juce::AudioBuffer<float> audio (2, kBlockSize);
             juce::MidiBuffer midi;
 
@@ -291,7 +339,7 @@ public:
             // old device should not be reported against the new one.
             probe.prepareToPlay (kSampleRate, kBlockSize);
 
-            expect (! probe.getMeter().read().clipped);
+            expect (! meter.read().clipped);
         }
     }
 };

@@ -632,12 +632,21 @@ void IconMenu::syncProbeNodes()
 
         if (shouldExist && ! doesExist)
         {
-            if (graph.addNode (std::make_unique<lighthost::metering::Probe>(), id) == nullptr)
+            const auto slot = static_cast<size_t> (i);
+
+            if (graph.addNode (std::make_unique<lighthost::metering::Probe> (probeMeters[slot]),
+                               id) == nullptr)
+            {
                 juce::Logger::writeToLog ("IconMenu: probe " + juce::String (i)
                                           + " could not be created; that position shows no level");
+            }
         }
         else if (doesExist && ! shouldExist)
         {
+            // Cleared so the row reads silence rather than the level frozen at
+            // the moment the probe went away. The meter itself survives.
+            probeMeters[static_cast<size_t> (i)].reset();
+
             // UpdateKind::none for the same reason every other mutation here
             // uses it: one rebuild at the end of reconnectGraph, not one per
             // node, so the audio thread never sees a half-wired graph.
@@ -664,11 +673,14 @@ void IconMenu::setSignalViewEnabled (bool shouldBeEnabled)
 
 lighthost::metering::Meter* IconMenu::getProbeMeter (int index)
 {
-    if (auto* node = graph.getNodeForId (probeNodeId (index)))
-        if (auto* probe = dynamic_cast<lighthost::metering::Probe*> (node->getProcessor()))
-            return &probe->getMeter();
+    // Always a valid pointer for a valid slot, whether or not a probe currently
+    // exists. The meter outlives the graph on purpose: the UI caches what this
+    // returns, and a pointer into a Probe would dangle the moment the chain
+    // reloaded. With no probe feeding it, the meter simply reads silence.
+    if (index < 0 || index >= lighthost::nodeids::maxProbes)
+        return nullptr;
 
-    return nullptr;
+    return &probeMeters[static_cast<size_t> (index)];
 }
 
 lighthost::gain::Processor* IconMenu::laneGainProcessor (int lane)
@@ -939,8 +951,14 @@ void IconMenu::reconnectGraph()
 
     const ChainStore store (*getAppProperties().getUserSettings());
 
+    int chainPosition = -1;
+
     for (const auto& pd : getTimeSortedList())
     {
+        // Advanced for every entry in the chain as displayed, including the ones
+        // skipped below, so it stays in step with the signal view's rows.
+        ++chainPosition;
+
         const auto nodeIdVal = store.readNodeId (pd);
         if (nodeIdVal == 0)
             continue;
@@ -970,15 +988,16 @@ void IconMenu::reconnectGraph()
                                       + juce::String (facts.numOutputChannels)
                                       + " out channels, so it cannot sit in a lane; wiring around it");
 
-        // Position in layout.nodes, which is what the Preferences signal view
-        // counts too, so index N in the panel is index N here.
-        const auto probeIndex = static_cast<int> (layout.nodes.size());
-
+        // Indexed by position in the DISPLAYED chain, not by how many nodes made
+        // it into the layout. Those differ the moment a plugin fails to load or
+        // is still loading, and then every probe after it would be attributed to
+        // the wrong plugin -- which for a column whose whole point is "which
+        // plugin did that" is worse than showing nothing.
         if (signalViewEnabled
-            && probeIndex < kMaxProbes
-            && graph.getNodeForId (probeNodeId (probeIndex)) != nullptr)
+            && chainPosition < kMaxProbes
+            && graph.getNodeForId (probeNodeId (chainPosition)) != nullptr)
         {
-            facts.probeNodeId = probeNodeId (probeIndex);
+            facts.probeNodeId = probeNodeId (chainPosition);
         }
 
         layout.nodes.push_back (facts);
@@ -1681,6 +1700,13 @@ void IconMenu::showPreferences()
             if (auto* im = safe.getComponent())
             {
                 juce::Logger::writeToLog ("IconMenu: closing Preferences window");
+
+                // Otherwise signalViewEnabled stays true and every later rewire
+                // keeps splicing probes into the graph for the rest of the
+                // session -- which is the opposite of what this feature
+                // promises, and leaves a reopened window showing the toggle off
+                // while the nodes are still in there.
+                im->setSignalViewEnabled (false);
 
                 // Persist audio device state when the window is closed
                 auto audioState = im->deviceManager.createStateXml();

@@ -34,19 +34,28 @@
 //          instruction: unmeasurable.
 //
 //   RMS    only while something is watching. The per-sample sum of squares is
-//          the expensive half and it is only ever read by a visible meter, so a
-//          watcher count gates it. Use Meter::Watch to hold one.
+//          the expensive half, and only the signal view displays it, so a
+//          watcher count gates it. Hold a Meter::Watch to ask for it.
 //
-// Probe is created only while the signal view is expanded, so per-plugin taps
-// cost nothing the rest of the time. DeviceTap (in DeviceTap.hpp) is always
-// active, because the input clip latch is the whole point.
+// WHO OWNS A METER
+//
+// Nothing that can be destroyed while the UI is looking at it. The device meters
+// belong to DeviceTap, which outlives every window. The probe meters belong to
+// IconMenu for the same reason, and a Probe borrows one by reference rather than
+// owning it.
+//
+// That is not a stylistic preference. When Probe owned its Meter, reloading the
+// chain destroyed every Probe through graph.clear() and recreated them, while the
+// signal view went on reading the old pointers at 25 Hz and decrementing their
+// watch counts afterwards. Adding a plugin and pressing Apply with the panel open
+// was a use-after-free. A meter that outlives the graph cannot reproduce it.
 //
 // REALTIME RULES
 //
 // Meter::measure runs on the audio thread. It allocates nothing, takes no
-// locks, and does no I/O. Everything crossing to the message thread is a
-// relaxed atomic: a meter that stalls the audio thread to report a level is
-// worse than no meter.
+// locks, and does no I/O. Everything crossing between threads is a relaxed
+// atomic: a meter that stalls the audio thread to report a level is worse than
+// no meter.
 //==============================================================================
 namespace lighthost::metering
 {
@@ -60,6 +69,14 @@ namespace lighthost::metering
     */
     static constexpr float kRmsCoefficient = 0.30f;
 
+    /** How fast the held peak falls, per block, as a linear factor.
+
+        0.9496 is about 0.45 dB per block, or 45 dB per second at a 480-sample
+        block and 48 kHz -- fast enough to follow a level down, slow enough that
+        a transient stays readable for a moment after it has gone.
+    */
+    static constexpr float kPeakDecayPerBlock = 0.9496f;
+
     /** Reported when there is no signal at all, and the floor for every dB
         figure so a silent meter reads as a number rather than -inf.
     */
@@ -68,11 +85,15 @@ namespace lighthost::metering
     //==========================================================================
     /** One measurement point.
 
-        Written by the audio thread, read by the message thread. The peak is a
-        max-since-last-read: the audio thread raises it, read() takes it and
-        clears it. That way a peak between two UI frames cannot be missed, which
-        a plain "last block's peak" would lose two times out of three at any
-        sensible refresh rate.
+        Written by the audio thread, read by the message thread.
+
+        Reading is NON-DESTRUCTIVE, and the ballistics live here rather than in
+        the components that draw them. Both matter: the device meters have two
+        readers whenever the signal view is open -- the meter under the device
+        and the matching row of the column -- and when read() cleared the peak,
+        each reader stole what the other would have shown, so both sagged and
+        flickered. The audio thread holds a decaying peak instead, and any number
+        of readers can observe the same one.
     */
     class Meter
     {
@@ -85,11 +106,10 @@ namespace lighthost::metering
 
         struct Reading
         {
-            float peakDb = kFloorDb;
-            float rmsDb  = kFloorDb;
+            float peakDb  = kFloorDb;   ///< held peak, already decayed
+            float rmsDb   = kFloorDb;
             bool  clipped = false;      ///< latched until clearClip()
-            bool  active  = false;      ///< any signal at all since the last read
-            bool  rmsValid = false;     ///< false when nothing was watching
+            bool  rmsValid = false;     ///< false when nothing is watching
         };
 
         //----------------------------------------------------------------------
@@ -181,52 +201,50 @@ namespace lighthost::metering
         }
 
         //----------------------------------------------------------------------
-        /** Message thread. Takes the peak accumulated since the previous call. */
-        [[nodiscard]] Reading read() noexcept
+        /** Any thread. Does not modify anything, so two components reading the
+            same meter both see the whole picture.
+        */
+        [[nodiscard]] Reading read() const noexcept
         {
-            const auto peak = peakSinceRead.exchange (0.0f, std::memory_order_relaxed);
+            const auto peak = heldPeak.load (std::memory_order_relaxed);
             const auto meanSquare = smoothedMeanSquare.load (std::memory_order_relaxed);
-            const auto seen = sawAudio.exchange (false, std::memory_order_relaxed);
 
             Reading r;
             r.peakDb   = juce::Decibels::gainToDecibels (peak, kFloorDb);
             r.rmsValid = rmsMeasured.load (std::memory_order_relaxed);
-            r.rmsDb    = r.rmsValid ? juce::Decibels::gainToDecibels (std::sqrt (meanSquare), kFloorDb)
-                                    : kFloorDb;
+            r.rmsDb    = r.rmsValid
+                             ? juce::Decibels::gainToDecibels (std::sqrt (meanSquare), kFloorDb)
+                             : kFloorDb;
             r.clipped  = clipLatched.load (std::memory_order_relaxed);
-            r.active   = seen;
             return r;
         }
 
-        /** Message thread. The clip badge latches, so it needs clearing. */
+        /** The clip badge latches, so it needs clearing. */
         void clearClip() noexcept
         {
             clipLatched.store (false, std::memory_order_relaxed);
         }
 
-        /** Message thread. Forgets everything, for a device change. */
+        /** Forgets everything. Called on a device change, and when a probe stops
+            existing so its row reads silence rather than a frozen level.
+
+            Safe from any thread: every member is a relaxed atomic.
+        */
         void reset() noexcept
         {
-            peakSinceRead.store (0.0f, std::memory_order_relaxed);
+            heldPeak.store (0.0f, std::memory_order_relaxed);
             smoothedMeanSquare.store (0.0f, std::memory_order_relaxed);
             clipLatched.store (false, std::memory_order_relaxed);
-            sawAudio.store (false, std::memory_order_relaxed);
             rmsMeasured.store (false, std::memory_order_relaxed);
         }
 
     private:
         void publish (float peak, float channelMeanSquare, bool measuredRms) noexcept
         {
-            // Raise the held peak without ever lowering it; read() does the
-            // lowering. compare_exchange rather than a plain store, because two
-            // graph threads could in principle reach the same meter.
-            auto held = peakSinceRead.load (std::memory_order_relaxed);
-
-            while (peak > held
-                   && ! peakSinceRead.compare_exchange_weak (held, peak,
-                                                             std::memory_order_relaxed))
-            {
-            }
+            // Decay held here rather than in the UI, so every reader sees the
+            // same ballistics and none can take the peak away from another.
+            const auto decayed = heldPeak.load (std::memory_order_relaxed) * kPeakDecayPerBlock;
+            heldPeak.store (juce::jmax (peak, decayed), std::memory_order_relaxed);
 
             if (measuredRms)
             {
@@ -235,21 +253,19 @@ namespace lighthost::metering
                 smoothedMeanSquare.store (
                     previous + kRmsCoefficient * (channelMeanSquare - previous),
                     std::memory_order_relaxed);
-
-                rmsMeasured.store (true, std::memory_order_relaxed);
             }
+
+            // Cleared as soon as nothing is watching, so a reader that arrives
+            // later is not shown a frozen figure from the last time it was.
+            rmsMeasured.store (measuredRms, std::memory_order_relaxed);
 
             if (peak >= kClipThreshold)
                 clipLatched.store (true, std::memory_order_relaxed);
-
-            if (peak > 0.0f)
-                sawAudio.store (true, std::memory_order_relaxed);
         }
 
-        std::atomic<float> peakSinceRead      { 0.0f };
+        std::atomic<float> heldPeak           { 0.0f };
         std::atomic<float> smoothedMeanSquare { 0.0f };
         std::atomic<bool>  clipLatched        { false };
-        std::atomic<bool>  sawAudio           { false };
         std::atomic<bool>  rmsMeasured        { false };
         std::atomic<int>   watchers           { 0 };
 
@@ -263,18 +279,21 @@ namespace lighthost::metering
         latency and touches no samples, so adding one cannot change what the
         chain sounds like or disturb the graph's inter-lane delay compensation --
         the same property that lets the lane trims sit in the path.
+
+        It BORROWS its meter. The graph owns the processor and destroys it on
+        every chain reload; the meter has to outlive that, because the UI holds a
+        pointer to it. See the ownership note at the top of this file.
     */
     class Probe final : public juce::AudioProcessor
     {
     public:
-        Probe()
+        explicit Probe (Meter& meterToFill)
             : AudioProcessor (BusesProperties()
                                   .withInput  ("In",  juce::AudioChannelSet::stereo(), true)
-                                  .withOutput ("Out", juce::AudioChannelSet::stereo(), true))
+                                  .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
+              meter (meterToFill)
         {
         }
-
-        [[nodiscard]] Meter& getMeter() noexcept { return meter; }
 
         const juce::String getName() const override        { return "Signal Probe"; }
         bool acceptsMidi() const override                  { return false; }
@@ -305,7 +324,7 @@ namespace lighthost::metering
         }
 
     private:
-        Meter meter;
+        Meter& meter;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Probe)
     };

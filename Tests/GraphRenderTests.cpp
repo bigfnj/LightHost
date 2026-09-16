@@ -1,3 +1,4 @@
+#include "../Source/SignalMetering.hpp"
 #include "StubProcessors.hpp"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -113,6 +114,38 @@ namespace
             connect (previous, output);
         }
 
+        /** Adds a lane of latency stubs with a metering probe after each one,
+            wired the way IconMenu wires them when the signal view is open.
+
+            PassthroughStub is used for the plain comparison lane: it reports no
+            latency and leaves the buffer alone, which is exactly the
+            "transparent node" this needs and is why it exists.
+        */
+        void addProbedLane (const std::vector<int>& latencies)
+        {
+            auto previous = input;
+
+            for (const int latency : latencies)
+            {
+                auto node = graph.addNode (std::make_unique<LatencyStub> (latency));
+                connect (previous, node->nodeID);
+
+                // The fixture owns the meters, exactly as IconMenu does: a Probe
+                // borrows one, because the graph destroys processors and the
+                // meter has to outlive that.
+                probeMeters.push_back (std::make_unique<lighthost::metering::Meter>());
+
+                auto probe = graph.addNode (
+                    std::make_unique<lighthost::metering::Probe> (*probeMeters.back()));
+
+                connect (node->nodeID, probe->nodeID);
+
+                previous = probe->nodeID;
+            }
+
+            connect (previous, output);
+        }
+
         /** Adds one lane of a single LatencyStub and hands it back, so a test can
             change its latency after the graph has been prepared.
         */
@@ -152,6 +185,7 @@ namespace
 
         Graph graph;
         Graph::NodeID input, output;
+        std::vector<std::unique_ptr<lighthost::metering::Meter>> probeMeters;
     };
 }
 
@@ -301,6 +335,19 @@ public:
             expectEquals (g.graph.getLatencySamples(), 512,
                           "the host should report the new slowest lane");
         }
+        beginTest ("a metering probe in the path changes nothing");
+        {
+            expectProbesTransparent ({ 0 }, 0);
+        }
+
+        beginTest ("probes do not disturb a chain that reports latency");
+        {
+            // Two stubs of 128 and 384 with a probe after each. The declared
+            // latency must still be 512, and the samples must be identical to
+            // the same chain with no probes in it.
+            expectProbesTransparent ({ 128, 384 }, 512);
+        }
+
     }
 
 private:
@@ -308,6 +355,42 @@ private:
         arrives on the same sample: a single impulse whose amplitude equals the
         lane count, landing at the slowest lane's latency.
     */
+    /** A probe in the path must change nothing that can be heard or measured. */
+    void expectProbesTransparent (const std::vector<int>& latencies, int expectedLatency)
+    {
+        StereoGraph plain;
+        plain.addLane (latencies);
+        plain.prepare();
+        const auto withoutProbes = render (plain.graph, 24);
+
+        StereoGraph probed;
+        probed.addProbedLane (latencies);
+        probed.prepare();
+        const auto withProbes = render (probed.graph, 24);
+
+        expectEquals (probed.graph.getLatencySamples(), expectedLatency,
+                      "a probe declares no latency, so the chain's must not move");
+        expectEquals (plain.graph.getLatencySamples(),
+                      probed.graph.getLatencySamples(),
+                      "probed and unprobed graphs should report the same latency");
+
+        expectEquals ((int) withProbes.size(), (int) withoutProbes.size());
+
+        // Sample for sample. A probe that altered anything would mean opening a
+        // diagnostic window changed what the user sounds like.
+        auto largestDifference = 0.0f;
+
+        for (size_t i = 0; i < juce::jmin (withProbes.size(), withoutProbes.size()); ++i)
+            largestDifference = juce::jmax (largestDifference,
+                                            std::abs (withProbes[i] - withoutProbes[i]));
+
+        logMessage ("largest sample difference with probes: "
+                    + juce::String (largestDifference));
+
+        expectWithinAbsoluteError (largestDifference, 0.0f, 1.0e-7f,
+                                   "a probe altered the signal");
+    }
+
     void expectLanesAligned (const std::vector<std::vector<int>>& lanes, int expectedLatency)
     {
         StereoGraph g;

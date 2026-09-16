@@ -110,7 +110,8 @@ private:
     */
     void setSignalViewOpen (bool shouldBeOpen);
 
-    /** Whatever the graph currently declares, for the signal view's footer. */
+    /** Whatever the graph currently declares, shown on the signal view's
+        Output row. */
     [[nodiscard]] int latencySamples() const;
 
     std::function<int()> chainLatencyFn;
