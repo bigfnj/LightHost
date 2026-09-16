@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Light Host - level metering mockups</title>
+<style>
+  :root {
+    --bg:      #17181b;
+    --panel:   #232428;
+    --section: #2a2c31;
+    --row:     #2b2d33;
+    --line:    #34363c;
+    --text:    #e3e4e6;
+    --dim:     #8d9096;
+    --accent:  #4a9eff;   /* kAccent, from Source/LookAndFeel.hpp */
+    --warm:    #e0a83a;
+    --hot:     #e05252;
+    --good:    #74d68c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.45 "Segoe UI", system-ui, sans-serif;
+  }
+  h1 { font-size: 19px; font-weight: 600; margin: 0 0 6px; }
+  .lede { color: var(--dim); max-width: 78ch; margin: 0 0 26px; }
+  code { background: #2b2d33; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; }
+  .case { max-width: 560px; }
+  .caption { color: var(--dim); font-size: 12px; margin: 11px 2px 0; max-width: 54ch; }
+  .caption b { color: var(--text); font-weight: 600; }
+  .tag {
+    display: inline-block; font-size: 10.5px; letter-spacing: .08em;
+    text-transform: uppercase; padding: 3px 8px; border-radius: 3px;
+    background: #2f3238; color: var(--dim); margin-bottom: 9px;
+  }
+  .tag.fix   { background: #1d3a24; color: var(--good); }
+  .tag.fault { background: #3a1d1d; color: #e78080; }
+
+  .win {
+    width: 520px; background: var(--panel);
+    border: 1px solid #101114; border-radius: 6px;
+    box-shadow: 0 14px 40px rgba(0,0,0,.55); overflow: hidden;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 8px;
+    background: #1c1d21; padding: 7px 10px; border-bottom: 1px solid #101114;
+  }
+  .titlebar .dot { width: 13px; height: 13px; border-radius: 50%;
+                   background: linear-gradient(160deg,#5aa9ff,#2b6fbf); flex: none; }
+  .titlebar .t { font-size: 12px; color: #c9cbcf; }
+  .titlebar .btns { margin-left: auto; color: #9a9da3; letter-spacing: 3px; font-size: 12px; }
+
+  .sect {
+    background: var(--section); color: var(--dim);
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    padding: 5px 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  }
+  .body { padding: 10px 12px; }
+  .selrow { display: flex; align-items: center; gap: 10px; }
+  .select {
+    flex: 1; background: #1b1c20; border: 1px solid var(--line); border-radius: 4px;
+    padding: 6px 9px; display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px;
+  }
+  .select .c { color: var(--dim); }
+  .hint { color: var(--dim); font-size: 11.5px; white-space: nowrap; }
+
+  .plugrow {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--row); border: 1px solid var(--line);
+    border-radius: 4px; padding: 7px 9px; margin-bottom: 7px;
+  }
+  .cb { width: 14px; height: 14px; border-radius: 3px; background: var(--accent);
+        position: relative; flex: none; }
+  .cb::after { content: ""; position: absolute; left: 4px; top: 1.5px; width: 5px; height: 8px;
+               border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(40deg); }
+  .pname { flex: 1; font-size: 12.5px; }
+  .btn { background: #33353b; border: 1px solid #43464d; border-radius: 3px;
+         padding: 3px 9px; font-size: 11.5px; color: #d6d8db; white-space: nowrap; }
+  .btn.wide { padding: 5px 13px; font-size: 12px; }
+  .btn.apply { background: #2c5f9e; border-color: #3a76bd; color: #fff; }
+  .grip { color: var(--dim); font-size: 13px; }
+
+  .meter { display: flex; align-items: center; gap: 9px; }
+  .meter .lbl { width: 30px; font-size: 11px; color: var(--dim); text-align: right; flex: none; }
+  .track { position: relative; flex: 1; height: 13px; background: #14151a;
+           border: 1px solid var(--line); border-radius: 2px; overflow: hidden; }
+  .pk   { position: absolute; top: 0; bottom: 0; width: 2px; background: #cfd3d8; }
+  .fill { position: absolute; left: 0; top: 0; bottom: 0; }
+  .fill.ok   { background: linear-gradient(90deg, #2f6fb8, var(--accent)); }
+  .fill.warm { background: linear-gradient(90deg, #2f6fb8 55%, var(--warm)); }
+  .fill.hot  { background: linear-gradient(90deg, #2f6fb8 42%, var(--warm) 76%, var(--hot)); }
+  .ticks { position: absolute; inset: 0; }
+  .ticks i { position: absolute; top: 0; bottom: 0; width: 1px; background: #3a3d44; }
+  .num { width: 52px; font-variant-numeric: tabular-nums; font-size: 11px;
+         color: #c6c9cd; flex: none; text-align: right; }
+  .clip { flex: none; font-size: 10px; letter-spacing: .06em; padding: 2px 6px;
+          border-radius: 3px; border: 1px solid #3c3f46; color: #6d7076; background: #1b1c21; }
+  .clip.on { background: var(--hot); border-color: #ff8080; color: #fff; font-weight: 600; }
+  .scale { display: flex; justify-content: space-between; color: #63666c;
+           font-size: 9.5px; padding: 3px 62px 0 39px; }
+
+  .expander { display: flex; align-items: stretch; }
+  .side { width: 300px; background: #1f2024; border: 1px solid #101114; border-left: none;
+          border-radius: 0 6px 6px 0; box-shadow: 0 14px 40px rgba(0,0,0,.55); }
+  .side .sect { border-top: none; }
+  .tap { padding: 9px 12px; border-bottom: 1px solid #272930; }
+  .tap .who { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px; }
+  .tap .who .r { color: var(--dim); font-size: 11px; }
+  .bar { height: 7px; background: #14151a; border: 1px solid var(--line);
+         border-radius: 2px; position: relative; margin: 5px 0 6px; overflow: hidden; }
+  .tapnums { display: flex; gap: 13px; font-size: 11px; color: #c6c9cd;
+             font-variant-numeric: tabular-nums; }
+  .tapnums b { color: var(--dim); font-weight: 400; }
+  .delta.up   { color: var(--warm); }
+  .delta.down { color: var(--good); }
+  .note { padding: 10px 12px; color: var(--dim); font-size: 11px; border-top: 1px solid #272930; }
+  .warnline { margin-top: 9px; font-size: 11.5px; color: #e78080; }
+</style>
+</head>
+<body>
+
+<h1>Light Host &mdash; level metering, three options</h1>
+<p class="lede">
+  Drawn at the real window width of 520&nbsp;px, in the application's own palette and
+  accent colour (<code>#4a9eff</code>, <code>kAccent</code>). Every figure shown is a
+  real measurement from today, so each panel depicts a state the app was actually in
+  and could not show you.
+</p>
+
+<div class="grid">
+
+  <!-- =================== A =================== -->
+  <div class="case">
+    <div class="tag fix">Stage 1 &middot; after the fix</div>
+    <div class="win">
+      <div class="titlebar"><div class="dot"></div><div class="t">Preferences</div><div class="btns">&minus; &#9633; &times;</div></div>
+
+      <div class="sect">Input</div>
+      <div class="body">
+        <div class="selrow">
+          <div class="select"><span>Microphone (USB audio CODEC)</span><span class="c">&#9662;</span></div>
+          <div class="hint">Mono (Ch 1)</div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="meter">
+          <div class="lbl">in</div>
+          <div class="track">
+            <div class="ticks"><i style="left:42%"></i><i style="left:58%"></i><i style="left:75%"></i><i style="left:88%"></i></div>
+            <div class="fill ok" style="width:62%"></div>
+            <div class="pk" style="left:75%"></div>
+          </div>
+          <div class="num">&minus;10.0</div>
+          <div class="clip">CLIP</div>
+        </div>
+        <div class="scale"><span>-60</span><span>-24</span><span>-12</span><span>-6</span><span>0</span></div>
+      </div>
+
+      <div class="sect">Audio chain</div>
+      <div class="body">
+        <div class="plugrow"><div class="cb"></div><div class="pname">Salvor</div><div class="btn">Lane 0</div><div class="btn">Settings</div><div class="grip">&#9776;</div></div>
+        <div class="plugrow"><div class="cb"></div><div class="pname">smartChain</div><div class="btn">Lane 0</div><div class="btn">Settings</div><div class="grip">&#9776;</div></div>
+        <div style="display:flex;justify-content:space-between;margin-top:16px">
+          <div class="btn wide">Chain Test</div>
+          <div class="btn wide">+ Add Plugin</div>
+        </div>
+      </div>
+
+      <div class="sect">Output</div>
+      <div class="body">
+        <div class="selrow">
+          <div class="select"><span>Mic Chain INPUT (VB-Audio Virtual Cable)</span><span class="c">&#9662;</span></div>
+          <div class="hint">Stereo</div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="meter">
+          <div class="lbl">out</div>
+          <div class="track">
+            <div class="ticks"><i style="left:42%"></i><i style="left:58%"></i><i style="left:75%"></i><i style="left:88%"></i></div>
+            <div class="fill ok" style="width:56%"></div>
+            <div class="pk" style="left:69%"></div>
+          </div>
+          <div class="num">&minus;12.3</div>
+          <div class="clip">CLIP</div>
+        </div>
+        <div class="scale"><span>-60</span><span>-24</span><span>-12</span><span>-6</span><span>0</span></div>
+      </div>
+
+      <div class="sect">Device settings</div>
+      <div class="body" style="color:var(--dim);font-size:11.5px">
+        Latency: 94.0 ms plugins + 20.0 ms device = <span style="color:var(--text)">114.0 ms</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+          <span>v5.0.3</span><div class="btn wide apply">Apply</div>
+        </div>
+      </div>
+    </div>
+    <p class="caption">
+      <b>One meter per device, sitting with the device it describes.</b> Peak number, a
+      pale peak-hold tick, and a latching <b>CLIP</b> badge. This needs no changes to the
+      audio graph at all &mdash; a decorator around <code>AudioProcessorPlayer</code>
+      already sees both input and output.
+    </p>
+  </div>
+
+  <!-- =================== B =================== -->
+  <div class="case">
+    <div class="tag fault">Stage 1 &middot; this morning, as it actually was</div>
+    <div class="win">
+      <div class="titlebar"><div class="dot"></div><div class="t">Preferences</div><div class="btns">&minus; &#9633; &times;</div></div>
+
+      <div class="sect">Input</div>
+      <div class="body">
+        <div class="selrow">
+          <div class="select"><span>Microphone (USB audio CODEC)</span><span class="c">&#9662;</span></div>
+          <div class="hint">Mono (Ch 1)</div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="meter">
+          <div class="lbl">in</div>
+          <div class="track">
+            <div class="ticks"><i style="left:42%"></i><i style="left:58%"></i><i style="left:75%"></i><i style="left:88%"></i></div>
+            <div class="fill hot" style="width:100%"></div>
+            <div class="pk" style="left:99%"></div>
+          </div>
+          <div class="num" style="color:#ff9a9a">0.0</div>
+          <div class="clip on">CLIP</div>
+        </div>
+        <div class="scale"><span>-60</span><span>-24</span><span>-12</span><span>-6</span><span>0</span></div>
+        <div class="warnline">Input clipping &mdash; 2 samples at full scale. Lower the Windows input level.</div>
+      </div>
+
+      <div class="sect">Audio chain</div>
+      <div class="body">
+        <div class="plugrow"><div class="cb"></div><div class="pname">Salvor</div><div class="btn">Lane 0</div><div class="btn">Settings</div><div class="grip">&#9776;</div></div>
+        <div class="plugrow"><div class="cb"></div><div class="pname">smartChain</div><div class="btn">Lane 0</div><div class="btn">Settings</div><div class="grip">&#9776;</div></div>
+        <div style="display:flex;justify-content:space-between;margin-top:16px">
+          <div class="btn wide">Chain Test</div>
+          <div class="btn wide">+ Add Plugin</div>
+        </div>
+      </div>
+
+      <div class="sect">Output</div>
+      <div class="body">
+        <div class="selrow">
+          <div class="select"><span>Mic Chain INPUT (VB-Audio Virtual Cable)</span><span class="c">&#9662;</span></div>
+          <div class="hint">Stereo</div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="meter">
+          <div class="lbl">out</div>
+          <div class="track">
+            <div class="ticks"><i style="left:42%"></i><i style="left:58%"></i><i style="left:75%"></i><i style="left:88%"></i></div>
+            <div class="fill warm" style="width:84%"></div>
+            <div class="pk" style="left:92%"></div>
+          </div>
+          <div class="num">&minus;2.5</div>
+          <div class="clip">CLIP</div>
+        </div>
+        <div class="scale"><span>-60</span><span>-24</span><span>-12</span><span>-6</span><span>0</span></div>
+      </div>
+    </div>
+    <p class="caption">
+      <b>This panel is the whole argument.</b> The mic sat at +30&nbsp;dB hitting
+      0.0&nbsp;dBFS and the app said nothing &mdash; you found out when colleagues
+      complained. Same window, same code path, one red badge and a number.
+    </p>
+  </div>
+
+  <!-- =================== C =================== -->
+  <div class="case" style="max-width:860px">
+    <div class="tag">Stage 2 &middot; expansion panel, per plugin</div>
+    <div class="expander">
+      <div class="win" style="border-radius:6px 0 0 6px">
+        <div class="titlebar"><div class="dot"></div><div class="t">Preferences</div><div class="btns">&minus; &#9633; &times;</div></div>
+        <div class="sect">Input</div>
+        <div class="body">
+          <div class="selrow">
+            <div class="select"><span>Microphone (USB audio CODEC)</span><span class="c">&#9662;</span></div>
+            <div class="hint">Mono (Ch 1)</div>
+          </div>
+          <div style="height:10px"></div>
+          <div class="meter">
+            <div class="lbl">in</div>
+            <div class="track"><div class="fill ok" style="width:62%"></div><div class="pk" style="left:75%"></div></div>
+            <div class="num">&minus;10.0</div><div class="clip">CLIP</div>
+          </div>
+        </div>
+        <div class="sect" style="display:flex;justify-content:space-between;align-items:center">
+          <span>Audio chain</span>
+          <span style="color:var(--accent);text-transform:none;letter-spacing:0;font-size:11px">Signal view &#9656;</span>
+        </div>
+        <div class="body">
+          <div class="plugrow"><div class="cb"></div><div class="pname">Salvor</div><div class="btn">Lane 0</div><div class="btn">Settings</div><div class="grip">&#9776;</div></div>
+          <div class="plugrow"><div class="cb"></div><div class="pname">smartChain</div><div class="btn">Lane 0</div><div class="btn">Settings</div><div class="grip">&#9776;</div></div>
+          <div style="display:flex;justify-content:space-between;margin-top:16px">
+            <div class="btn wide">Chain Test</div><div class="btn wide">+ Add Plugin</div>
+          </div>
+        </div>
+        <div class="sect">Output</div>
+        <div class="body">
+          <div class="meter">
+            <div class="lbl">out</div>
+            <div class="track"><div class="fill ok" style="width:56%"></div><div class="pk" style="left:69%"></div></div>
+            <div class="num">&minus;12.3</div><div class="clip">CLIP</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="side">
+        <div class="sect">Signal view</div>
+        <div class="tap">
+          <div class="who"><span>Input</span><span class="r">tap 0</span></div>
+          <div class="bar"><div class="fill ok" style="width:62%"></div></div>
+          <div class="tapnums"><span><b>peak</b> &minus;10.0</span><span><b>rms</b> &minus;31.5</span></div>
+        </div>
+        <div class="tap">
+          <div class="who"><span>after Salvor</span><span class="r">10.0 ms</span></div>
+          <div class="bar"><div class="fill ok" style="width:58%"></div></div>
+          <div class="tapnums">
+            <span><b>peak</b> &minus;11.7</span><span><b>rms</b> &minus;33.2</span>
+            <span class="delta down"><b>&Delta;</b> &minus;1.7</span>
+          </div>
+        </div>
+        <div class="tap">
+          <div class="who"><span>after smartChain</span><span class="r">84.0 ms</span></div>
+          <div class="bar"><div class="fill warm" style="width:74%"></div></div>
+          <div class="tapnums">
+            <span><b>peak</b> &minus;4.7</span><span><b>rms</b> &minus;26.2</span>
+            <span class="delta up"><b>&Delta;</b> +7.0</span>
+          </div>
+        </div>
+        <div class="tap" style="border-bottom:none">
+          <div class="who"><span>Output</span><span class="r">cable</span></div>
+          <div class="bar"><div class="fill ok" style="width:56%"></div></div>
+          <div class="tapnums"><span><b>peak</b> &minus;12.3</span><span><b>rms</b> &minus;26.2</span></div>
+        </div>
+        <div class="note">
+          Taps are inserted when this panel opens and removed when it closes, so the
+          running graph is untouched the rest of the time.
+        </div>
+      </div>
+    </div>
+    <p class="caption">
+      <b>The &Delta; column is the point.</b> That
+      <span style="color:var(--warm)">+7.0&nbsp;dB</span> on smartChain is the genuine
+      figure from this morning &mdash; it cost a render and an analysis script to find,
+      and here it is at a glance. Probe nodes reuse the lane-trim pattern: small
+      processors at reserved node ids.
+    </p>
+  </div>
+
+  <!-- =================== D =================== -->
+  <div class="case">
+    <div class="tag">Alternative &middot; inline, no second panel</div>
+    <div class="win">
+      <div class="titlebar"><div class="dot"></div><div class="t">Preferences</div><div class="btns">&minus; &#9633; &times;</div></div>
+      <div class="sect">Audio chain</div>
+      <div class="body">
+        <div style="background:var(--row);border:1px solid var(--line);border-radius:4px;padding:7px 9px;margin-bottom:7px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="cb"></div><div class="pname">Salvor</div>
+            <div class="btn">Lane 0</div><div class="btn">Settings</div><div class="grip">&#9776;</div>
+          </div>
+          <div class="meter" style="margin-top:7px">
+            <div class="lbl">&#8594;</div>
+            <div class="track" style="height:8px"><div class="fill ok" style="width:58%"></div></div>
+            <div class="num">&minus;11.7</div>
+            <div style="width:54px;font-size:11px;color:var(--good);font-variant-numeric:tabular-nums;text-align:right">&Delta; &minus;1.7</div>
+          </div>
+        </div>
+        <div style="background:var(--row);border:1px solid var(--line);border-radius:4px;padding:7px 9px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div class="cb"></div><div class="pname">smartChain</div>
+            <div class="btn">Lane 0</div><div class="btn">Settings</div><div class="grip">&#9776;</div>
+          </div>
+          <div class="meter" style="margin-top:7px">
+            <div class="lbl">&#8594;</div>
+            <div class="track" style="height:8px"><div class="fill warm" style="width:74%"></div></div>
+            <div class="num">&minus;4.7</div>
+            <div style="width:54px;font-size:11px;color:var(--warm);font-variant-numeric:tabular-nums;text-align:right">&Delta; +7.0</div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:16px">
+          <div class="btn wide">Chain Test</div><div class="btn wide">+ Add Plugin</div>
+        </div>
+      </div>
+    </div>
+    <p class="caption">
+      Your other idea &mdash; a meter under every plugin row, no second window. Denser and
+      always visible, but it <b>roughly doubles the height of each row</b>, so a
+      five-plugin chain needs far more vertical space, and the taps would run
+      permanently rather than only while someone is looking.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>
