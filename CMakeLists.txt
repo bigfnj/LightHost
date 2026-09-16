@@ -287,15 +287,39 @@ if(LIGHTHOST_BUILD_TESTS)
         endif()
     endif()
 
-    if(LIGHTHOST_SMOKE_AVAILABLE)
-        # The window-creating half of the PluginWindow tests. Separate from
-        # `unit` because constructing a DocumentWindow needs a display server:
-        # folded into the main run it would segfault on a headless Linux runner,
-        # and skipping it silently there would be worse than not having it.
-        add_test(NAME unit-gui
-                 COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHostTests> --gui)
+    # ── The window-creating half of the PluginWindow tests ──────────────────────
+    # Separate from `unit` because constructing a DocumentWindow needs a display
+    # server, and folded into the main run it would take the whole suite down on
+    # a headless runner.
+    #
+    # NOT registered on Linux, and this is a real limitation rather than a
+    # convenience. LightHostTests is a console app, and JUCE's X11 backend cannot
+    # create a window from one: it dies with "BadAtom (invalid Atom parameter)"
+    # on X_ChangeProperty before any assertion runs, even under xvfb with the
+    # display working. The application itself is a GUI app, so it is unaffected —
+    # the smoke tests open the real Preferences window under xvfb on this same
+    # runner and pass, which is what covers Linux window creation.
+    #
+    # What is lost is narrow: the assertions in the PluginWindowGui category are
+    # about host logic around windows — that a second Edit on a plugin with no
+    # native editor reuses one window rather than opening a duplicate — and that
+    # logic is a registry lookup with no platform component. It is checked on
+    # Windows and macOS on every push.
+    #
+    # Making the test target a GUI app would fix it and cost more than it buys:
+    # on Windows that switches the subsystem and stdout stops reaching the
+    # terminal, so the other 1120 assertions would lose their output.
+    if(APPLE OR WIN32)
+        add_test(NAME unit-gui COMMAND LightHostTests --gui)
         set_tests_properties(unit-gui PROPERTIES LABELS unit TIMEOUT 120)
+    else()
+        message(STATUS
+            "unit-gui is not registered on this platform: JUCE's X11 backend "
+            "cannot create a window from a console app. Linux window creation is "
+            "covered by the smoke tests, which run the real GUI app under xvfb.")
+    endif()
 
+    if(LIGHTHOST_SMOKE_AVAILABLE)
         add_test(NAME smoke-startup
                  COMMAND ${LIGHTHOST_SMOKE_LAUNCHER} $<TARGET_FILE:LightHost> -self-test)
         set_tests_properties(smoke-startup PROPERTIES LABELS smoke TIMEOUT 90)

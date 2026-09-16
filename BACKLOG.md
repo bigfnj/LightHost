@@ -124,6 +124,16 @@ remember.
 - **System-audio loopback capture** is blocked on JUCE exposing it, and
   `tools/update-juce.sh` greps for it on every version bump, so the answer is
   re-checked without anyone deciding to.
+- **The GUI unit tests do not run on Linux.** `LightHostTests` is a console app
+  and JUCE's X11 backend cannot create a window from one -- it dies with
+  `BadAtom` on `X_ChangeProperty` before any assertion runs, even with a working
+  display under xvfb. The application is a GUI app and is unaffected, and the
+  smoke tests open the real Preferences window under xvfb on the same runner, so
+  Linux window creation is covered. What is not covered there is the host logic
+  around windows, which has no platform component and is checked on Windows and
+  macOS. `CMakeLists.txt` prints a configure-time notice rather than skipping
+  quietly. Making the test target a GUI app would fix it and would cost stdout on
+  Windows, which is where the other 1120 assertions report from.
 - **Display scaling at 150%, and the tray icon against a light taskbar**, cannot
   be automated — they need a person looking at a display that is configured that
   way. Recorded in [RELEASING.md](RELEASING.md) as pre-release checks rather than
