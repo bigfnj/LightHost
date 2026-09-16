@@ -814,11 +814,15 @@ public:
             pressedInside  = true;
             repaintRow (row);
 
+            // Looped rather than written out, which is what Lanes.hpp said had
+            // already been done. It had not: this was the one place that assigns
+            // a plugin to a lane, so raising kMaxLane gave you trim sliders,
+            // settings keys and graph nodes for the new lanes and no way to put
+            // anything in one.
             juce::PopupMenu m;
-            m.addItem(1, "Lane 0");
-            m.addItem(2, "Lane 1");
-            m.addItem(3, "Lane 2");
-            m.addItem(4, "Lane 3");
+
+            for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
+                m.addItem (lane + 1, "Lane " + juce::String (lane));
             juce::Component::SafePointer<AudioChainListComponent> safe (this);
             m.showMenuAsync (
                 juce::PopupMenu::Options{}.withTargetScreenArea ({ e.getScreenX(), e.getScreenY(), 1, 1 }),
@@ -2059,9 +2063,7 @@ private:
         chainTestInFlight = true;
 
         auto* settings = getAppProperties().getUserSettings();
-        const auto settingsFile = settings->getFile();
-        const auto stateDir = settingsFile.getSiblingFile (
-            settingsFile.getFileNameWithoutExtension() + ".state");
+        const auto stateDir = lighthost::state::directoryFor (settings->getFile());
 
         // The render stays on the message thread and keeps this window alive by
         // pumping the dispatch loop while pacing waits. It is paced to real time,

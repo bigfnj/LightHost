@@ -237,9 +237,7 @@ private:
         const juce::File output (juce::File::getCurrentWorkingDirectory().getChildFile (outPath));
 
         auto* settings = appProperties->getUserSettings();
-        const auto settingsFile = settings->getFile();
-        const auto stateDir = settingsFile.getSiblingFile (
-            settingsFile.getFileNameWithoutExtension() + ".state");
+        const auto stateDir = lighthost::state::directoryFor (settings->getFile());
 
         juce::Logger::writeToLog ("Render: " + input.getFullPathName()
                                   + " -> " + output.getFullPathName());

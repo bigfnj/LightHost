@@ -28,6 +28,20 @@
 namespace lighthost::state
 {
 
+class Vault;
+
+/** The vault directory that belongs beside a settings file.
+
+    One rule, one copy. It was written out four times -- IconMenu, SelfTest,
+    the Chain Test button and the CLI render -- and it decides where every saved
+    plugin preset lives, so a single entry point disagreeing would silently
+    orphan all of them with no error anywhere.
+*/
+[[nodiscard]] inline juce::File directoryFor (const juce::File& settingsFile)
+{
+    return settingsFile.getSiblingFile (settingsFile.getFileNameWithoutExtension() + ".state");
+}
+
 class Vault
 {
 public:
@@ -35,6 +49,12 @@ public:
         Vault for a chain that has never saved anything touches no disk.
     */
     explicit Vault (juce::File directoryToUse) : directory (std::move (directoryToUse)) {}
+
+    /** The vault beside a settings file, which is how every caller wants it. */
+    [[nodiscard]] static Vault beside (const juce::File& settingsFile)
+    {
+        return Vault (directoryFor (settingsFile));
+    }
 
     /** Magic bytes, then a zlib stream. The magic is here so that a future
         format change is detectable rather than being fed to the decompressor and

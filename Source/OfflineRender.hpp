@@ -3,6 +3,7 @@
 #include "GainProcessor.hpp"
 #include "GraphTopology.hpp"
 #include "Lanes.hpp"
+#include "NodeIds.hpp"
 #include "PluginChainStore.hpp"
 #include "PluginState.hpp"
 #include "PluginStateVault.hpp"
@@ -110,12 +111,9 @@ struct Result
 
     Result result;
 
-    static constexpr NodeID kInputNodeId  { 1'000'000u };
-    static constexpr NodeID kOutputNodeId { 1'000'001u };
-    const auto laneGainNodeId = [] (int lane)
-    {
-        return NodeID { 1'000'010u + static_cast<juce::uint32> (juce::jlimit (0, kMaxLane, lane)) };
-    };
+    constexpr auto kInputNodeId  = nodeids::input;
+    constexpr auto kOutputNodeId = nodeids::output;
+    const auto laneGainNodeId = [] (int lane) { return nodeids::laneGain (lane); };
 
     // ── read the input file ─────────────────────────────────────────────────
     juce::AudioFormatManager formats;

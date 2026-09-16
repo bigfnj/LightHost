@@ -3,6 +3,7 @@
 #include "GainProcessor.hpp"
 #include "DeviceTap.hpp"
 #include "Lanes.hpp"
+#include "NodeIds.hpp"
 #include "PluginStateVault.hpp"
 #include "StatusSink.hpp"
 
@@ -87,7 +88,7 @@ private:
     // Metering probes, on reserved ids above the lane trims. Bounded so the
     // reserved range cannot run into anything else; a chain longer than this
     // still works, it just stops being probed past the limit.
-    static constexpr int kMaxProbes = 32;
+    static constexpr int kMaxProbes = lighthost::nodeids::maxProbes;
     [[nodiscard]] static NodeID probeNodeId (int index);
     void syncProbeNodes();
     bool signalViewEnabled = false;

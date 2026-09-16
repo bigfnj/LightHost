@@ -85,8 +85,7 @@ namespace lighthost::selftest
     */
     [[nodiscard]] inline lighthost::state::Vault vaultFor (const juce::File& settingsFile)
     {
-        return lighthost::state::Vault (
-            settingsFile.getSiblingFile (settingsFile.getFileNameWithoutExtension() + ".state"));
+        return lighthost::state::Vault::beside (settingsFile);
     }
 
     /** The 4.0.3 key format, written out here rather than borrowed from the store,

@@ -1,4 +1,5 @@
 #include "IconMenu.hpp"
+#include "NodeIds.hpp"
 #include "GraphTopology.hpp"
 #include "PluginChainStore.hpp"
 #include "PluginState.hpp"
@@ -363,8 +364,8 @@ void IconMenu::setIcon()
 //==============================================================================
 void IconMenu::loadActivePlugins()
 {
-    static constexpr NodeID kInputNodeId  { 1'000'000u };
-    static constexpr NodeID kOutputNodeId { 1'000'001u };
+    constexpr auto kInputNodeId  = lighthost::nodeids::input;
+    constexpr auto kOutputNodeId = lighthost::nodeids::output;
 
     juce::Logger::writeToLog ("IconMenu: loadActivePlugins begin");
 
@@ -574,7 +575,7 @@ void IconMenu::restorePluginState (AudioProcessorGraph::Node& node,
 // 1 upwards, and of the two IO nodes.
 juce::AudioProcessorGraph::NodeID IconMenu::laneGainNodeId (int lane)
 {
-    return NodeID { 1'000'010u + static_cast<uint32> (juce::jlimit (0, lighthost::kMaxLane, lane)) };
+    return lighthost::nodeids::laneGain (lane);
 }
 
 void IconMenu::createLaneGainNodes()
@@ -603,7 +604,7 @@ void IconMenu::createLaneGainNodes()
 // a minute is not a trade this application makes.
 juce::AudioProcessorGraph::NodeID IconMenu::probeNodeId (int index)
 {
-    return NodeID { 1'000'100u + static_cast<uint32> (juce::jlimit (0, kMaxProbes - 1, index)) };
+    return lighthost::nodeids::probe (index);
 }
 
 void IconMenu::syncProbeNodes()
@@ -713,8 +714,7 @@ lighthost::state::Vault IconMenu::stateVault() const
 {
     const auto settingsFile = getAppProperties().getUserSettings()->getFile();
 
-    return lighthost::state::Vault (
-        settingsFile.getSiblingFile (settingsFile.getFileNameWithoutExtension() + ".state"));
+    return lighthost::state::Vault::beside (settingsFile);
 }
 
 //==============================================================================

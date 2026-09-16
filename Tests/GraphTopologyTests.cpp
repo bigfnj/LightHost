@@ -1,5 +1,6 @@
 #include "../Source/GainProcessor.hpp"
 #include "../Source/GraphTopology.hpp"
+#include "../Source/NodeIds.hpp"
 #include "StubProcessors.hpp"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -24,8 +25,11 @@ namespace
 {
     using namespace lighthost::topology;
 
-    constexpr NodeID kInput  { 1'000'000u };
-    constexpr NodeID kOutput { 1'000'001u };
+    // The production scheme, not a copy of it. The copy that used to live here
+    // omitted the jlimit clamp, so it could not have caught a clamping
+    // regression in the code it was testing.
+    constexpr auto kInput  = lighthost::nodeids::input;
+    constexpr auto kOutput = lighthost::nodeids::output;
 
     NodeFacts plugin (juce::uint32 id, int lane = 0, int numIns = 2, int numOuts = 2)
     {
@@ -45,8 +49,7 @@ namespace
         return layout;
     }
 
-    /** Reserved ids for the lane trims, matching IconMenu's. */
-    constexpr NodeID laneGain (int lane) { return NodeID { 1'000'010u + (juce::uint32) lane }; }
+    constexpr NodeID laneGain (int lane) { return lighthost::nodeids::laneGain (lane); }
 
     /** Gives every lane a trim node. */
     Layout withLaneGains (Layout layout)
@@ -57,8 +60,7 @@ namespace
         return layout;
     }
 
-    /** Reserved ids for the metering probes, matching IconMenu's. */
-    constexpr NodeID probeId (int index) { return NodeID { 1'000'100u + (juce::uint32) index }; }
+    constexpr NodeID probeId (int index) { return lighthost::nodeids::probe (index); }
 
     /** Puts a probe after every node, as opening the signal view does. */
     Layout withProbes (Layout layout)
