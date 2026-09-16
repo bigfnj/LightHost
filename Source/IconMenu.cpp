@@ -491,7 +491,7 @@ void IconMenu::loadActivePlugins()
     // relying on ~AudioProcessor to unregister us.
     stopListeningToAll();
 
-    sortedCacheDirty = true;
+    sortedPluginCache.reset();
     PluginWindow::closeAllCurrentlyOpenWindows();
     graph.clear();
 
@@ -512,7 +512,9 @@ void IconMenu::loadActivePlugins()
     // Wire input → output immediately so audio passes through while plugins load.
     reconnectGraph();
 
-    const auto& sorted = getTimeSortedList();
+    const auto sortedSnapshot = getTimeSortedList();
+    const auto& sorted = *sortedSnapshot;
+
     if (sorted.empty())
         return;
 
@@ -745,7 +747,7 @@ void IconMenu::syncProbeNodes()
     // removing a plugin while the panel is open cannot leave a stale probe
     // behind or a new plugin unprobed.
     const auto wanted = signalViewEnabled
-                            ? juce::jmin (static_cast<int> (getTimeSortedList().size()), kMaxProbes)
+                            ? juce::jmin (static_cast<int> (getTimeSortedList()->size()), kMaxProbes)
                             : 0;
 
     for (int i = 0; i < kMaxProbes; ++i)
@@ -1084,7 +1086,9 @@ void IconMenu::reconnectGraph()
 
     int chainPosition = -1;
 
-    for (const auto& pd : getTimeSortedList())
+    const auto chain = getTimeSortedList();
+
+    for (const auto& pd : *chain)
     {
         // Advanced for every entry in the chain as displayed, including the ones
         // skipped below, so it stays in step with the signal view's rows.
@@ -1219,9 +1223,9 @@ void IconMenu::autoMatchSampleRate()
 }
 
 //==============================================================================
-const std::vector<PluginDescription>& IconMenu::getTimeSortedList() const
+IconMenu::ChainSnapshot IconMenu::getTimeSortedList() const
 {
-    if (! sortedCacheDirty)
+    if (sortedPluginCache != nullptr)
         return sortedPluginCache;
 
     const ChainStore store (*getAppProperties().getUserSettings());
@@ -1235,8 +1239,9 @@ const std::vector<PluginDescription>& IconMenu::getTimeSortedList() const
     for (int i = 0; i < types.size(); ++i)
         orderedTypes.emplace_back (store.readOrder (types[i]), types[i]);
 
-    sortedPluginCache = ChainStore::sortByOrder (std::move (orderedTypes));
-    sortedCacheDirty  = false;
+    sortedPluginCache = std::make_shared<const std::vector<PluginDescription>> (
+        ChainStore::sortByOrder (std::move (orderedTypes)));
+
     return sortedPluginCache;
 }
 
@@ -1333,7 +1338,9 @@ void IconMenu::timerCallback()
     menu.addSeparator();
     menu.addSectionHeader ("Active Plugins");
 
-    const auto& timeSorted = getTimeSortedList();
+    const auto timeSortedSnapshot = getTimeSortedList();
+    const auto& timeSorted = *timeSortedSnapshot;
+
     const ChainStore store (*getAppProperties().getUserSettings());
 
     for (size_t i = 0; i < timeSorted.size(); ++i)
@@ -1441,13 +1448,11 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
 //==============================================================================
 void IconMenu::handleDeletePlugin (int index)
 {
-    const auto& timeSorted = getTimeSortedList();
-    if (index < 0 || index >= static_cast<int> (timeSorted.size()))
+    const auto timeSorted = getTimeSortedList();
+    if (index < 0 || index >= static_cast<int> (timeSorted->size()))
         return;
 
-    // Copied, not referenced. getTimeSortedList hands out a reference to a cache
-    // that the next rebuild clears, and this function outlives that rebuild.
-    const auto pluginToDelete = timeSorted[static_cast<size_t> (index)];
+    const auto pluginToDelete = (*timeSorted)[static_cast<size_t> (index)];
     juce::Logger::writeToLog ("IconMenu: deleting plugin " + pluginToDelete.name);
 
     cancelPluginLoading();
@@ -1502,18 +1507,18 @@ void IconMenu::handleDeletePlugin (int index)
     store.commit();
     flushSettings (*settings, "deleting a plugin");
 
-    sortedCacheDirty = true;
+    sortedPluginCache.reset();
     reconnectGraph();  // rewire around the removed node — no plugin loads needed
     refreshPreferencesIfOpen();
 }
 
 void IconMenu::handleBypassPlugin (int index)
 {
-    const auto& timeSorted = getTimeSortedList();
-    if (index < 0 || index >= static_cast<int> (timeSorted.size()))
+    const auto timeSorted = getTimeSortedList();
+    if (index < 0 || index >= static_cast<int> (timeSorted->size()))
         return;
 
-    const auto plugin = timeSorted[static_cast<size_t> (index)];   // copied: see handleDeletePlugin
+    const auto plugin = (*timeSorted)[static_cast<size_t> (index)];
 
     auto* settings = getAppProperties().getUserSettings();
     ChainStore store (*settings);
@@ -1528,7 +1533,9 @@ void IconMenu::handleBypassPlugin (int index)
 
 void IconMenu::handleEditPlugin (int index)
 {
-    const auto& sorted = getTimeSortedList();
+    const auto sortedSnapshot = getTimeSortedList();
+    const auto& sorted = *sortedSnapshot;
+
     if (index < 0 || index >= static_cast<int> (sorted.size()))
         return;
 
@@ -1546,7 +1553,9 @@ void IconMenu::handleEditPlugin (int index)
 
 void IconMenu::handleMovePlugin (int index, bool moveUp)
 {
-    const auto& timeSorted  = getTimeSortedList();
+    const auto timeSortedSnapshot = getTimeSortedList();
+    const auto& timeSorted = *timeSortedSnapshot;
+
     if (index < 0 || index >= static_cast<int> (timeSorted.size()))
         return;
 
@@ -1555,8 +1564,8 @@ void IconMenu::handleMovePlugin (int index, bool moveUp)
     if (neighborIndex < 0 || neighborIndex >= static_cast<int> (timeSorted.size()))
         return;
 
-    const auto target   = timeSorted[static_cast<size_t> (index)];          // copied: see
-    const auto neighbor = timeSorted[static_cast<size_t> (neighborIndex)];  // handleDeletePlugin
+    const auto target   = timeSorted[static_cast<size_t> (index)];
+    const auto neighbor = timeSorted[static_cast<size_t> (neighborIndex)];
 
     // Swap only the two affected order values — O(1) writes.  Previously
     // rewrote all N values and called savePluginStates() even though plugin
@@ -1572,7 +1581,7 @@ void IconMenu::handleMovePlugin (int index, bool moveUp)
     store.commit();
     flushSettings (*settings, "reordering the chain");
 
-    sortedCacheDirty = true;
+    sortedPluginCache.reset();
     reconnectGraph();
     refreshPreferencesIfOpen();
 }
@@ -1587,7 +1596,9 @@ void IconMenu::confirmDeletePluginStates()
     // The dialog names the plugins rather than asking "are you sure?", since a
     // generic question is easy to click through and the cost here is real: a
     // trained curve that took a while to teach is gone with no way back.
-    const auto list = getTimeSortedList();
+    const auto listSnapshot = getTimeSortedList();
+    const auto& list = *listSnapshot;
+
     auto* settings = getAppProperties().getUserSettings();
     ChainStore store (*settings);
     const auto vault = stateVault();
@@ -1662,7 +1673,9 @@ void IconMenu::confirmDeletePluginStates()
 
 void IconMenu::deletePluginStates()
 {
-    const auto list = getTimeSortedList();
+    const auto listSnapshot = getTimeSortedList();
+    const auto& list = *listSnapshot;
+
     auto* settings = getAppProperties().getUserSettings();
     ChainStore store (*settings);
 
@@ -1681,7 +1694,9 @@ void IconMenu::deletePluginStates()
 
 void IconMenu::savePluginStates()
 {
-    const auto& list = getTimeSortedList();
+    const auto listSnapshot = getTimeSortedList();
+    const auto& list = *listSnapshot;
+
     auto* settings = getAppProperties().getUserSettings();
     ChainStore store (*settings);
     const auto vault = stateVault();
@@ -1786,7 +1801,9 @@ void IconMenu::showPreferences()
     Component::SafePointer<IconMenu> safe (this);
 
     // Build initial bypass and lane states from persisted settings
-    const auto chain = getTimeSortedList();
+    const auto chainSnapshot = getTimeSortedList();
+    const auto& chain = *chainSnapshot;
+
     const ChainStore store (*getAppProperties().getUserSettings());
 
     std::vector<bool> bypassStates;
@@ -1904,7 +1921,9 @@ void IconMenu::refreshPreferencesIfOpen()
 {
     if (preferencesWindow == nullptr) return;
 
-    const auto chain = getTimeSortedList();
+    const auto chainSnapshot = getTimeSortedList();
+    const auto& chain = *chainSnapshot;
+
     const ChainStore store (*getAppProperties().getUserSettings());
 
     std::vector<bool> bypass;
@@ -1961,7 +1980,8 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     auto* settings = getAppProperties().getUserSettings();
     ChainStore store (*settings);
 
-    const auto& currentChain = getTimeSortedList();
+    const auto currentChainSnapshot = getTimeSortedList();
+    const auto& currentChain = *currentChainSnapshot;
 
     // Membership, order, bypass and lane are all compared: a lane change alone
     // flips neither the order nor the bypass, and Apply used to no-op when only
@@ -2035,7 +2055,7 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         store.rollback();
         juce::Logger::writeToLog ("IconMenu: " + what + " threw (" + detail
                                   + "); chain edit abandoned, settings untouched");
-        sortedCacheDirty = true;
+        sortedPluginCache.reset();
         reconnectGraph();
         refreshPreferencesIfOpen();
     };
@@ -2119,7 +2139,7 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
 
     store.commit();
     flushSettings (*settings, "applying the plugin chain");
-    sortedCacheDirty = true;
+    sortedPluginCache.reset();
 
     // ── Reload the graph ─────────────────────────────────────────────────────
     // Arriving plugins need their DLLs loaded, which loadActivePlugins does for

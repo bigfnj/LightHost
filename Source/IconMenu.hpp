@@ -12,6 +12,7 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <array>
 #include <map>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -141,7 +142,23 @@ private:
     /** Sets the tray tooltip from the current state: loading, a problem, or idle. */
     void refreshTooltip();
 
-    [[nodiscard]] const std::vector<juce::PluginDescription>& getTimeSortedList() const;
+    /** The chain in display order.
+
+        Returns a SNAPSHOT the caller owns, not a reference to the cache. It used
+        to return the reference, and every caller that outlived a rebuild had to
+        know to copy the element it wanted out -- three of them carried a comment
+        saying so. Two others were safe only because of the order statements
+        happened to be in: reconnectGraph iterates it in a range-for, and stays
+        correct only because syncProbeNodes rebuilds the cache earlier in the
+        same function, while savePluginStates holds it across file writes and a
+        status report that is one call away from rebuilding it. Moving either
+        would have been undefined behaviour with nothing to catch it.
+
+        Cheap to hold: a refcount bump, where four call sites previously deep
+        copied the whole vector on every Preferences open and refresh.
+    */
+    using ChainSnapshot = std::shared_ptr<const std::vector<juce::PluginDescription>>;
+    [[nodiscard]] ChainSnapshot getTimeSortedList() const;
     void reconnectGraph();
     void autoMatchSampleRate();
     void logAudioConfig (const juce::String& contextLabel) const;
@@ -212,8 +229,10 @@ private:
     NodeID inputNodeId;
     NodeID outputNodeId;
 
-    mutable std::vector<juce::PluginDescription> sortedPluginCache;
-    mutable bool sortedCacheDirty = true;
+    // Null IS the invalidation, so there is no separate dirty flag to keep in
+    // step with it. Handed out by value, so a snapshot already given to a caller
+    // stays alive and intact after this is replaced.
+    mutable ChainSnapshot sortedPluginCache;
 
     // Stops a *synchronous* re-entry into the device-change handler. It cannot
     // stop the recursion that actually happens: change broadcasts are async, so
