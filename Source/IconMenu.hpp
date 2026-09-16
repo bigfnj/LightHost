@@ -83,10 +83,33 @@ private:
     // Lane trims. Four gain nodes at reserved ids, one at each lane's summing
     // point. See Source/GainProcessor.hpp for why they exist.
     [[nodiscard]] static NodeID laneGainNodeId (int lane);
+
+    // Metering probes, on reserved ids above the lane trims. Bounded so the
+    // reserved range cannot run into anything else; a chain longer than this
+    // still works, it just stops being probed past the limit.
+    static constexpr int kMaxProbes = 32;
+    [[nodiscard]] static NodeID probeNodeId (int index);
+    void syncProbeNodes();
+    bool signalViewEnabled = false;
     void createLaneGainNodes();
     [[nodiscard]] lighthost::gain::Processor* laneGainProcessor (int lane);
 
 public:
+    /** Turns the per-plugin signal view on or off.
+
+        Probes are created only while it is on, so the graph a user runs all day
+        is exactly what it was before this feature existed. Costs one graph
+        rebuild, which the diffing in reconnectGraph makes inaudible.
+    */
+    void setSignalViewEnabled (bool shouldBeEnabled);
+
+    [[nodiscard]] bool isSignalViewEnabled() const noexcept { return signalViewEnabled; }
+
+    /** The meter for the probe sitting after chain position `index`, or nullptr
+        when the signal view is off or that position has no probe.
+    */
+    [[nodiscard]] lighthost::metering::Meter* getProbeMeter (int index);
+
     /** The device meters, for the Preferences UI. Both outlive any Preferences
         window, because IconMenu owns it.
     */

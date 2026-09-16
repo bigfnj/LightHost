@@ -238,6 +238,11 @@ namespace lighthost::selftest
         if (! log.contains ("loadActivePlugins complete"))
             failures.add ("the load chain did not finish after a failed plugin load");
 
+        // Opening the signal view inserts metering probes into a running graph
+        // and rewires it. Nothing else in an automated run touches that path.
+        if (! log.contains ("signal view opened; inserting probes"))
+            failures.add ("the signal view did not open, so probe insertion was never exercised");
+
         // The Preferences window is built during the run. Reaching this line means
         // every control in it was constructed and laid out without faulting or
         // asserting, which nothing else in an automated run checks.

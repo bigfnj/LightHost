@@ -25,6 +25,8 @@
 // dragging is not a level control, so they apply immediately and are written to
 // disk when the gesture ends.
 //==============================================================================
+class PreferencesContentComponent;
+
 class PreferencesWindow final : public juce::DocumentWindow
 {
 public:
@@ -61,6 +63,13 @@ public:
             IconMenu, which outlives every Preferences window it opens. */
         lighthost::metering::Meter* inputMeter,
         lighthost::metering::Meter* outputMeter,
+        /** Told when the signal view is opened or closed, so the host can
+            create and destroy the probes. Probes exist only while it is open. */
+        std::function<void (bool enabled)> onSignalViewToggled,
+        /** The probe meter for chain position `index`, or nullptr. Queried each
+            time the view is refreshed rather than cached, because the probes
+            come and go with the panel. */
+        std::function<lighthost::metering::Meter* (int index)> probeMeterAt,
         std::function<void()> onClose);
 
     ~PreferencesWindow() override;
@@ -86,6 +95,27 @@ public:
     void setApplyFeedback (const juce::String& message);
 
 private:
+    /** The panel inside the shell, or nullptr. Three public methods reach it and
+        all three used to repeat the same two-level cast; a failed cast returns
+        nullptr and the caller silently does nothing, which is the kind of
+        no-op that survives a refactor unnoticed.
+    */
+    [[nodiscard]] PreferencesContentComponent* contentPanel() const;
+
+    /** Opens or closes the signal view and resizes the window to match.
+
+        The pre-open width is remembered rather than subtracted on the way back,
+        so resizing the window while the view is open does not make it drift a
+        little every time it is toggled.
+    */
+    void setSignalViewOpen (bool shouldBeOpen);
+
+    /** Whatever the graph currently declares, for the signal view's footer. */
+    [[nodiscard]] int latencySamples() const;
+
+    std::function<int()> chainLatencyFn;
+    int widthBeforeSignalView = 0;
+
     std::function<void()> onCloseFn;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreferencesWindow)

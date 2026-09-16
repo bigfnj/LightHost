@@ -57,6 +57,18 @@ namespace
         return layout;
     }
 
+    /** Reserved ids for the metering probes, matching IconMenu's. */
+    constexpr NodeID probeId (int index) { return NodeID { 1'000'100u + (juce::uint32) index }; }
+
+    /** Puts a probe after every node, as opening the signal view does. */
+    Layout withProbes (Layout layout)
+    {
+        for (size_t i = 0; i < layout.nodes.size(); ++i)
+            layout.nodes[i].probeNodeId = probeId ((int) i);
+
+        return layout;
+    }
+
     bool has (const std::vector<Connection>& connections,
               NodeID sourceId, int sourceChannel,
               NodeID destinationId, int destinationChannel)
@@ -444,6 +456,143 @@ public:
 
             const std::set<Connection> unique (first.begin(), first.end());
             expectEquals ((int) unique.size(), (int) first.size(), "a connection was emitted twice");
+        }
+
+        //======================================================================
+        // Metering probes. These sit in the live signal path whenever the signal
+        // view is open, so the property that matters is that they change the
+        // routing and nothing else about it.
+
+        beginTest ("no probe id means the wiring is exactly what it was");
+        {
+            // The sentinel has to be inert, or every existing setup would be
+            // rewired by the mere existence of the feature.
+            const auto layout = withLaneGains (layoutOf ({ plugin (10, 0), plugin (11, 0) }));
+
+            for (const auto& node : layout.nodes)
+                expect (node.probeNodeId.uid == 0, "the default must be no probe");
+
+            const auto connections = buildConnections (layout);
+            expect (has (connections, NodeID { 10 }, 0, NodeID { 11 }, 0),
+                    "plugin 10 should feed plugin 11 directly");
+            expect (! touches (connections, probeId (0)));
+        }
+
+        beginTest ("a probe is spliced in after its own node and nowhere else");
+        {
+            const auto layout = withProbes (withLaneGains (layoutOf ({ plugin (10, 0),
+                                                                       plugin (11, 0) })));
+            const auto connections = buildConnections (layout);
+
+            expect (has (connections, NodeID { 10 }, 0, probeId (0), 0));
+            expect (has (connections, probeId (0), 0, NodeID { 11 }, 0));
+            expect (has (connections, NodeID { 11 }, 0, probeId (1), 0));
+            expect (has (connections, probeId (1), 0, laneGain (0), 0));
+
+            expect (! has (connections, NodeID { 10 }, 0, NodeID { 11 }, 0),
+                    "the direct edge should have been replaced, not added to");
+            expect (! has (connections, NodeID { 11 }, 0, laneGain (0), 0));
+        }
+
+        beginTest ("probing changes the path and nothing else about the wiring");
+        {
+            // Every A->B becomes A->probe->B, and no other edge moves. Asserted
+            // by construction rather than by counting, so a lane that quietly
+            // stopped reaching the output would still fail.
+            const auto plain   = withLaneGains (layoutOf ({ plugin (10, 0), plugin (11, 0),
+                                                            plugin (12, 1) }));
+            const auto probed  = withProbes (plain);
+
+            const auto before = buildConnections (plain);
+            const auto after  = buildConnections (probed);
+
+            // Derived rather than hardcoded: a probe adds one edge per channel
+            // that reaches it, so a stereo node costs two and a mono node one.
+            int expectedExtra = 0;
+
+            for (const auto& node : probed.nodes)
+                if (canPassAudio (node))
+                    expectedExtra += std::min (kMaxChannels, node.numOutputChannels);
+
+            expectEquals ((int) after.size(), (int) before.size() + expectedExtra,
+                          "a probe should add exactly its own channel count in edges");
+
+            for (const auto& edge : before)
+            {
+                // Edges INTO a plugin are untouched; edges OUT of one now go to
+                // its probe instead.
+                const auto fromNode = edge.source.nodeID;
+                const auto isFromProbedNode =
+                    std::any_of (probed.nodes.begin(), probed.nodes.end(),
+                                 [fromNode] (const NodeFacts& n) { return n.nodeId == fromNode; });
+
+                if (! isFromProbedNode)
+                    expect (std::find (after.begin(), after.end(), edge) != after.end(),
+                            "an edge unrelated to any probe was disturbed");
+            }
+        }
+
+        beginTest ("a probe carries the channel count that reaches it");
+        {
+            // A stereo probe after a mono plugin would promote the signal to
+            // stereo a hop earlier than without one, so opening the window would
+            // change the graph it is describing.
+            const auto layout = withProbes (layoutOf ({ plugin (10, 0, 2, 1),
+                                                        plugin (11, 0, 2, 2) }));
+            const auto connections = buildConnections (layout);
+
+            expect (has (connections, NodeID { 10 }, 0, probeId (0), 0));
+            expect (! has (connections, NodeID { 10 }, 0, probeId (0), 1),
+                    "a mono output must not be spread across the probe");
+
+            // Leaving the probe, channel 0 is duplicated into the stereo plugin
+            // exactly as the mono plugin's own output would have been.
+            expect (has (connections, probeId (0), 0, NodeID { 11 }, 0));
+            expect (has (connections, probeId (0), 0, NodeID { 11 }, 1));
+        }
+
+        beginTest ("a probe on a node that cannot pass audio is never wired");
+        {
+            // The node is wired around, so its probe has nothing to sit after.
+            const auto layout = withProbes (layoutOf ({ plugin (10, 0, 0, 0),
+                                                        plugin (11, 0) }));
+            const auto connections = buildConnections (layout);
+
+            expect (! touches (connections, NodeID { 10 }));
+            expect (! touches (connections, probeId (0)),
+                    "a probe for a skipped node would be an orphan in the graph");
+            expect (has (connections, kInput, 0, NodeID { 11 }, 0));
+        }
+
+        beginTest ("probed wiring is deterministic and free of duplicates too");
+        {
+            const auto layout = withProbes (withLaneGains (layoutOf ({ plugin (10, 0),
+                                                                       plugin (11, 2),
+                                                                       plugin (12, 3, 2, 1) })));
+
+            const auto first  = buildConnections (layout);
+            const auto second = buildConnections (layout);
+
+            expect (first == second);
+
+            const std::set<Connection> unique (first.begin(), first.end());
+            expectEquals ((int) unique.size(), (int) first.size());
+        }
+
+        beginTest ("every probed connection still names a channel that exists");
+        {
+            const auto layout = withProbes (withLaneGains (layoutOf ({ plugin (10, 0, 2, 1),
+                                                                       plugin (11, 0, 1, 2),
+                                                                       plugin (12, 1) })));
+
+            for (const auto& edge : buildConnections (layout))
+            {
+                expect (edge.source.channelIndex >= 0 && edge.source.channelIndex < kMaxChannels,
+                        "source channel out of range");
+                expect (edge.destination.channelIndex >= 0
+                            && edge.destination.channelIndex < kMaxChannels,
+                        "destination channel out of range");
+            }
         }
     }
 };

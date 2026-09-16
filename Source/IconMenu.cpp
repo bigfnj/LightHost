@@ -598,6 +598,70 @@ void IconMenu::createLaneGainNodes()
     }
 }
 
+// Metering probes. Reserved ids above the lane trims, and created only while the
+// signal view is open: a diagnostic that costs something all day to be useful for
+// a minute is not a trade this application makes.
+juce::AudioProcessorGraph::NodeID IconMenu::probeNodeId (int index)
+{
+    return NodeID { 1'000'100u + static_cast<uint32> (juce::jlimit (0, kMaxProbes - 1, index)) };
+}
+
+void IconMenu::syncProbeNodes()
+{
+    // Re-derived from the chain every time rather than tracked, so adding or
+    // removing a plugin while the panel is open cannot leave a stale probe
+    // behind or a new plugin unprobed.
+    const auto wanted = signalViewEnabled
+                            ? juce::jmin (static_cast<int> (getTimeSortedList().size()), kMaxProbes)
+                            : 0;
+
+    for (int i = 0; i < kMaxProbes; ++i)
+    {
+        const auto id = probeNodeId (i);
+        const bool shouldExist = i < wanted;
+        const bool doesExist   = graph.getNodeForId (id) != nullptr;
+
+        if (shouldExist && ! doesExist)
+        {
+            if (graph.addNode (std::make_unique<lighthost::metering::Probe>(), id) == nullptr)
+                juce::Logger::writeToLog ("IconMenu: probe " + juce::String (i)
+                                          + " could not be created; that position shows no level");
+        }
+        else if (doesExist && ! shouldExist)
+        {
+            // UpdateKind::none for the same reason every other mutation here
+            // uses it: one rebuild at the end of reconnectGraph, not one per
+            // node, so the audio thread never sees a half-wired graph.
+            graph.removeNode (id, juce::AudioProcessorGraph::UpdateKind::none);
+        }
+    }
+}
+
+void IconMenu::setSignalViewEnabled (bool shouldBeEnabled)
+{
+    if (signalViewEnabled == shouldBeEnabled)
+        return;
+
+    signalViewEnabled = shouldBeEnabled;
+
+    juce::Logger::writeToLog (juce::String ("IconMenu: signal view ")
+                              + (shouldBeEnabled ? "opened; inserting probes"
+                                                 : "closed; removing probes"));
+
+    // reconnectGraph syncs the probe nodes and rewires in one pass, so the
+    // change reaches the audio thread as a single render sequence.
+    reconnectGraph();
+}
+
+lighthost::metering::Meter* IconMenu::getProbeMeter (int index)
+{
+    if (auto* node = graph.getNodeForId (probeNodeId (index)))
+        if (auto* probe = dynamic_cast<lighthost::metering::Probe*> (node->getProcessor()))
+            return &probe->getMeter();
+
+    return nullptr;
+}
+
 lighthost::gain::Processor* IconMenu::laneGainProcessor (int lane)
 {
     if (auto* node = graph.getNodeForId (laneGainNodeId (lane)))
@@ -844,6 +908,9 @@ void IconMenu::reconnectGraph()
     // with UpdateKind::none. A single rebuild() at the end publishes one
     // consistent sequence. A change that alters nothing applies nothing.
 
+    // Before the layout, so the nodes referenced below exist.
+    syncProbeNodes();
+
     lighthost::topology::Layout layout;
     layout.inputNodeId  = inputNodeId;
     layout.outputNodeId = outputNodeId;
@@ -894,6 +961,17 @@ void IconMenu::reconnectGraph()
                                       + juce::String (facts.numInputChannels) + " in / "
                                       + juce::String (facts.numOutputChannels)
                                       + " out channels, so it cannot sit in a lane; wiring around it");
+
+        // Position in layout.nodes, which is what the Preferences signal view
+        // counts too, so index N in the panel is index N here.
+        const auto probeIndex = static_cast<int> (layout.nodes.size());
+
+        if (signalViewEnabled
+            && probeIndex < kMaxProbes
+            && graph.getNodeForId (probeNodeId (probeIndex)) != nullptr)
+        {
+            facts.probeNodeId = probeNodeId (probeIndex);
+        }
 
         layout.nodes.push_back (facts);
     }
@@ -1576,6 +1654,20 @@ void IconMenu::showPreferences()
         },
         &getInputMeter(),
         &getOutputMeter(),
+        [safe] (bool enabled)
+        {
+            // The probes are created here, before the window fills its column
+            // from them.
+            if (auto* im = safe.getComponent())
+                im->setSignalViewEnabled (enabled);
+        },
+        [safe] (int index) -> lighthost::metering::Meter*
+        {
+            if (auto* im = safe.getComponent())
+                return im->getProbeMeter (index);
+
+            return nullptr;
+        },
         [safe]()
         {
             if (auto* im = safe.getComponent())

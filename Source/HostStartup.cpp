@@ -343,6 +343,16 @@ private:
                 iconMenu->showPreferencesWindow();
         });
 
+        // Open the signal view part way through, which is the only automated
+        // exercise of probe insertion: it adds nodes to a live graph, rewires,
+        // and rebuilds. Left on for the rest of the run, so shutdown tears the
+        // probes down too rather than only the plain chain.
+        juce::Timer::callAfterDelay (kOpenUIMs + 250, [this]
+        {
+            if (iconMenu != nullptr)
+                iconMenu->setSignalViewEnabled (true);
+        });
+
         // Wait for the condition, not for a duration.
         //
         // This used to be a flat 1500 ms dwell and then read the log. That is

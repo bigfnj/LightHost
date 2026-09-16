@@ -66,6 +66,17 @@ namespace lighthost::topology
         int    lane              = 0;
         int    numInputChannels  = 0;
         int    numOutputChannels = 0;
+
+        /** A pass-through metering probe wired immediately after this node, or a
+            default-constructed NodeID when there is none.
+
+            Same sentinel as laneGainNodeIds: a zero uid means "no probe", so the
+            wiring is byte-for-byte what it was without one, and tests that do
+            not care about probes need not create any. Probes exist only while
+            the signal view is open, so most of the time every one of these is
+            zero.
+        */
+        NodeID probeNodeId {};
     };
 
     /** Everything needed to decide the wiring: the graph's two IO nodes, how many
@@ -182,6 +193,23 @@ namespace lighthost::topology
 
                 previousId       = node->nodeId;
                 previousChannels = node->numOutputChannels;
+
+                if (node->probeNodeId.uid != 0)
+                {
+                    // A probe carries as many channels as reach it rather than a
+                    // fixed stereo pair. Widening here would promote a mono
+                    // plugin's output to stereo one hop earlier than it is
+                    // without a probe, which would make opening a diagnostic
+                    // window change the graph it is there to describe.
+                    const auto probeChannels = std::min (kMaxChannels, previousChannels);
+
+                    appendEdge (connections,
+                                previousId, previousChannels,
+                                node->probeNodeId, probeChannels);
+
+                    previousId       = node->probeNodeId;
+                    previousChannels = probeChannels;
+                }
             }
 
             // The lane's trim sits at the summing point, which is the only place

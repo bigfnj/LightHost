@@ -288,6 +288,329 @@ private:
 };
 
 //==============================================================================
+// SignalViewPanel
+//
+// The per-plugin taps, as a column to the right of the main panel: input, then
+// one row per plugin, then output. Each row carries a peak, an RMS and the
+// change from the row above it.
+//
+// The delta column is the reason this exists. Working out that smart:chain was
+// adding 7 dB took a paced offline render and an analysis script; the number was
+// available the whole time, one hop away in the graph.
+//
+// One timer for the whole column rather than one per row, and it only runs while
+// the column is showing -- which is also the only time the probes exist at all.
+//==============================================================================
+class SignalViewPanel final : public juce::Component,
+                              private juce::Timer
+{
+public:
+    struct Tap
+    {
+        juce::String name;
+        juce::String detail;                              ///< latency, or the device
+        lighthost::metering::Meter* meter = nullptr;
+    };
+
+    SignalViewPanel() = default;
+    ~SignalViewPanel() override { stopTimer(); }
+
+    /** Replaces the column. Called when the chain changes or the panel opens. */
+    void setTaps (std::vector<Tap> newTaps)
+    {
+        watches.clear();
+        taps = std::move (newTaps);
+        readings.assign (taps.size(), {});
+
+        if (isShowing())
+            beginWatching();
+
+        repaint();
+    }
+
+    void visibilityChanged() override        { updateWatchState(); }
+    void parentHierarchyChanged() override   { updateWatchState(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto& laf = getLookAndFeel();
+        const auto bg   = laf.findColour (juce::ResizableWindow::backgroundColourId);
+        const auto text = laf.findColour (juce::Label::textColourId);
+
+        g.fillAll (bg.darker (0.30f));
+
+        auto area = getLocalBounds();
+
+        // Header, matching the section bars in the main panel.
+        auto header = area.removeFromTop (kHeaderH);
+        g.setColour (bg.darker (0.55f));
+        g.fillRect (header);
+        g.setColour (text.withAlpha (0.80f));
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f).withStyle ("Bold")));
+        g.drawText ("SIGNAL VIEW", header.reduced (10, 0), juce::Justification::centredLeft);
+
+        if (taps.empty())
+        {
+            g.setColour (text.withAlpha (0.45f));
+            g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
+            g.drawFittedText ("No plugins in the chain.", area.reduced (12, 10),
+                              juce::Justification::centredTop, 2);
+            return;
+        }
+
+        for (size_t i = 0; i < taps.size(); ++i)
+            paintTap (g, area.removeFromTop (kRowH), i, text, bg);
+    }
+
+private:
+    struct Row
+    {
+        float peakDb = lighthost::metering::kFloorDb;
+        float rmsDb  = lighthost::metering::kFloorDb;
+        bool  rmsValid = false;
+        bool  clipped  = false;
+    };
+
+    void updateWatchState()
+    {
+        if (isShowing())
+            beginWatching();
+        else
+            endWatching();
+    }
+
+    void beginWatching()
+    {
+        if (! watches.empty())
+            return;
+
+        for (const auto& tap : taps)
+            if (tap.meter != nullptr)
+                watches.push_back (std::make_unique<lighthost::metering::Meter::Watch> (tap.meter));
+
+        if (! taps.empty())
+            startTimerHz (kRefreshHz);
+    }
+
+    void endWatching()
+    {
+        stopTimer();
+        watches.clear();
+    }
+
+    void timerCallback() override
+    {
+        bool changed = false;
+
+        for (size_t i = 0; i < taps.size(); ++i)
+        {
+            if (taps[i].meter == nullptr)
+                continue;
+
+            // Destructive read, so it happens every tick regardless of whether
+            // anything is redrawn.
+            const auto r = taps[i].meter->read();
+            auto& row = readings[i];
+
+            const auto previousPeak = row.peakDb;
+
+            row.peakDb = r.peakDb > row.peakDb
+                             ? r.peakDb
+                             : juce::jmax (r.peakDb, row.peakDb - kFallDbPerTick);
+
+            if (r.rmsValid)
+            {
+                row.rmsDb    = r.rmsDb;
+                row.rmsValid = true;
+            }
+
+            if (row.clipped != r.clipped || std::abs (row.peakDb - previousPeak) > 0.09f)
+                changed = true;
+
+            row.clipped = r.clipped;
+        }
+
+        if (changed)
+            repaint();
+    }
+
+    void paintTap (juce::Graphics& g, juce::Rectangle<int> area, size_t index,
+                   juce::Colour text, juce::Colour bg) const
+    {
+        const auto& tap = taps[index];
+        const auto& row = readings[index];
+
+        auto content = area.reduced (10, 3);
+
+        // Name, and what the row is.
+        auto titleRow = content.removeFromTop (14);
+        g.setColour (text.withAlpha (0.92f));
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
+        g.drawText (tap.name, titleRow.removeFromLeft (titleRow.getWidth() - 74),
+                    juce::Justification::centredLeft);
+
+        g.setColour (text.withAlpha (0.45f));
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (10.5f)));
+        g.drawText (tap.detail, titleRow, juce::Justification::centredRight);
+
+        // Bar.
+        auto bar = content.removeFromTop (7);
+        g.setColour (bg.darker (0.60f));
+        g.fillRoundedRectangle (bar.toFloat(), 2.0f);
+
+        const auto proportion = juce::jlimit (0.0f, 1.0f,
+                                              (row.peakDb + 60.0f) / 60.0f);
+
+        if (proportion > 0.0f)
+        {
+            using LAF = lighthost::ui::LookAndFeel;
+            const auto colour = row.peakDb >= -3.0f  ? juce::Colour (LAF::kHot)
+                              : row.peakDb >= -12.0f ? juce::Colour (LAF::kCaution)
+                                                     : juce::Colour (LAF::kAccent);
+            g.setColour (colour);
+            g.fillRoundedRectangle (bar.toFloat().withWidth (
+                                        juce::jmax (2.0f, bar.getWidth() * proportion)), 2.0f);
+        }
+
+        content.removeFromTop (2);
+
+        // Numbers, including the delta against the row above.
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (10.5f)));
+        g.setColour (text.withAlpha (0.70f));
+        g.drawText (numbersFor (row), content.removeFromLeft (128),
+                    juce::Justification::centredLeft);
+
+        if (index > 0)
+            paintDelta (g, content, index, text);
+
+        g.setColour (text.withAlpha (0.08f));
+        g.fillRect (area.removeFromBottom (1));
+    }
+
+    [[nodiscard]] static juce::String numbersFor (const Row& row)
+    {
+        const auto silent = row.peakDb <= lighthost::metering::kFloorDb + 0.5f;
+
+        auto s = juce::String ("pk ") + (silent ? juce::String ("--")
+                                                : juce::String (row.peakDb, 1));
+
+        if (row.rmsValid)
+            s += "   rms " + juce::String (row.rmsDb, 1);
+
+        return s;
+    }
+
+    void paintDelta (juce::Graphics& g, juce::Rectangle<int> area, size_t index,
+                     juce::Colour text) const
+    {
+        const auto& previous = readings[index - 1];
+        const auto& row      = readings[index];
+
+        // Only meaningful while both rows have an RMS and there is signal to
+        // compare. A delta computed against silence is noise dressed as a
+        // measurement, which is the mistake this whole feature came out of.
+        if (! previous.rmsValid || ! row.rmsValid
+            || previous.rmsDb <= lighthost::metering::kFloorDb + 20.0f)
+        {
+            g.setColour (text.withAlpha (0.25f));
+            g.drawText ("d --", area, juce::Justification::centredRight);
+            return;
+        }
+
+        const auto delta = row.rmsDb - previous.rmsDb;
+
+        using LAF = lighthost::ui::LookAndFeel;
+        g.setColour (delta > 1.0f  ? juce::Colour (LAF::kCaution)
+                   : delta < -1.0f ? juce::Colour (0xff74d68c)
+                                   : text.withAlpha (0.55f));
+
+        g.drawText (juce::String (delta >= 0.0f ? "+" : "") + juce::String (delta, 1) + " dB",
+                    area, juce::Justification::centredRight);
+    }
+
+public:
+    /** Width the column is laid out at, and how much the window grows by. */
+    static constexpr int kWidth   = 300;
+    static constexpr int kRowH    = 46;
+    static constexpr int kHeaderH = 22;
+
+private:
+    static constexpr int   kRefreshHz     = 25;
+    static constexpr float kFallDbPerTick = 1.8f;
+
+    std::vector<Tap> taps;
+    std::vector<Row> readings;
+    std::vector<std::unique_ptr<lighthost::metering::Meter::Watch>> watches;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SignalViewPanel)
+};
+
+//==============================================================================
+// HeaderToggle
+//
+// A drawn control for a section header bar. Painted rather than a TextButton
+// because kSectH is 22 and metrics::pushButtonHeight is 28, so a real button
+// does not fit -- and because the chain rows already established that a drawn
+// control is what gets a hover state here. A flat rectangle with a string in it
+// is what made the old Edit button look inert.
+//==============================================================================
+class HeaderToggle final : public juce::Component
+{
+public:
+    explicit HeaderToggle (const juce::String& labelText) : text (labelText) {}
+
+    std::function<void()> onClick;
+
+    void setToggled (bool shouldBeOn)
+    {
+        if (on == shouldBeOn)
+            return;
+
+        on = shouldBeOn;
+        repaint();
+    }
+
+    [[nodiscard]] bool isToggled() const noexcept { return on; }
+
+    void mouseEnter (const juce::MouseEvent&) override { hot = true;  repaint(); }
+    void mouseExit  (const juce::MouseEvent&) override { hot = false; repaint(); }
+    void mouseDown  (const juce::MouseEvent&) override { held = true;  repaint(); }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        held = false;
+        repaint();
+
+        // Fires on release inside the control, so a press dragged away is
+        // cancelled -- the same contract as every other control here.
+        if (onClick && getLocalBounds().contains (e.getPosition()))
+            onClick();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const auto accent = juce::Colour (lighthost::ui::LookAndFeel::kAccent);
+        const auto area = getLocalBounds();
+
+        if (held || on)
+        {
+            g.setColour (accent.withAlpha (held ? 0.30f : 0.18f));
+            g.fillRoundedRectangle (area.toFloat(), 3.0f);
+        }
+
+        g.setColour (accent.withAlpha (hot || on ? 1.0f : 0.75f));
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f)));
+        g.drawText (text + (on ? "  <" : "  >"), area, juce::Justification::centred);
+    }
+
+private:
+    juce::String text;
+    bool on = false, hot = false, held = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (HeaderToggle)
+};
+
+//==============================================================================
 // AudioChainListComponent
 //
 // Paint-based list of the staged plugin chain.  Each row shows:
@@ -783,7 +1106,9 @@ public:
         std::function<void (const juce::PluginDescription&)> onEditPlugin,
         std::function<int()> chainLatencySamples,
         lighthost::metering::Meter* inputMeterToUse,
-        lighthost::metering::Meter* outputMeterToUse)
+        lighthost::metering::Meter* outputMeterToUse,
+        std::function<void (bool)> onSignalViewToggled,
+        std::function<lighthost::metering::Meter* (int)> probeMeterAt)
         : deviceManager (dm),
           knownPlugins   (knownPlugins_),
           laneTrim       (std::move (laneTrimIn)),
@@ -952,10 +1277,21 @@ public:
         bufferSizeHeadLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
         bufferSizeHeadLabel.setJustificationType (juce::Justification::centredRight);
 
+        onSignalViewToggledFn = std::move (onSignalViewToggled);
+        probeMeterAtFn         = std::move (probeMeterAt);
+
+        // Added AFTER the section label so it is in front of it: JUCE paints and
+        // hit-tests later children on top, and SectionLabel would otherwise
+        // swallow the clicks.
+        addAndMakeVisible (signalViewToggle);
+        signalViewToggle.onClick = [this] { toggleSignalView(); };
+
         addAndMakeVisible (inputMeter);
         addAndMakeVisible (outputMeter);
         inputMeter.setMeter (inputMeterToUse);
         outputMeter.setMeter (outputMeterToUse);
+        deviceInputMeter  = inputMeterToUse;
+        deviceOutputMeter = outputMeterToUse;
 
         addAndMakeVisible (latencyHeadLabel);
         addAndMakeVisible (latencyValueLabel);
@@ -1018,6 +1354,46 @@ public:
         // The chain just changed, so its declared latency probably did too.
         updateLatencyDisplay();
     }
+
+    /** Rebuilds the signal view's rows from the current chain.
+
+        Called when the view opens and whenever the chain changes, because the
+        probes are recreated on both and the meters they belong to move with
+        them.
+    */
+    void refreshSignalView (SignalViewPanel& panel, int chainLatencySamplesNow)
+    {
+        std::vector<SignalViewPanel::Tap> taps;
+        taps.reserve (chainList.items.size() + 2);
+
+        const auto rate = [this]
+        {
+            auto* device = deviceManager.getCurrentAudioDevice();
+            return device != nullptr ? device->getCurrentSampleRate() : 0.0;
+        }();
+
+        const auto asMs = [rate] (int samples)
+        {
+            return rate > 0.0 ? juce::String (samples * 1000.0 / rate, 1) + " ms"
+                              : juce::String{};
+        };
+
+        taps.push_back ({ "Input", inputDeviceCombo.getText().isEmpty()
+                                       ? juce::String ("device")
+                                       : juce::String ("device"),
+                          deviceInputMeter });
+
+        for (size_t i = 0; i < chainList.items.size(); ++i)
+            taps.push_back ({ "after " + chainList.items[i].name,
+                              juce::String{},
+                              probeMeterAtFn ? probeMeterAtFn (static_cast<int> (i)) : nullptr });
+
+        taps.push_back ({ "Output", asMs (chainLatencySamplesNow), deviceOutputMeter });
+
+        panel.setTaps (std::move (taps));
+    }
+
+    [[nodiscard]] bool isSignalViewOpen() const { return signalViewToggle.isToggled(); }
 
     /** Writes a lane trim to disk, once, if it has moved since the last write. */
     void commitLaneTrim (int lane)
@@ -1146,7 +1522,11 @@ public:
         #endif
 
         // ── AUDIO CHAIN ────────────────────────────────────────────────────────
-        chainSectionLabel.setBounds (area.removeFromTop (kSectH));
+        {
+            auto header = area.removeFromTop (kSectH);
+            signalViewToggle.setBounds (header.removeFromRight (96).reduced (3, 2));
+            chainSectionLabel.setBounds (header);
+        }
         area.removeFromTop (kGap);
         chainViewport.setBounds (area.removeFromTop (chainViewH));
         updateChainListHeight();
@@ -1329,6 +1709,12 @@ private:
     // One per device, each sitting with the device it describes.
     SignalMeter inputMeter  { "in" };
     SignalMeter outputMeter { "out" };
+
+    HeaderToggle signalViewToggle { "Signal view" };
+    lighthost::metering::Meter* deviceInputMeter  = nullptr;
+    lighthost::metering::Meter* deviceOutputMeter = nullptr;
+    std::function<void (bool)> onSignalViewToggledFn;
+    std::function<lighthost::metering::Meter* (int)> probeMeterAtFn;
 
     // Apply button, version label, and the transient Apply confirmation
     juce::TextButton applyButton;
@@ -1828,6 +2214,17 @@ private:
             juce::dontSendNotification);
     }
 
+    /** Flips the toggle and tells whoever is listening. The window does the
+        widening and the panel wiring, because only it owns both halves.
+    */
+    void toggleSignalView()
+    {
+        signalViewToggle.setToggled (! signalViewToggle.isToggled());
+
+        if (onSignalViewToggledFn)
+            onSignalViewToggledFn (signalViewToggle.isToggled());
+    }
+
     void updateChainListHeight()
     {
         if (chainViewport.getWidth() <= 0) return;
@@ -1959,6 +2356,61 @@ private:
 };
 
 //==============================================================================
+// PreferencesShell
+//
+// The window's content: the scrolling panel, and the signal view beside it.
+//
+// The side panel cannot live inside the scrolling panel. That viewport clamps
+// its child to its own width, so a column added in there would steal width from
+// the main layout rather than extend the window, and it would scroll away
+// vertically with the rest of the content.
+//
+// Everything that used to reach the panel by casting the window's content to
+// PreferencesPanelViewport now comes through here instead. Those casts fail
+// silently -- they return nullptr and the caller does nothing -- so they are the
+// one thing that had to change in lockstep with this class existing.
+//==============================================================================
+class PreferencesShell final : public juce::Component
+{
+public:
+    PreferencesShell (PreferencesContentComponent* panelToOwn)
+        : viewport (panelToOwn)
+    {
+        addAndMakeVisible (viewport);
+        addChildComponent (signalView);   // not visible until it is opened
+    }
+
+    [[nodiscard]] PreferencesContentComponent* panel() const noexcept { return viewport.panel; }
+    [[nodiscard]] SignalViewPanel& getSignalView() noexcept { return signalView; }
+
+    void setSignalViewVisible (bool shouldShow)
+    {
+        signalView.setVisible (shouldShow);
+        resized();
+    }
+
+    [[nodiscard]] bool isSignalViewVisible() const { return signalView.isVisible(); }
+
+    void resized() override
+    {
+        auto area = getLocalBounds();
+
+        // The side panel takes a fixed width off the right, so the main column
+        // keeps the width it had before the window grew.
+        if (signalView.isVisible())
+            signalView.setBounds (area.removeFromRight (SignalViewPanel::kWidth));
+
+        viewport.setBounds (area);
+    }
+
+private:
+    PreferencesPanelViewport viewport;
+    SignalViewPanel signalView;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreferencesShell)
+};
+
+//==============================================================================
 // PreferencesWindow
 //==============================================================================
 PreferencesWindow::PreferencesWindow (
@@ -1975,6 +2427,8 @@ PreferencesWindow::PreferencesWindow (
     std::function<int()> chainLatencySamples,
     lighthost::metering::Meter* inputMeter,
     lighthost::metering::Meter* outputMeter,
+    std::function<void (bool enabled)> onSignalViewToggled,
+    std::function<lighthost::metering::Meter* (int index)> probeMeterAt,
     std::function<void()> onClose)
     : DocumentWindow ("Preferences",
                       juce::LookAndFeel::getDefaultLookAndFeel()
@@ -1982,10 +2436,23 @@ PreferencesWindow::PreferencesWindow (
                       DocumentWindow::minimiseButton | DocumentWindow::closeButton),
       onCloseFn (std::move (onClose))
 {
+    chainLatencyFn = chainLatencySamples;
+
     auto* content = new PreferencesContentComponent (
         deviceManager, knownPlugins, activeChain, bypassStates, laneStates,
         std::move (laneTrim), std::move (onApply), std::move (onEditPlugin),
-        std::move (chainLatencySamples), inputMeter, outputMeter);
+        std::move (chainLatencySamples), inputMeter, outputMeter,
+        // The host is told first so the probes exist, then the column is filled
+        // from them. Doing it the other way round would read every meter before
+        // it had been created.
+        [this, onSignalViewToggled = std::move (onSignalViewToggled)] (bool enabled)
+        {
+            if (onSignalViewToggled)
+                onSignalViewToggled (enabled);
+
+            setSignalViewOpen (enabled);
+        },
+        std::move (probeMeterAt));
 
     // Height budget. The authority is fixedLayoutHeight(), not this comment --
     // which had drifted 34px out of date within one release of being written,
@@ -2006,10 +2473,10 @@ PreferencesWindow::PreferencesWindow (
     // The panel lives inside a viewport that never sizes it below the height its
     // layout needs, so a short window scrolls rather than losing its lower
     // sections. The minimum below is now about comfort, not correctness.
-    auto* scroller = new PreferencesPanelViewport (content);
-    scroller->setSize (kDefaultWidth, kDefaultHeight);
+    auto* shell = new PreferencesShell (content);
+    shell->setSize (kDefaultWidth, kDefaultHeight);
 
-    setContentOwned (scroller, true);
+    setContentOwned (shell, true);
     setUsingNativeTitleBar (true);
     setResizable (true, false);
 
@@ -2035,24 +2502,76 @@ void PreferencesWindow::refreshPluginChain (const std::vector<juce::PluginDescri
                                              const std::vector<bool>& bypassStates,
                                              const std::vector<int>& laneStates)
 {
-    // The window's content is the scrolling viewport now, and the panel is inside
-    // it, so this reaches one level further down than it used to.
-    if (auto* scroller = dynamic_cast<PreferencesPanelViewport*> (getContentComponent()))
-        if (scroller->panel != nullptr)
-            scroller->panel->setChain (chain, bypassStates, laneStates);
+    if (auto* panel = contentPanel())
+    {
+        panel->setChain (chain, bypassStates, laneStates);
+
+        // The chain changed, so the probes were recreated and the meters the
+        // signal view holds have moved. Rebuild the column from the new ones.
+        if (auto* shell = dynamic_cast<PreferencesShell*> (getContentComponent()))
+            if (shell->isSignalViewVisible())
+                panel->refreshSignalView (shell->getSignalView(), latencySamples());
+    }
 
 }
 
 void PreferencesWindow::setStatusMessage (const juce::String& message)
 {
-    if (auto* scroller = dynamic_cast<PreferencesPanelViewport*> (getContentComponent()))
-        if (scroller->panel != nullptr)
-            scroller->panel->setStatusMessage (message);
+    if (auto* panel = contentPanel())
+        panel->setStatusMessage (message);
 }
 
 void PreferencesWindow::setApplyFeedback (const juce::String& message)
 {
-    if (auto* scroller = dynamic_cast<PreferencesPanelViewport*> (getContentComponent()))
-        if (scroller->panel != nullptr)
-            scroller->panel->setApplyFeedback (message);
+    if (auto* panel = contentPanel())
+        panel->setApplyFeedback (message);
+}
+
+PreferencesContentComponent* PreferencesWindow::contentPanel() const
+{
+    if (auto* shell = dynamic_cast<PreferencesShell*> (getContentComponent()))
+        return shell->panel();
+
+    return nullptr;
+}
+
+int PreferencesWindow::latencySamples() const
+{
+    return chainLatencyFn ? chainLatencyFn() : 0;
+}
+
+void PreferencesWindow::setSignalViewOpen (bool shouldBeOpen)
+{
+    auto* shell = dynamic_cast<PreferencesShell*> (getContentComponent());
+
+    if (shell == nullptr || shell->isSignalViewVisible() == shouldBeOpen)
+        return;
+
+    if (shouldBeOpen)
+    {
+        // Remembered, not derived. Subtracting the panel width on the way back
+        // would lose any resizing the user did while it was open.
+        widthBeforeSignalView = getWidth();
+
+        if (auto* panel = shell->panel())
+            panel->refreshSignalView (shell->getSignalView(), latencySamples());
+    }
+
+    shell->setSignalViewVisible (shouldBeOpen);
+
+    // setFullScreen first, because a programmatic resize fights a window the OS
+    // has maximised and the result is a window that ignores the toggle.
+    if (isFullScreen())
+        setFullScreen (false);
+
+    // The floor comes from the constrainer setResizeLimits installed, rather
+    // than a second copy of the number.
+    const auto minWidth = getConstrainer() != nullptr ? getConstrainer()->getMinimumWidth()
+                                                      : getWidth();
+
+    const auto target = shouldBeOpen
+                            ? getWidth() + SignalViewPanel::kWidth
+                            : juce::jmax (minWidth, widthBeforeSignalView);
+
+    setSize (target, getHeight());
 }
