@@ -803,7 +803,7 @@ lighthost::metering::Meter* IconMenu::getProbeMeter (int index)
     // exists. The meter outlives the graph on purpose: the UI caches what this
     // returns, and a pointer into a Probe would dangle the moment the chain
     // reloaded. With no probe feeding it, the meter simply reads silence.
-    if (index < 0 || index >= lighthost::nodeids::maxProbes)
+    if (! juce::isPositiveAndBelow (index, lighthost::nodeids::maxProbes))
         return nullptr;
 
     return &probeMeters[static_cast<size_t> (index)];
@@ -1449,7 +1449,13 @@ void IconMenu::menuInvocationCallback (int id, IconMenu* im)
 void IconMenu::handleDeletePlugin (int index)
 {
     const auto timeSorted = getTimeSortedList();
-    if (index < 0 || index >= static_cast<int> (timeSorted->size()))
+
+    // juce::isPositiveAndBelow rather than a hand-written pair of comparisons.
+    // This bounds check was spelled out four times in this file, and BACKLOG.md
+    // wanted regression tests for all four -- which would have meant testing a
+    // copy of an expression JUCE already provides and tests. One library call
+    // per site leaves nothing bespoke to regress.
+    if (! juce::isPositiveAndBelow (index, timeSorted->size()))
         return;
 
     const auto pluginToDelete = (*timeSorted)[static_cast<size_t> (index)];
@@ -1515,7 +1521,8 @@ void IconMenu::handleDeletePlugin (int index)
 void IconMenu::handleBypassPlugin (int index)
 {
     const auto timeSorted = getTimeSortedList();
-    if (index < 0 || index >= static_cast<int> (timeSorted->size()))
+
+    if (! juce::isPositiveAndBelow (index, timeSorted->size()))
         return;
 
     const auto plugin = (*timeSorted)[static_cast<size_t> (index)];
@@ -1536,7 +1543,7 @@ void IconMenu::handleEditPlugin (int index)
     const auto sortedSnapshot = getTimeSortedList();
     const auto& sorted = *sortedSnapshot;
 
-    if (index < 0 || index >= static_cast<int> (sorted.size()))
+    if (! juce::isPositiveAndBelow (index, sorted.size()))
         return;
 
     const ChainStore store (*getAppProperties().getUserSettings());
@@ -1556,7 +1563,7 @@ void IconMenu::handleMovePlugin (int index, bool moveUp)
     const auto timeSortedSnapshot = getTimeSortedList();
     const auto& timeSorted = *timeSortedSnapshot;
 
-    if (index < 0 || index >= static_cast<int> (timeSorted.size()))
+    if (! juce::isPositiveAndBelow (index, timeSorted.size()))
         return;
 
     const int neighborIndex = moveUp ? index - 1 : index + 1;
