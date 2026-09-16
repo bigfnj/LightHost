@@ -8,6 +8,118 @@ Nothing yet.
 
 ---
 
+## [5.1.0] — 2026-09-16
+
+The application can now show you the level of your own signal. It could not
+before, and on 2026-09-15 that cost a working day: the microphone sat at +30 dB
+hitting 0.0 dBFS for hours, Light Host displayed nothing about it, and the first
+indication was colleagues reporting that the audio was unusable. Establishing
+what had happened took an hour of external capture and analysis, and every figure
+needed to do it was passing through this process the whole time.
+
+A minor release rather than a patch. 5.0.1 and 5.0.2 already stretched "patch" to
+cover new command-line flags; this adds a user-facing feature and moves a
+dependency.
+
+### Added — input and output meters, with a clip warning that latches
+
+One meter per device, under the device it describes. Peak in dBFS, a bar that
+rises instantly and falls at 45 dB per second so a transient stays readable long
+enough to read, scale marks at −24, −12 and −6, and a **CLIP** badge.
+
+The badge latches until it is clicked. A badge that decayed would have been clear
+again long before anyone opened the window, which for the failure that prompted
+all of this would have been the same as not having one.
+
+### Added — a per-plugin signal view
+
+A column to the right of the panel, opened from the AUDIO CHAIN header: input,
+one row per plugin, then output, each with peak, RMS, and the change from the row
+above.
+
+The delta column is the point. Working out that smart:chain was adding 7 dB took
+a paced offline render and an analysis script, and the number was one hop away in
+the graph the whole time.
+
+### Changed — metering costs nothing while nobody is looking
+
+This decided the design. Light Host is tray-resident and its graph runs whenever
+a device is open, so "idle" still means every block is processed. Measuring
+everything all the time would burn CPU forever to feed a window that is shut.
+
+So the work is split by what it is for. **Peak** is always measured, through
+`FloatVectorOperations::findMinAndMax`, which is SIMD — roughly 96k samples per
+second scanned at 48 kHz stereo, several floats per instruction. That is what
+feeds the clip latch, and a clip indicator that only works while you are watching
+is pointless. **RMS** is the per-sample half, and it only runs while a visible
+meter holds a watcher.
+
+The per-plugin probes go further: they are inserted into the graph when the
+column opens and removed when it closes. With it shut, the graph is
+byte-for-byte what it was before this release, which a topology test asserts
+rather than assumes.
+
+Always-on probes were considered and rejected. They would have bought per-plugin
+clip detection while the window was shut, but the incident that motivated this
+was *input* clipping, which the device meters already catch for free — so there
+was nothing left for them to earn.
+
+### Fixed — the offline renderer no longer reports success it has not earned
+
+Five discarded results, found by auditing the file whose entire purpose is
+producing trustworthy measurements, and whose own header records that a
+confidently wrong render once "cost an afternoon and produced a confident,
+entirely wrong verdict on a plugin that turned out to remove 25 dB of keyboard
+noise". Each of these was a fresh way to reach that same outcome:
+
+- A failed read rendered uninitialised memory. `juce::AudioBuffer` does not zero on construction.
+- A plugin that rejected its saved state was measured at factory defaults, and the parameter report then printed those defaults as the settings under test.
+- Refused connections were dropped, and the connection count reported was the number wanted rather than the number applied — a silent lane reported as a working chain.
+- A failed write still reported a frame count, because the count came from the in-memory buffer. A full disk produced `RENDER OK`.
+- Pacing could collapse silently and still report "kept pace". The GUI's wait pumps the message loop, and `runDispatchLoopUntil` returns immediately for ever once a quit is pending, so quitting mid-render turned every wait into a no-op — and `blocksBehind` could not notice, because audio time cannot fall behind a clock nothing is waiting on. Pacing is now confirmed against the wall clock rather than trusted.
+
+### Changed — vendored JUCE 9.0.1 → 9.0.2
+
+Two of its fixes are ours. "Fixed some VST3 hosting issues" matters because this
+is a VST3 host and the symptoms were visible: the plugin scan logged 17 assertion
+failures in `juce_VST3PluginFormatImpl.h:1104` and cached six of eight plugins
+with `numInputs=0 numOutputs=0`. "Fixed parsing WAV files with a missing final pad
+byte" matters because render mode and Chain Test both read WAV files.
+`MP3AudioFormat` is also on by default now, so Chain Test accepts more than WAV.
+
+`tools/update-juce.sh` makes the next bump repeatable, since this was the third.
+
+### Changed — one home each for two rules that had been copied
+
+The graph node-id scheme existed in three copies, and they had begun to drift:
+the one in the tests omitted the clamp both production copies apply, so the
+helper the tests wire their graphs with could not have caught a clamping
+regression in the code it was testing. Now `Source/NodeIds.hpp`.
+
+The state-directory rule existed in four. It decides where every saved plugin
+preset lives, and one entry point disagreeing would orphan all of them silently.
+Now `state::directoryFor`.
+
+The lane menu is a loop. `Lanes.hpp` said the constant existed because the lane
+count had been "separately hardcoded as a run of four menu items in the UI" — and
+that run had survived two releases, in the one place that assigns a plugin to a
+lane.
+
+### Fixed — the startup self-test covers more of what it claims to
+
+It now opens the signal view part way through its run, which is the only
+automated exercise of inserting nodes into a live graph and rewiring it, on all
+three platforms.
+
+### Removed — code nothing reached
+
+`PluginWindow` had four window types; two were never passed, and behind one sat
+about fifty lines of editor reachable only through a value nothing supplied.
+`dragOffsetY` was written on every drag and never read. `pluginSortMethod` was
+never touched at all.
+
+---
+
 ## [5.0.2] — 2026-09-08
 
 5.0.1 was tagged but never published: its release pipeline failed on macOS, and

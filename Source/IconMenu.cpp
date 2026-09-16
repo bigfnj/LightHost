@@ -456,21 +456,29 @@ void IconMenu::loadNextPlugin()
         return;
     }
 
-    const auto& spec = pendingLoads[nextLoadIndex];
+    auto& spec = pendingLoads[nextLoadIndex];
 
     const auto sr = graph.getSampleRate() > 0.0 ? graph.getSampleRate() : 44100.0;
     const auto bs = graph.getBlockSize()  > 0   ? graph.getBlockSize()  : 512;
 
     const auto generation = pluginLoadGeneration;
     const auto nodeId     = spec.nodeId;
-    const auto savedState = spec.savedState;
     const auto name       = spec.description.name;
 
     Component::SafePointer<IconMenu> safe (this);
 
+    // The state is MOVED into the lambda, not copied. It used to be copied into
+    // a local and then copied again by the capture, on top of the copy
+    // pendingLoads already held -- three copies of a blob that PluginStateVault
+    // measured at 4,126,524 bytes for one real plugin, so tens of megabytes of
+    // memcpy on the message thread during startup, in the subsystem whose whole
+    // reason for existing is that these are too large to move around casually.
+    //
+    // Safe because this entry is finished with the moment it is dispatched:
+    // nextLoadIndex advances and nothing reads spec.savedState again.
     formatManager.createPluginInstanceAsync (
         spec.description, sr, bs,
-        [safe, generation, nodeId, savedState, name]
+        [safe, generation, nodeId, name, savedState = std::move (spec.savedState)]
             (std::unique_ptr<AudioPluginInstance> instance, const juce::String& error) mutable
         {
             auto* im = safe.getComponent();

@@ -22,6 +22,24 @@ the only place the version lives.
   Windows path is exercised; the others are reasoned from JUCE's source, not
   observed.
 
+### Verified 2026-09-16
+
+- **Plugin state is no longer copied three times per load.** It is moved into the
+  async creation lambda; a real state measured 4,126,524 bytes, so a five-plugin
+  chain was copying tens of megabytes on the message thread at startup.
+- **The self-test log poll re-reads only when the file grows**, rather than
+  reading and scanning a 256 KB file up to 200 times per run.
+
+- **Metering does not alter the audio.** A fixed input renders byte-identical
+  through `--render` before and after every phase of the 5.1.0 work, and a
+  topology test asserts that a chain with no probes wires exactly as it did
+  before probes existed.
+- **Probe insertion works on a live graph.** The startup self-test opens the
+  signal view part way through its run, so adding nodes to a running graph and
+  rewiring it is exercised on all three platforms in CI.
+- **JUCE 9.0.2 is clean for this project.** Its one breaking change removes an
+  API this codebase does not use.
+
 ### Verified 2026-09-08
 
 Recording these because they were open questions for a long time and the answers
@@ -41,6 +59,43 @@ should not have to be rediscovered.
   own, which is what fixed the double-padding bug from 4.0.3.
 
 ## Bugs
+
+### A nested dispatch loop runs in the middle of a graph teardown
+
+`PluginWindow::closeAllCurrentlyOpenWindows` (`Source/PluginWindow.cpp`) enters a
+modal state and calls `runDispatchLoopUntil (50)`. `JUCE_MODAL_LOOPS_PERMITTED=1`
+is set, so this is compiled, and `IconMenu::loadActivePlugins` calls it between
+closing the editors and `graph.clear()`. Arbitrary UI callbacks, timers and async
+updates therefore run while the graph is half torn down.
+
+No concrete failure has been demonstrated: the load generation counter is bumped
+and `pendingLoads` cleared first, so a late plugin-load callback no-ops, and the
+tray timer only reads. It is listed because it is the largest undocumented
+re-entrancy surface in the codebase and the call site says nothing about it.
+Either justify it in a comment or drain the windows without pumping.
+
+### Two different definitions of "the same plugin"
+
+`chain::Store::identityOf` hashes `fileOrIdentifier | pluginFormatName |
+uniqueId | deprecatedUid`, and `PluginChainStore.hpp` explains at length why
+`name` is deliberately excluded -- including it is what orphaned settings on
+every plugin update.
+
+`Source/PreferencesWindow.cpp` decides which "+ Add Plugin" entries to grey out
+with a raw `fileOrIdentifier + pluginFormatName + name` concatenation, which
+includes `name` and omits `uniqueId`. So the menu and the store disagree: a
+renamed plugin is the same plugin to the store and a different one to the menu,
+and a shell plugin packing two sub-plugins under one display name is the reverse.
+The expression is also written out twice in the same function.
+
+### BSD is handled in one place and treated as Windows in another
+
+`IconMenu.cpp` has a `#if JUCE_LINUX || JUCE_BSD` branch for the delete
+confirmation's button order, but its tray menu is `#if JUCE_MAC || JUCE_LINUX`
+with an `#else` that reaches `POINT` and `GetCursorPos` -- and `<windows.h>` is
+only included under `#if JUCE_WINDOWS`. On BSD that would not compile. Whether
+BSD is a target at all is unresolved; either way the two blocks disagree about
+what "not Mac, not Linux" means.
 
 One, below. Everything else the audits turned up has been fixed and is described
 in `CHANGELOG.md` under `[5.0.0]`, which is the place to look before concluding a
@@ -102,6 +157,22 @@ Either scan recursively, or say in the UI that the path is not recursive. Silent
 finding nothing looks like the plugins are unsupported.
 
 ## Features and refactors
+
+### The base64 restoreInto overload has no production caller
+
+`state::restoreInto (AudioProcessor&, const juce::String&)` is used only by the
+tests. Both `IconMenu::migrateStateToVault` and `IconMenu::loadActivePlugins`
+decode the base64 themselves and call the `MemoryBlock` overload, so the
+decode-failure rule is stated and tested in one place and then reimplemented in
+two others. Route those two call sites through it.
+
+### Optional: a signal view that shows shape, not just level
+
+The per-plugin column added in 5.1.0 reports peak, RMS and delta. A spectrum or a
+scrolling waveform would show *what* a plugin did rather than how much, which is
+the question a delta cannot answer. Deliberately not built: the level numbers
+answered every question this project has actually had, and a scrolling display is
+where the repaint cost would stop being negligible.
 
 Phase numbers refer to the 5.0.0 plan.
 

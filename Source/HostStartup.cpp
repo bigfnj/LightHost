@@ -173,6 +173,7 @@ public:
 private:
     std::unique_ptr<IconMenu> iconMenu;
 
+    juce::int64 lastLogSize = 0;   ///< so the self-test poll re-reads only on growth
     bool selfTest   = false;
     bool renderMode = false;
     juce::File logFile;
@@ -371,9 +372,15 @@ private:
         constexpr int kStepMs   = 100;
         constexpr int kGiveUpMs = 20000;
 
+        // Only re-read when the log has actually grown. This polls up to 200
+        // times, and the file is capped at 256 KB, so re-reading and re-scanning
+        // it every time was up to 50 MB of reads to notice one line appear.
+        const auto size = logFile.existsAsFile() ? logFile.getSize() : 0;
+        const bool grew = size != lastLogSize;
+        lastLogSize = size;
+
         const bool finished =
-            logFile.existsAsFile()
-            && logFile.loadFileAsString().contains ("loadActivePlugins complete");
+            grew && logFile.loadFileAsString().contains ("loadActivePlugins complete");
 
         if (! finished && waitedMs < kGiveUpMs)
         {

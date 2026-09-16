@@ -13,6 +13,42 @@ is no, and what would change it.
 
 ---
 
+## Always-on metering probes — declined 2026-09-16
+
+### What was asked
+
+Whether the per-plugin metering probes added in 5.1.0 should live in the audio
+graph permanently, so that a clip on plugin three is caught even when the signal
+view is closed, or be created only while that column is open.
+
+### Why the answer is "only while open"
+
+The argument for always-on was that the incident which motivated the whole
+feature happened while nobody was watching, so a diagnostic that only works when
+observed is no diagnostic at all. That argument is sound, and it is why the
+**device** meters are always active.
+
+It does not extend to the probes, because the incident was **input** clipping.
+The input meter catches that, and its cost is a SIMD `findMinAndMax` over roughly
+96k samples per second -- unmeasurable. Once the always-on half already covers
+the failure that actually occurred, per-plugin probes have nothing left to earn,
+and N extra nodes scanning every block forever is cost with no return.
+
+The measured cost of the expensive half is what made this decidable rather than a
+matter of taste. Peak is SIMD and effectively free; RMS is a per-sample sum of
+squares, and it is the only part that needed gating. So metering is split by
+what it is for: peak always, RMS only while a visible meter holds a watcher.
+
+### What would change the answer
+
+A plugin that fails intermittently mid-chain, where the failure is not visible at
+the input or the output. Nothing observed so far fits: every problem this project
+has had was visible at one end or the other. If one turns up, always-on probes at
+peak-only cost would be roughly the same price as the device meters, and the
+gating machinery to do it already exists.
+
+---
+
 ## Denoiser selection — Salvor kept, three alternatives declined 2026-09-08
 
 ### What was asked

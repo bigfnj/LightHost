@@ -35,7 +35,7 @@ if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 project(LightHost
-    VERSION 5.0.2
+    VERSION 5.1.0
     DESCRIPTION "Lightweight VST/AU/VST3 Audio Plugin Host"
     HOMEPAGE_URL "https://github.com/BigFNj"
     LANGUAGES C CXX
@@ -88,6 +88,7 @@ juce_add_gui_app(LightHost
 target_sources(LightHost PRIVATE
     Source/HostStartup.cpp
     Source/LookAndFeel.hpp
+    Source/NodeIds.hpp
     Source/OfflineRender.hpp
     Source/PluginStateVault.hpp
     Source/DeviceTap.hpp

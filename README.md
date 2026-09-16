@@ -24,6 +24,7 @@ voice. Set it up once and forget it is running.
 - [Adding plugins](#adding-plugins)
 - [Processing audio from other applications](#processing-audio-from-other-applications-windows)
 - [Lanes, trims and delay compensation](#lanes-trims-and-delay-compensation)
+- [Seeing your own signal](#seeing-your-own-signal)
 - [Testing your chain on a file](#testing-your-chain-on-a-file)
 - [Where your settings live](#where-your-settings-live)
 - [Running more than one instance](#running-more-than-one-instance)
@@ -182,6 +183,51 @@ so a change does not click.
 
 A trim belongs to the lane, not the plugins on it. Empty lane 2 and its trim stays
 put for whatever you add next.
+
+---
+
+## Seeing your own signal
+
+Preferences shows a meter under the input device and another under the output,
+each with a peak reading in dBFS and a **CLIP** badge.
+
+**The badge latches.** It stays lit until you click it, rather than fading once
+the level comes back down. That is deliberate: this feature exists because a
+microphone sat at +30 dB hitting full scale for hours, the application said
+nothing about it, and the first sign of trouble was other people on the call
+saying the audio was unusable. A warning that had cleared itself by the time
+anyone looked would have been the same as no warning.
+
+If the input badge lights, the fix is upstream of Light Host — lower the Windows
+input level for that device. Clipping happens in the converter, before any plugin
+sees a sample, so nothing in the chain can undo it.
+
+### The signal view
+
+`Signal view` in the AUDIO CHAIN header opens a column to the right of the
+window: the input, one row per plugin, then the output. Each row shows peak, RMS,
+and **the change from the row above**.
+
+That last column is the useful one. It answers "which plugin is doing that?"
+directly — a compressor adding 7 dB of make-up gain shows up as `+7.0 dB` on its
+own row, which is otherwise a question that takes an offline render and a script
+to answer.
+
+### What it costs while you are not looking
+
+Light Host is tray-resident and its graph runs whenever an audio device is open,
+so "idle" still means every block is being processed. Metering is therefore split
+by what each part is for:
+
+| | When it runs | Cost |
+|---|---|---|
+| Peak, on the two device meters | Always | A SIMD min/max scan — about 96k samples per second at 48 kHz stereo, several floats per instruction |
+| RMS | Only while a meter is visible | A per-sample sum of squares |
+| Per-plugin probes | Only while the signal view is open | Nothing at all when it is closed — the probes are removed from the graph |
+
+With the window shut, the clip warning still works and everything else is off.
+Closing the signal view returns the graph to exactly what it was before the
+feature existed, which a test asserts rather than assumes.
 
 ---
 
