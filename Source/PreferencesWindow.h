@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Lanes.hpp"
+#include "SignalMetering.hpp"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -56,6 +57,10 @@ public:
             plugin latency is inherent to the plugins and nothing the host can
             compensate on a live monitoring path. */
         std::function<int()> chainLatencySamples,
+        /** The device meters, or nullptr. Borrowed, not owned: they belong to
+            IconMenu, which outlives every Preferences window it opens. */
+        lighthost::metering::Meter* inputMeter,
+        lighthost::metering::Meter* outputMeter,
         std::function<void()> onClose);
 
     ~PreferencesWindow() override;

@@ -1574,6 +1574,8 @@ void IconMenu::showPreferences()
 
             return 0;
         },
+        &getInputMeter(),
+        &getOutputMeter(),
         [safe]()
         {
             if (auto* im = safe.getComponent())

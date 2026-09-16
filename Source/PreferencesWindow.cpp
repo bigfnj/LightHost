@@ -2,6 +2,7 @@
 #include "GainProcessor.hpp"
 #include "LookAndFeel.hpp"
 #include "OfflineRender.hpp"
+#include "SignalMetering.hpp"
 #include "UiMetrics.hpp"
 #include "Lanes.hpp"
 #include <set>
@@ -41,6 +42,249 @@ public:
 private:
     juce::String labelText;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SectionLabel)
+};
+
+//==============================================================================
+// SignalMeter
+//
+// A level readout for one measurement point: a bar, a peak-hold tick, the peak
+// in dBFS, and a clip badge that latches until it is clicked.
+//
+// THE ONE REPEATING TIMER IN THIS APPLICATION
+//
+// LookAndFeel.hpp promises no timers and no animation, and that promise is about
+// the idle cost of a tray-resident application. A meter cannot honour it
+// literally, so it honours the substance: the timer runs only while the
+// component is actually showing, and it holds a Meter::Watch for exactly that
+// long, so the expensive half of the measurement is not even computed when
+// nobody is looking. With the window shut, this costs nothing at all.
+//
+// WHY THE CLIP BADGE LATCHES
+//
+// Because the incident that produced this feature happened while nobody was
+// watching. A badge that decayed would have been clear again long before anyone
+// opened the window, which is the same as not having one.
+//==============================================================================
+class SignalMeter final : public juce::Component,
+                          public juce::SettableTooltipClient,
+                          private juce::Timer
+{
+public:
+    explicit SignalMeter (const juce::String& caption) : label (caption)
+    {
+        setTooltip ("Peak level" + (caption.isEmpty() ? juce::String()
+                                                      : " (" + caption + ")")
+                    + ". Click to clear a latched clip warning.");
+    }
+
+    /** The meter to read. Outlives this component: it belongs to IconMenu. */
+    void setMeter (lighthost::metering::Meter* m)
+    {
+        meter = m;
+        watch.reset();
+        displayPeakDb = lighthost::metering::kFloorDb;
+        clipped = false;
+
+        if (isShowing())
+            beginWatching();
+
+        repaint();
+    }
+
+    void visibilityChanged() override { updateWatchState(); }
+    void parentHierarchyChanged() override { updateWatchState(); }
+
+    ~SignalMeter() override { stopTimer(); }
+
+    void mouseDown (const juce::MouseEvent&) override
+    {
+        if (meter != nullptr)
+            meter->clearClip();
+
+        clipped = false;
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto& laf = getLookAndFeel();
+        const auto bg   = laf.findColour (juce::ResizableWindow::backgroundColourId);
+        const auto text = laf.findColour (juce::Label::textColourId);
+
+        auto area = getLocalBounds();
+
+        if (label.isNotEmpty())
+        {
+            g.setColour (text.withAlpha (0.60f));
+            g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f)));
+            g.drawText (label, area.removeFromLeft (kLabelW),
+                        juce::Justification::centredRight);
+            area.removeFromLeft (6);
+        }
+
+        // Badge and number are pinned to the trailing edge so the bar keeps a
+        // stable zero point as the text width changes.
+        auto badge = area.removeFromRight (kBadgeW);
+        auto number = area.removeFromRight (kNumberW);
+        area.removeFromRight (4);
+
+        drawTrack (g, area.withSizeKeepingCentre (area.getWidth(),
+                                                  metrics::meterTrackHeight), bg);
+        drawNumber (g, number, text);
+        drawBadge (g, badge.reduced (0, 3), text);
+    }
+
+private:
+    void updateWatchState()
+    {
+        if (isShowing())
+            beginWatching();
+        else
+            endWatching();
+    }
+
+    void beginWatching()
+    {
+        if (meter == nullptr || watch != nullptr)
+            return;
+
+        // Holding the Watch is what turns RMS measurement on. Taken here rather
+        // than in the constructor so a panel that exists but is not on screen
+        // costs nothing.
+        watch = std::make_unique<lighthost::metering::Meter::Watch> (meter);
+        startTimerHz (kRefreshHz);
+    }
+
+    void endWatching()
+    {
+        stopTimer();
+        watch.reset();
+    }
+
+    void timerCallback() override
+    {
+        if (meter == nullptr)
+            return;
+
+        // read() is destructive: it takes the peak accumulated since last time.
+        // So it must be called every tick even if nothing is redrawn, or the
+        // next tick would report a stale maximum.
+        const auto r = meter->read();
+
+        const auto previousPeak = displayPeakDb;
+        const auto previousClip = clipped;
+
+        // Rise instantly, fall slowly. A peak that vanished between two frames
+        // is still the most useful number on screen for a moment.
+        displayPeakDb = r.peakDb > displayPeakDb
+                            ? r.peakDb
+                            : juce::jmax (r.peakDb, displayPeakDb - kFallDbPerTick);
+
+        clipped = r.clipped;
+
+        // Repaint only when the drawn result would actually differ. The panel's
+        // convention is to repaint the smallest thing that changed.
+        if (clipped != previousClip || std::abs (displayPeakDb - previousPeak) > 0.09f)
+            repaint();
+    }
+
+    void drawTrack (juce::Graphics& g, juce::Rectangle<int> track, juce::Colour bg) const
+    {
+        const auto trackF = track.toFloat();
+
+        g.setColour (bg.darker (0.55f));
+        g.fillRoundedRectangle (trackF, 2.0f);
+
+        const auto proportion = positionOf (displayPeakDb);
+
+        if (proportion > 0.0f)
+        {
+            g.setColour (colourFor (displayPeakDb));
+            g.fillRoundedRectangle (trackF.withWidth (juce::jmax (2.0f,
+                                                                  trackF.getWidth() * proportion)),
+                                    2.0f);
+        }
+
+        // Scale marks at the decibel values a person actually steers by.
+        g.setColour (bg.brighter (0.25f));
+
+        for (const auto markDb : { -24.0f, -12.0f, -6.0f })
+        {
+            const auto x = trackF.getX() + trackF.getWidth() * positionOf (markDb);
+            g.fillRect (x, trackF.getY(), 1.0f, trackF.getHeight());
+        }
+
+        g.setColour (bg.brighter (0.10f));
+        g.drawRoundedRectangle (trackF, 2.0f, 1.0f);
+    }
+
+    void drawNumber (juce::Graphics& g, juce::Rectangle<int> area, juce::Colour text) const
+    {
+        const auto silent = displayPeakDb <= lighthost::metering::kFloorDb + 0.5f;
+
+        g.setColour (silent ? text.withAlpha (0.35f) : colourFor (displayPeakDb));
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f)));
+        g.drawText (silent ? juce::String ("--")
+                           : juce::String (displayPeakDb, 1),
+                    area, juce::Justification::centredRight);
+    }
+
+    void drawBadge (juce::Graphics& g, juce::Rectangle<int> area, juce::Colour text) const
+    {
+        const auto areaF = area.toFloat();
+
+        if (clipped)
+        {
+            g.setColour (juce::Colour (lighthost::ui::LookAndFeel::kHot));
+            g.fillRoundedRectangle (areaF, 2.0f);
+            g.setColour (juce::Colours::white);
+        }
+        else
+        {
+            g.setColour (text.withAlpha (0.22f));
+            g.drawRoundedRectangle (areaF, 2.0f, 1.0f);
+            g.setColour (text.withAlpha (0.30f));
+        }
+
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (9.5f)
+                                                  .withStyle (clipped ? "Bold" : "Regular")));
+        g.drawText ("CLIP", area, juce::Justification::centred);
+    }
+
+    /** Where a level sits along the bar. Linear in decibels over the visible
+        range, which is what makes the scale marks land where the labels say.
+    */
+    [[nodiscard]] static float positionOf (float decibels)
+    {
+        return juce::jlimit (0.0f, 1.0f, (decibels - kRangeBottomDb)
+                                             / (0.0f - kRangeBottomDb));
+    }
+
+    [[nodiscard]] static juce::Colour colourFor (float decibels)
+    {
+        using LAF = lighthost::ui::LookAndFeel;
+
+        if (decibels >= -3.0f)  return juce::Colour (LAF::kHot);
+        if (decibels >= -12.0f) return juce::Colour (LAF::kCaution);
+
+        return juce::Colour (LAF::kAccent);
+    }
+
+    static constexpr int   kRefreshHz     = 25;
+    static constexpr float kFallDbPerTick = 1.8f;   // ~45 dB/second
+    static constexpr float kRangeBottomDb = -60.0f;
+    static constexpr int   kLabelW        = 26;
+    static constexpr int   kNumberW       = 40;
+    static constexpr int   kBadgeW        = 34;
+
+    juce::String label;
+    lighthost::metering::Meter* meter = nullptr;
+    std::unique_ptr<lighthost::metering::Meter::Watch> watch;
+
+    float displayPeakDb = lighthost::metering::kFloorDb;
+    bool  clipped = false;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SignalMeter)
 };
 
 //==============================================================================
@@ -537,7 +781,9 @@ public:
                             const std::vector<bool>&,
                             const std::vector<int>&)> onApply,
         std::function<void (const juce::PluginDescription&)> onEditPlugin,
-        std::function<int()> chainLatencySamples)
+        std::function<int()> chainLatencySamples,
+        lighthost::metering::Meter* inputMeterToUse,
+        lighthost::metering::Meter* outputMeterToUse)
         : deviceManager (dm),
           knownPlugins   (knownPlugins_),
           laneTrim       (std::move (laneTrimIn)),
@@ -706,6 +952,11 @@ public:
         bufferSizeHeadLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
         bufferSizeHeadLabel.setJustificationType (juce::Justification::centredRight);
 
+        addAndMakeVisible (inputMeter);
+        addAndMakeVisible (outputMeter);
+        inputMeter.setMeter (inputMeterToUse);
+        outputMeter.setMeter (outputMeterToUse);
+
         addAndMakeVisible (latencyHeadLabel);
         addAndMakeVisible (latencyValueLabel);
         latencyHeadLabel.setText ("Latency:", juce::dontSendNotification);
@@ -830,12 +1081,14 @@ public:
         const int aboveChain = kPad
             + statusH                           // status row, when something failed
             + kSectH + kGap + kRowH + kGap     // INPUT
+        + metrics::meterHeight + kGap      // input meter
             + hintH                             // virtual-input hint, when shown
             + kSectH + kGap;                    // AUDIO CHAIN label
 
         const int belowChain = kGap + kRowH + kGap           // Add Plugin row
             + kSectH + kGap + kRowH + kGap                    // LANE TRIM
             + kSectH + kGap + kRowH + kGap                    // OUTPUT
+        + metrics::meterHeight + kGap                     // output meter
             + kSectH + kGap + kRowH + kGap + kRowH + kGap + kRowH + kGap
             + kRowH + kGap                                    // DEVICE SETTINGS
             + kBtnH + kPad;
@@ -877,6 +1130,8 @@ public:
             inputChannelLabel.setBounds (row.removeFromRight (130));
             inputDeviceCombo.setBounds  (row.reduced (0, 2));
         }
+        area.removeFromTop (kGap);
+        inputMeter.setBounds (area.removeFromTop (metrics::meterHeight));
         area.removeFromTop (kGap);
 
         #if JUCE_WINDOWS
@@ -937,6 +1192,8 @@ public:
             outputChannelLabel.setBounds (row.removeFromRight (130));
             outputDeviceCombo.setBounds  (row.reduced (0, 2));
         }
+        area.removeFromTop (kGap);
+        outputMeter.setBounds (area.removeFromTop (metrics::meterHeight));
         area.removeFromTop (kGap);
 
         // ── DEVICE SETTINGS ───────────────────────────────────────────────────
@@ -1068,6 +1325,10 @@ private:
     juce::ComboBox bufferSizeCombo;
     juce::Label    latencyHeadLabel;
     juce::Label    latencyValueLabel;
+
+    // One per device, each sitting with the device it describes.
+    SignalMeter inputMeter  { "in" };
+    SignalMeter outputMeter { "out" };
 
     // Apply button, version label, and the transient Apply confirmation
     juce::TextButton applyButton;
@@ -1712,6 +1973,8 @@ PreferencesWindow::PreferencesWindow (
                         const std::vector<int>&)> onApply,
     std::function<void (const juce::PluginDescription&)> onEditPlugin,
     std::function<int()> chainLatencySamples,
+    lighthost::metering::Meter* inputMeter,
+    lighthost::metering::Meter* outputMeter,
     std::function<void()> onClose)
     : DocumentWindow ("Preferences",
                       juce::LookAndFeel::getDefaultLookAndFeel()
@@ -1722,18 +1985,21 @@ PreferencesWindow::PreferencesWindow (
     auto* content = new PreferencesContentComponent (
         deviceManager, knownPlugins, activeChain, bypassStates, laneStates,
         std::move (laneTrim), std::move (onApply), std::move (onEditPlugin),
-        std::move (chainLatencySamples));
+        std::move (chainLatencySamples), inputMeter, outputMeter);
 
-    // Height budget, from the constants in resized(). Above the chain: 10 pad +
-    // 62 INPUT + 34 virtual-input hint when shown + 28 chain label = 134. Below
-    // it: 40 Add Plugin + 62 LANE TRIM + 62 OUTPUT + 130 DEVICE SETTINGS + 50
-    // buttons and pad = 344. With the chain viewport at its 80px minimum that is
-    // 558 of content, so the default leaves the chain some room beyond the
-    // minimum and the smallest allowed size still fits everything.
+    // Height budget. The authority is fixedLayoutHeight(), not this comment --
+    // which had drifted 34px out of date within one release of being written,
+    // when the Latency row landed and was added to the arithmetic but not to the
+    // prose. What follows is a sanity check on that function, not a second
+    // source of truth.
     //
-    // These numbers were too small before the LANE TRIM section was added: with
-    // the virtual-input hint showing, the default window was already about 28px
-    // short and the sections at the bottom were silently squeezed to nothing.
+    // Above the chain: 10 pad + 62 INPUT + 26 input meter + 34 virtual-input hint
+    // when shown + 28 chain label = 160. Below it: 40 Add Plugin + 62 LANE TRIM +
+    // 62 OUTPUT + 26 output meter + 164 DEVICE SETTINGS including Latency + 50
+    // buttons and pad = 404. With the chain viewport at its 80px minimum that is
+    // 644 of content, so the default below sits just under the preferred height
+    // and the viewport scrolls -- which is what it is for, and why adding a row
+    // no longer means re-deriving a window size.
     constexpr int kDefaultWidth  = 520;
     constexpr int kDefaultHeight = 650;
 

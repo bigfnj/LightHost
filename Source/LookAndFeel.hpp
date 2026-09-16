@@ -50,6 +50,15 @@ public:
     // already filled the bypass tick with; reusing it keeps that agreement.
     static constexpr juce::uint32 kAccent = 0xff4a9eff;
 
+    // Two more, for the level meters only. A meter is the one thing here that
+    // has to say "this is going wrong" without words, and the accent cannot do
+    // that job -- it means "this is the active thing", which is the opposite.
+    //
+    // Kept next to the accent rather than as local statics in the meter, so the
+    // application still has one place that decides what its colours are.
+    static constexpr juce::uint32 kCaution = 0xffe0a83a;   // approaching full scale
+    static constexpr juce::uint32 kHot     = 0xffe05252;   // at it, or clipped
+
     static constexpr float kCornerRadius  = 4.0f;
     static constexpr int   kHeaderPadding = 8;
 

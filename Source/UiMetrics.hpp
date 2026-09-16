@@ -51,4 +51,18 @@ namespace lighthost::ui::metrics
     {
         return pushButtonHeight + pushButtonPadY * 2;
     }
+
+    /** The height a level meter row is laid out at.
+
+        Deliberately shorter than a control row. A meter is a readout, not
+        something to aim at with a mouse, and the Preferences panel had only
+        about 58 px of slack at its default height -- two full rows would not
+        have fitted and would have forced the window taller for no benefit.
+    */
+    inline constexpr int meterHeight = 20;
+
+    /** Height of the bar itself inside a meter row, leaving room for the dB
+        readout and the clip badge beside it to sit on the same baseline.
+    */
+    inline constexpr int meterTrackHeight = 13;
 }
