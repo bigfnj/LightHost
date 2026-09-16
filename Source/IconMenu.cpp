@@ -350,6 +350,10 @@ IconMenu::IconMenu()
 
         if (error.isNotEmpty())
             status.report ("Audio device could not be opened: " + error);
+
+        // Separate from the error above, which cannot catch this: JUCE replaces
+        // that string with the fallback's own result, and the fallback succeeds.
+        reportDeviceSubstitutionIfAny ("startup");
     }
 
     player.setProcessor (&graph);
@@ -1236,6 +1240,33 @@ const std::vector<PluginDescription>& IconMenu::getTimeSortedList() const
     return sortedPluginCache;
 }
 
+void IconMenu::reportDeviceSubstitutionIfAny (const juce::String& contextLabel)
+{
+    const auto stored = getAppProperties().getUserSettings()->getXmlValue ("audioDeviceState");
+    const auto setup  = deviceManager.getAudioDeviceSetup();
+
+    const auto message = lighthost::device::describeSubstitution (
+        lighthost::device::requestedFrom (stored.get()),
+        { setup.inputDeviceName, setup.outputDeviceName });
+
+    const auto described = message.value_or (juce::String());
+
+    // Said once per distinct substitution. The stored request is not rewritten
+    // by the fallback, so without this every subsequent device change would
+    // repeat the same sentence for as long as the device stayed missing.
+    if (described == lastDeviceSubstitution)
+        return;
+
+    lastDeviceSubstitution = described;
+
+    if (described.isEmpty())
+        return;                 // resolved: the requested devices are open again
+
+    juce::Logger::writeToLog ("IconMenu: device substitution at " + contextLabel
+                              + ": " + described);
+    reportStatus (described);
+}
+
 //==============================================================================
 void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
 {
@@ -1278,6 +1309,9 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
         juce::Logger::writeToLog ("IconMenu: audio device change handled for type "
                                   + deviceManager.getCurrentAudioDeviceType());
         logAudioConfig ("device-change");
+
+        // Before the write below, which is what the comparison is against.
+        reportDeviceSubstitutionIfAny ("device-change");
 
         if (auto xml = deviceManager.createStateXml())
         {

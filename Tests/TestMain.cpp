@@ -80,7 +80,8 @@ int main()
         }
     };
 
-    for (const auto* category : { "Gain", "GraphRender", "GraphTopology", "InstanceName", "Metering",
+    for (const auto* category : { "DevicePolicy", "Gain", "GraphRender", "GraphTopology",
+                                  "InstanceName", "Metering",
                                   "PluginChain", "PluginState", "PluginStateVault",
                                   "SampleRate", "Status" })
     {

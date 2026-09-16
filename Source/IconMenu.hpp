@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GainProcessor.hpp"
+#include "DevicePolicy.hpp"
 #include "DeviceTap.hpp"
 #include "Lanes.hpp"
 #include "NodeIds.hpp"
@@ -144,6 +145,19 @@ private:
     void reconnectGraph();
     void autoMatchSampleRate();
     void logAudioConfig (const juce::String& contextLabel) const;
+
+    /** Reports it when the device actually open is not the one that was asked
+        for. See Source/DevicePolicy.hpp for why this cannot be left to JUCE.
+
+        Must run BEFORE the audio device state is written back, because the
+        comparison is against the stored request and saving overwrites it.
+    */
+    void reportDeviceSubstitutionIfAny (const juce::String& contextLabel);
+
+    // The last substitution reported, so a condition that persists across device
+    // changes is stated once rather than on every change. Empty when the open
+    // devices are the ones that were asked for.
+    juce::String lastDeviceSubstitution;
 
     // Watching hosted plugins for changes that invalidate the routing.
     //
