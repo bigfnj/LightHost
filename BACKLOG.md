@@ -4,15 +4,18 @@
 
 **None.**
 
-Emptied 2026-09-16 for 5.2.0, from 24 items. "Empty" was reached four different
-ways, and the difference matters more than the count:
+Emptied 2026-09-16 for 5.2.0, from 24 items. "Empty" was reached six different
+ways, and which one applied matters more than the count -- only seven of the
+twenty-four were defects:
 
 | How | Count | Where it went |
 |---|---|---|
-| Fixed | 10 | [CHANGELOG.md](CHANGELOG.md), `## [5.2.0]` |
-| Made testable instead of checked by hand | 2 | `Tests/ConfirmPolicyTests.cpp`, `Tests/PluginWindowTests.cpp` |
-| Already shipped, or the premise did not hold | 4 | see below |
-| Declined, with reasoning and a reversing trigger | 8 | [DECISIONS.md](DECISIONS.md) |
+| Fixed | 7 | [CHANGELOG.md](CHANGELOG.md), `## [5.2.0]` |
+| Declined, with reasoning and a reversing trigger | 7 | [DECISIONS.md](DECISIONS.md) |
+| Already shipped, or the premise did not hold | 6 | see below |
+| Closed by making it testable rather than checking by hand | 2 | `Tests/ConfirmPolicyTests.cpp`, `Tests/PluginWindowTests.cpp` |
+| Automated so it re-checks itself | 1 | `tools/update-juce.sh` |
+| Moved to the release procedure, because it needs a person | 1 | [RELEASING.md](RELEASING.md) |
 
 Adding to this file is expected and good. It is empty because the items in it
 were dealt with, not because nothing is ever worth writing down.

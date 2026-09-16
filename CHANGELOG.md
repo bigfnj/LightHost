@@ -11,12 +11,19 @@ Nothing yet.
 ## [5.2.0] — 2026-09-16
 
 A backlog-clearing release. `BACKLOG.md` held 24 items; it now holds none, and
-they did not all get there the same way. Nine were real defects and are fixed.
-Two verification gaps were closed by making the thing testable instead of asking
-someone to check it by hand. Five entries were already shipped or rested on a
-premise that did not survive checking. Eight are declined, with the reasoning and
-the trigger that would reverse them recorded in
-[DECISIONS.md](DECISIONS.md) rather than left implied.
+they did not all get there the same way — which is the more useful fact, because
+only seven of the twenty-four were defects.
+
+Seven fixed. Seven declined, with the reasoning and the trigger that would
+reverse each one recorded in [DECISIONS.md](DECISIONS.md) rather than left
+implied. Six already shipped, or resting on a premise that did not survive being
+checked. Two closed by making the thing testable instead of asking someone to
+check it by hand. One automated so it re-checks itself on every dependency bump.
+One moved into the release procedure, because it genuinely needs a person looking
+at a display.
+
+An eighth defect was found during the work, in the plugin scanner, and is fixed
+here too.
 
 Minor rather than patch: the audio device fallback now speaks up, and plugin scan
 failures are reported, both of which change what the application does.
