@@ -50,7 +50,9 @@ voice. Set it up once and forget it is running.
 ### What it is not
 
 Not a DAW, not a recorder, and not a mixer. There is no MIDI routing, no
-side-chain, no metering and no recording. If you need those, you need a DAW.
+side-chain and no recording. Metering is deliberately limited to levels -- see
+"Seeing your own signal" below -- so there is no spectrum, no correlation and no
+loudness measurement. If you need those, you need a DAW.
 
 ---
 
@@ -70,6 +72,20 @@ choices are all restored next launch.
 
 > **Quit from the tray menu**, not by killing the process. That is what writes
 > your plugin settings to disk.
+
+### The first run shows a warning
+
+Release binaries are not code-signed, so Windows SmartScreen will say it stopped
+an unrecognised app the first time you run one. Choose **More info**, then **Run
+anyway**. This is expected and it is not a sign that anything is wrong with the
+download; verify the archive against the `SHA256SUMS` file on the release if you
+want to check what you have. macOS is stricter — see
+[Known limitations](#known-limitations).
+
+Signing is a deliberate omission rather than an oversight. A code-signing
+certificate is a recurring paid subscription tied to a verified legal identity,
+renewed for as long as releases continue, and one SmartScreen click per download
+is not worth that to this project.
 
 ---
 
@@ -388,17 +404,21 @@ If the host disappears without a message, the log is the first place to look.
 ## Known limitations
 
 - **Stereo-focused routing.** Two channels in, two channels out.
-- **No metering.** Lane trims are set by ear or by watching your output device.
+- **Level metering only.** Input, output and per-plugin levels with a clip
+  indicator; no spectrum, phase or loudness display.
 - **No MIDI, no side-chain, no recording, no undo.**
 - **Plugins run in-process.** A plugin that crashes takes the host with it. Real
   sandboxing is a different application, not a fix.
 - **Nothing is code-signed.** Windows shows a SmartScreen warning on first run;
   macOS refuses the app until you right-click → Open or run
   `xattr -dr com.apple.quarantine "Light Host.app"`.
-- **Renaming an audio device** after selecting it can orphan the selection,
-  because JUCE stores the device by display name rather than by a stable id. It
-  falls back to the default device without saying so — check the log if audio
-  turns up somewhere unexpected.
+- **Renaming an audio device** after selecting it orphans the selection,
+  because JUCE stores the device by display name rather than by a stable id.
+  Light Host then reports which device went missing and what is being used
+  instead, in the tray tooltip and the Preferences status row, but it cannot
+  follow the rename automatically — re-select the device. Storing a stable
+  endpoint id would need Windows-only code outside JUCE; assessed in
+  [DECISIONS.md](DECISIONS.md).
 - **No echo cancellation.** If your speakers are audible to your microphone,
   Light Host cannot remove them: cancelling an echo requires knowing what was
   played, and Light Host has no access to that. Use headphones, or leave your

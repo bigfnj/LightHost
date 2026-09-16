@@ -51,5 +51,26 @@ echo "vendored version is now:"
 grep -E "JUCE_(MAJOR_VERSION|MINOR_VERSION|BUILDNUMBER)" \
   "$ROOT/lib/juce/modules/juce_core/system/juce_StandardHeader.h"
 
+# System-audio loopback capture: re-checked on every bump, because the answer can
+# only ever change upstream. Processing audio from other applications needs a
+# third-party virtual input device (VB-CABLE or similar) solely because JUCE's
+# device layer does not expose WASAPI loopback -- Windows has supported it since
+# Vista, so this is a framework gap, not a platform one. Nobody would think to
+# look again, so the script looks for us. Today this finds nothing usable:
+# WASAPIDeviceMode is shared, exclusive and sharedLowLatency, and the string does
+# not appear in the module at all.
+#
+# A non-empty result means the feature request may have become buildable. Read the
+# hits, then revisit the Deferred entry in BACKLOG.md, the "Acoustic echo
+# cancellation" entry in DECISIONS.md (loopback is its prerequisite), and the hint
+# text in Source/PreferencesWindow.cpp that tells users to install a virtual cable.
+echo
+echo "checking whether JUCE has gained system-audio loopback support:"
+if grep -ri loopback "$ROOT/lib/juce/modules/juce_audio_devices"; then
+  echo "  ^^ loopback now appears in juce_audio_devices -- see BACKLOG.md (Deferred)"
+else
+  echo "  nothing (as expected) -- WASAPI loopback is still not exposed by JUCE"
+fi
+
 echo
 echo "next: rm -rf build/release && cmake -S . --preset release && cmake --build build/release --config Release && ctest --test-dir build/release -C Release"

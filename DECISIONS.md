@@ -49,6 +49,286 @@ gating machinery to do it already exists.
 
 ---
 
+## `AudioEngine` extraction — declined 2026-09-16
+
+### What was asked
+
+Split `deviceManager`, `player` and `graph` out of `IconMenu` into a separate
+`AudioEngine` class. `Source/IconMenu.cpp` is 2,200 lines, and the split would
+both shorten it and create a seam a unit test could reach without constructing a
+device manager and a tray icon. It is the remainder of the 5.0.0 plan's Phase 5
+and is still listed in [BACKLOG.md](BACKLOG.md).
+
+### Why the answer is no
+
+**The invariant being moved is four ordering constraints that pull in opposite
+directions, not one.** They all live in `~IconMenu` in `Source/IconMenu.cpp`,
+plus the member declaration order in `Source/IconMenu.hpp`.
+
+**1. The real-time thread has to be severed first.** `deviceManager` is declared
+before `graph`, `player` and `deviceTap`, so it is destroyed after all three.
+Until `deviceManager.removeAudioCallback (&deviceTap)` returns, the device's
+callback thread is still running `DeviceTap` → `AudioProcessorPlayer` → `graph`
+on objects that are about to be destroyed. `removeAudioCallback` blocks on JUCE's
+own lock until any in-flight callback has finished, which is what makes every
+statement after it safe. This was a real crash, fixed in v3.2.0 and written up in
+[CHANGELOG.md](CHANGELOG.md): on a tray-menu quit the window was narrow enough to
+survive sometimes, and on Windows restart or shutdown it was fatal every time,
+because the OS disrupts audio services in parallel with the application's own
+teardown and that widens the race.
+
+**2. `player.setProcessor (nullptr)`.** This drops the player's pointer to
+`graph` at a known statement in the destructor body, rather than leaving it to
+`~AudioProcessorPlayer` — which does exactly the same thing, at a point decided
+by member declaration order rather than by anything visible at the call site.
+
+**3. `removeChangeListener` and `cancelPendingUpdate()` sever the message
+thread**, which is a separate race from the first one and is easy to read as part
+of it. A hosted plugin that re-declares its latency arrives through
+`audioProcessorChanged` on any thread and is deferred to an `AsyncUpdater`; an
+update already queued would otherwise rewire the graph during teardown.
+
+**4. `savePluginStates()` requires the graph to still be alive.** It looks each
+plugin up with `graph.getNodeForId` and asks the processor for
+`getStateInformation`, which only an existing plugin can answer. That is why it
+is the last statement of the destructor body rather than the first.
+
+**Constraint 4 is what makes the split actively dangerous.** The plan in the
+backlog is to move the detach sequence "wholesale into `AudioEngine`'s
+destructor". If `AudioEngine` is a member of `IconMenu`, the body of `~IconMenu`
+runs *before* `~AudioEngine` — so `savePluginStates()` would be calling
+`getStateInformation` on plugins that are still being driven by a live audio
+callback, concurrently with their own `processBlock`. Following the plan as
+written introduces a new data race, in the same destructor whose ordering the
+plan exists to protect, and no compiler warns about any of it. The only correct
+shape is an explicit, idempotent `engine.detach()` as the first statement of
+`~IconMenu`, with the destructor of `AudioEngine` calling it again in case
+nobody did.
+
+**The sanitiser gate offered to justify that risk cannot be built.** The backlog
+proposes running the smoke test under a sanitiser as part of the gate. No CI
+runner has an audio device, so `getCurrentAudioDevice()` returns null and no
+callback thread ever starts. `Source/SelfTest.hpp` says so in its own header
+comment: "This proves the ordering code runs without faulting; it does not
+reproduce the race." An AddressSanitizer job would therefore be green whether or
+not the invariant holds. It would gate nothing while looking like it gated
+something, which is worse than having no gate, because the next person reads a
+green check and believes it.
+
+**ASan is impractical here for a second, independent reason.** This host loads
+third-party VST2 and VST3 plugin DLLs into its own process. ASan's interceptors
+are process-wide, so a plugin with a custom allocator — which is most of them —
+produces reports about code this project did not write and cannot fix, and
+writing suppressions for closed-source binaries is guesswork that has to be
+redone every time a vendor ships an update.
+
+**It could not gate the configuration that ships anyway.** Release on MSVC uses
+`/GL` and `/LTCG` (see `CMakeLists.txt`), which is incompatible with
+`/fsanitize=address`. An instrumented job would be building something other than
+the binary that goes out.
+
+**There is no user-visible payoff.** Every other remaining item in the backlog
+changes what the application does. This one changes how long a file is, which is
+a readability preference, paid for with the worst failure mode in the project.
+
+Two of the three seams the refactor would create have already been collected
+without it. `PreferencesWindow` takes `juce::AudioDeviceManager&` by reference
+rather than reaching into `IconMenu` for it, and the graph's wiring *decision* is
+already a pure function in `Source/GraphTopology.hpp` — `buildConnections` and
+`applyConnections` in the `lighthost::topology` namespace — with its own tests in
+`Tests/GraphTopologyTests.cpp`. What is left unseamed is ownership of the three
+objects, and ownership is the part that carries the shutdown invariant.
+
+### What would change the answer
+
+A way to reproduce the shutdown race automatically: a virtual or loopback audio
+device on a CI runner, opened by the self-test, driving a real callback thread
+through a real teardown. With that in place the invariant becomes testable, the
+sanitiser gate becomes worth building, and the argument against the split is only
+that it is not needed. Failing that, the extraction becoming a prerequisite for a
+feature someone has asked for, rather than for tidiness.
+
+---
+
+## Allocated slot ids and duplicate plugins in one chain — declined 2026-09-16
+
+### What was asked
+
+Two requests that turn out to be one. Let the same plugin appear twice in a
+single chain, and key its settings by an allocated slot id instead of by a hash
+of the plugin's identity, so that relocating a plugin file does not orphan its
+order, lane, bypass and saved state.
+
+### Why the answer is no
+
+**Both are blocked on the same thing: the chain no longer being a
+`juce::KnownPluginList`.** That is recorded in [BACKLOG.md](BACKLOG.md) under
+Deferred as two separate items, which understates how tightly they are coupled.
+
+**The key scheme does collide, and the container is currently hiding it.**
+`chain::Store::identityOf` in `Source/PluginChainStore.hpp` hashes
+`fileOrIdentifier`, `pluginFormatName`, `uniqueId` and `deprecatedUid`. Two
+instances of one plugin agree on every one of those, so they would share one set
+of settings — one order value, one lane, one bypass, one state blob. It is
+unreachable today only because `KnownPluginList::addType` refuses the second
+`addType` outright, comparing with `PluginDescription::isDuplicateOf`, which ties
+`fileOrIdentifier`, `deprecatedUid` and `uniqueId` — the same fields the key is
+built from, less the format. So the container is masking a real defect in the key
+scheme rather than the key scheme being sound. Removing the container unmasks it.
+Slot ids are a prerequisite for duplicates, not a follow-up, and the two have to
+land in the same change.
+
+**`KnownPluginList` is load-bearing for three things beyond uniqueness.** It is
+the entire on-disk format of chain membership: `pluginListActive` is whatever
+`createXml` produced, read back by `recreateFromXml`. It broadcasts its own
+changes, and `IconMenu::changeListenerCallback` turns that broadcast into the
+settings write, so three mutation sites in `Source/IconMenu.cpp` — the tray
+delete, and the add and remove halves of `applyPluginChain` — persist the chain
+without asking; each carries a comment saying so, and each would have to grow an
+explicit save. And four places in the tree are coupled to that XML shape, in
+three different ways: `Source/IconMenu.cpp` decodes it into the live
+`activePluginList`, `Source/OfflineRender.hpp` constructs throwaway
+`KnownPluginList` objects purely to parse it (one for the chain, one for the
+scanned list), `Source/SelfTest.hpp` constructs one purely to *write* a fixture
+in the 4.0.3 format, and `Tests/PluginChainStoreTests.cpp` hard-codes the
+`KNOWNPLUGINS` element name as a string literal. A replacement container has to
+satisfy all four.
+
+**The settings format is versioned but the migration hook cannot carry this.**
+`chain::Store` has `kFormatVersion` and stores it under `chainSettingsVersion`,
+which looks like the mechanism for exactly this change. It is not, for two
+reasons. `pluginListActive` sits outside the store entirely — `purgeLegacyKeys`
+is explicitly written so the prefix cannot match it — so the store's migration
+never sees the part of the format that would be changing. And `migrateIfNeeded`
+is a single monolithic step guarded by `if (formatVersion() >= kFormatVersion)`,
+so bumping the version re-runs the 4.0.3 key migration and `purgeLegacyKeys` on
+every install that has already been migrated. That is harmless today, because
+there is nothing left for it to find, but it means the version number cannot be
+used for its purpose until it is split into per-step migrations.
+
+**Nothing has asked for either.** The settings-loss case the slot ids would fix
+requires a user to move their plugin folder, which nobody has reported. There is
+no UI blocker worth counting against it — the active chain is a hand-written
+component, not a `PluginListComponent`, so it has no opinion about uniqueness —
+which means the whole cost sits in the settings format and the persistence
+broadcast, and none of it buys anything anyone currently wants.
+
+### What would change the answer
+
+A report of chain settings lost after moving a plugin folder, which is the defect
+the allocated ids exist to fix, or a genuine need for two instances of one plugin
+in one chain. Either one makes the container change worth doing, and it has to be
+done once for both.
+
+---
+
+## Endpoint-id audio device selection — declined for now 2026-09-16
+
+### What was asked
+
+Store a stable Windows audio endpoint id alongside the device name, so that
+renaming a device — or a driver renaming it — does not silently select a
+different device on the next launch.
+
+### Why the answer is no
+
+**JUCE identifies audio devices by display name only.** `AudioDeviceSetup`
+carries `inputDeviceName` and `outputDeviceName` and nothing else that identifies
+a device. The persisted state is a `DEVICESETUP` element with
+`audioInputDeviceName` and `audioOutputDeviceName` attributes and no id, written
+and read in `juce_AudioDeviceManager.cpp` under
+`lib/juce/modules/juce_audio_devices/audio_io`. A name is the only thing there is
+to store.
+
+**No public JUCE API exposes or accepts an audio endpoint id.** JUCE does
+precisely the id-then-name fallback being asked for, but only for MIDI:
+`openLastRequestedMidiDevices` matches on `MidiDeviceInfo::identifier` first and
+falls back to the name. There is no audio equivalent. The WASAPI backend does
+hold the endpoint ids — `IMMDevice::GetId`, `PKEY_Device_FriendlyName` and
+`appendNumbersToDuplicates` are all in `juce_WASAPI_windows.cpp` — but they live
+in a structure local to that file and are not reachable from this project without
+patching the vendored tree, which `tools/update-juce.sh` would discard on the
+next bump.
+
+**Doing it outside JUCE means duplicating that backend.** Windows COM
+(`IMMDeviceEnumerator`, `IMMDevice::GetId`, `PKEY_Device_FriendlyName`), a new
+settings key with its own migration, and a reimplementation of JUCE's
+`appendNumbersToDuplicates` suffixing so an endpoint id maps back to the exact
+string the device list shows for two endpoints that share a friendly name. It
+would be WASAPI-only, because an ASIO device name is a driver name and has no
+endpoint behind it, and it would be untestable on CI, which has no real
+endpoints. That is a Windows-specific reimplementation of vendored code, to fix a
+problem that has been reported zero times.
+
+**5.2.0 fixes the harm instead of the mechanism.** The damage was never the
+fallback itself — falling back to the default device is the right behaviour when
+the requested one is gone. The damage was that it happened in silence, so audio
+turned up somewhere unexpected with nothing on screen to explain it.
+`Source/DevicePolicy.hpp` now compares the requested names from the stored
+`DEVICESETUP` against the names actually open, and reports the difference by
+name: which role changed, what was asked for, and what is being used instead.
+It is said once per distinct substitution rather than on every device change,
+because the stored request is deliberately not rewritten by the fallback. A user
+who can see that their interface is missing can re-select it; a user who cannot
+see it has no way to know there is anything to do.
+
+### What would change the answer
+
+JUCE exposing a stable audio device identifier, which turns this into the same
+few lines the MIDI path already has. Or the reported fallback proving
+insufficient in practice — someone seeing the message, and still ending up on the
+wrong device without understanding why.
+
+---
+
+## Dry/wet, a spectrum view, out-of-process hosting — declined 2026-09-16
+
+### What was asked
+
+Three separate requests, each small enough that the reasoning fits in a
+paragraph, recorded together so none of them has to be re-derived.
+
+### Why the answer is no
+
+**Dry/wet per lane.** Nothing has asked for it. It also is not the UI addition it
+looks like: `buildConnections` in `Source/GraphTopology.hpp` groups only nodes
+that can pass audio into lanes, so a lane with no plugin in it does not appear in
+the graph at all and its trim node is left unwired. A blend against the
+unprocessed input therefore needs new wiring — a path from the input node to the
+lane's summing point that the function never builds today — rather than a control
+hung off something that already exists. And the plugins in the chain that would
+want it carry their own mix controls, which is the normal place for a wet/dry
+blend to live.
+
+**A spectrum or waveform signal view.** The signal view added in 5.1.0 answers
+the question that was actually being asked, which was *where in the chain the
+level changes* — the delta column exists because working out that one plugin was
+adding 7 dB took a paced offline render and an analysis script when the number
+was one hop away in the graph. A spectrum answers a different question, and costs
+an FFT per probe on the audio thread. That is a different cost class from peak
+metering, and the cost is exactly what was scoped in "Always-on metering probes"
+above: peak is a SIMD `findMinAndMax` and effectively free, RMS is a per-sample
+sum of squares and had to be gated on a visible watcher. An FFT per probe per
+block sits above both.
+
+**Out-of-process plugin hosting.** It is the one item here with a real benefit:
+plugins run in-process, so a plugin that crashes takes the host with it, and a
+child process would make that survivable. It is also a different application, as
+[BACKLOG.md](BACKLOG.md) already records — IPC carrying audio under a real-time
+deadline, embedding a plugin editor across a process boundary, and a new failure
+mode to design for when the child dies and the chain has to carry on without it.
+Real sandboxing is not a fix to this program; it is a different one.
+
+### What would change the answer
+
+For dry/wet, someone wanting parallel processing where the plugins involved have
+no mix control of their own. For the spectrum, a problem that peak and RMS per
+plugin demonstrably cannot diagnose. For out-of-process hosting, nothing short of
+deciding to build a different application; a specific plugin crashing repeatedly
+would be worth removing from the chain rather than worth sandboxing.
+
+---
+
 ## Denoiser selection — Salvor kept, three alternatives declined 2026-09-08
 
 ### What was asked
