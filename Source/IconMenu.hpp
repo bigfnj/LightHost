@@ -168,6 +168,13 @@ private:
     void listenTo (juce::AudioProcessor& processor);
     void stopListeningTo (NodeID nodeId);
 
+    /** Detaches this listener from every processor currently in the graph.
+
+        Called before graph.clear(), so a chain reload is not holding a listener
+        registration on processors that are being destroyed.
+    */
+    void stopListeningToAll();
+
     #if JUCE_WINDOWS
     [[nodiscard]] static juce::File getStartupShortcutPath();
     [[nodiscard]] bool isStartupEnabled() const;

@@ -38,10 +38,15 @@ public:
         const File deadMansPedalFile (getAppProperties().getUserSettings()
             ->getFile().getSiblingFile ("RecentlyCrashedPluginsList"));
 
-        setContentOwned (new AugmentedPluginListComponent (pluginFormatManager,
-                                                            owner.knownPluginList,
-                                                            deadMansPedalFile,
-                                                            getAppProperties().getUserSettings()),
+        setContentOwned (new AugmentedPluginListComponent (
+                             pluginFormatManager,
+                             owner.knownPluginList,
+                             deadMansPedalFile,
+                             getAppProperties().getUserSettings(),
+                             [&ownerRef = owner] (const String& message)
+                             {
+                                 ownerRef.reportStatus (message);
+                             }),
                          true);
 
         setUsingNativeTitleBar (true);
@@ -92,11 +97,14 @@ private:
         AugmentedPluginListComponent (AudioPluginFormatManager& fmgr,
                                       KnownPluginList& kpl,
                                       const File& deadMansFile,
-                                      PropertiesFile* propsFile)
+                                      PropertiesFile* propsFile,
+                                      std::function<void (const String&)> reporter)
             : PluginListComponent (fmgr, kpl, deadMansFile, propsFile),
               formatManager (fmgr),
               knownList     (kpl),
-              deadMansPedal (deadMansFile)
+              deadMansPedal (deadMansFile),
+              properties    (propsFile),
+              report        (std::move (reporter))
         {
             // Replace the built-in Options button onClick so we can append our item.
             getOptionsButton().onClick = [this]
@@ -159,6 +167,8 @@ private:
         AudioPluginFormatManager&    formatManager;
         KnownPluginList&             knownList;
         File                         deadMansPedal;
+        PropertiesFile*              properties = nullptr;
+        std::function<void (const String&)> report;
         std::unique_ptr<FileChooser> chooser;
 
         //----------------------------------------------------------------------
@@ -177,6 +187,8 @@ private:
 
             void run() override
             {
+                const auto before = knownList.getNumTypes();
+
                 for (int i = 0; i < formatManager.getNumFormats(); ++i)
                 {
                     auto* fmt = formatManager.getFormat (i);
@@ -184,18 +196,37 @@ private:
 
                     FileSearchPath path;
                     path.add (scanDir);
+
+                    // true = recursive, matching what JUCE hard-codes for its own
+                    // scan. A folder holding plugins in per-vendor subdirectories
+                    // is therefore found from the parent, and the stored path does
+                    // not have to name each subdirectory.
                     PluginDirectoryScanner scanner (knownList, *fmt, path, true, deadMansPedal);
                     String name;
                     while (! threadShouldExit() && scanner.scanNextFile (true, name))
                         setStatusMessage ("Scanning: " + name);
+
+                    // Kept, not discarded. These are files that looked like
+                    // plugins and would not load. JUCE surfaces them after its own
+                    // scan; a custom-folder scan used to drop them, so a folder
+                    // where every plugin failed presented exactly like a folder
+                    // that was scanned cleanly.
+                    failed.addArray (scanner.getFailedFiles());
                 }
+
+                added = jmax (0, knownList.getNumTypes() - before);
             }
+
+            [[nodiscard]] const StringArray& getFailedFiles() const noexcept { return failed; }
+            [[nodiscard]] int getNumAdded() const noexcept                   { return added; }
 
         private:
             AudioPluginFormatManager& formatManager;
             KnownPluginList&          knownList;
             File                      deadMansPedal;
             File                      scanDir;
+            StringArray               failed;
+            int                       added = 0;
         };
 
         //----------------------------------------------------------------------
@@ -211,9 +242,74 @@ private:
                 {
                     const auto dir = fc.getResult();
                     if (! dir.isDirectory()) return;
+
                     ScanJob job (formatManager, knownList, deadMansPedal, dir);
-                    job.runThread();
+
+                    if (! job.runThread())
+                        return;                       // cancelled from the dialog
+
+                    rememberSearchPath (dir);
+                    reportScanOutcome (dir, job.getNumAdded(), job.getFailedFiles());
                 });
+        }
+
+        /** Adds a hand-picked folder to the stored search path of every format
+            that can scan.
+
+            Without this the folder was scanned once and then forgotten: the
+            standard "Scan for new or updated plug-ins" item never looked there
+            again, so an updated plugin in a custom folder silently kept the
+            description recorded the first time.
+        */
+        void rememberSearchPath (const File& dir)
+        {
+            if (properties == nullptr)
+                return;
+
+            for (int i = 0; i < formatManager.getNumFormats(); ++i)
+            {
+                auto* fmt = formatManager.getFormat (i);
+
+                if (fmt == nullptr || ! fmt->canScanForPlugins())
+                    continue;
+
+                auto path = getLastSearchPath (*properties, *fmt);
+
+                // Scanning is recursive, so a parent already in the path covers
+                // this folder and adding it would only make the list longer.
+                if (path.isFileInPath (dir, true))
+                    continue;
+
+                path.addIfNotAlreadyThere (dir);
+                setLastSearchPath (*properties, *fmt, path);
+            }
+        }
+
+        /** Reports a scan that did not go cleanly. A scan that worked says
+            nothing: the table itself is the result.
+        */
+        void reportScanOutcome (const File& dir, int added, const StringArray& failed)
+        {
+            if (! report)
+                return;
+
+            if (failed.isEmpty())
+            {
+                if (added == 0)
+                    report ("No plugins found in " + dir.getFileName());
+
+                return;
+            }
+
+            StringArray names;
+
+            for (const auto& f : failed)
+                names.add (File (f).getFileName());
+
+            report (String (failed.size())
+                    + (failed.size() == 1 ? " plugin in " : " plugins in ")
+                    + dir.getFileName() + " could not be loaded: "
+                    + names.joinIntoString (", "));
         }
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AugmentedPluginListComponent)
@@ -376,6 +472,21 @@ void IconMenu::loadActivePlugins()
     nextLoadIndex = 0;
     statesNotRestored.clear();   // fresh graph — no failed restores to remember yet
 
+    // Stop anything that could rewire the graph while it is being replaced.
+    //
+    // The generation bump above defuses a late createPluginInstanceAsync
+    // callback, but not the AsyncUpdater: audioProcessorChanged fires it
+    // whenever a hosted plugin reports a latency change, and plugins commonly
+    // report one as their editor closes -- which is precisely what the next line
+    // does. ~IconMenu has always cancelled it for the same reason; this path
+    // never did, leaving one re-entrancy channel the generation counter does not
+    // cover.
+    cancelPendingUpdate();
+
+    // And stop listening before the processors are destroyed, rather than
+    // relying on ~AudioProcessor to unregister us.
+    stopListeningToAll();
+
     sortedCacheDirty = true;
     PluginWindow::closeAllCurrentlyOpenWindows();
     graph.clear();
@@ -425,10 +536,19 @@ void IconMenu::loadActivePlugins()
             // Falls back to the pre-5.0.0 key, so a migration that could not
             // write its file presents as a plugin that still has its preset
             // rather than one that lost it.
-            const auto legacy = store.readState (plugin);
+            if (lighthost::state::decodeLegacyState (store.readState (plugin), savedState)
+                    == lighthost::state::DecodeResult::failed)
+            {
+                // Something is stored and will not decode. It is the only copy,
+                // so record the node as un-restored: savePluginStates skips
+                // those, and without this the plugin loaded at factory defaults
+                // and then wrote them over the user's preset on the next save.
+                statesNotRestored.insert (static_cast<uint32> (nodeIdVal));
 
-            if (legacy.isNotEmpty())
-                savedState.fromBase64Encoding (legacy);
+                juce::Logger::writeToLog ("IconMenu: " + plugin.name
+                                          + " has legacy state that will not decode;"
+                                            " loading defaults and preserving the blob");
+            }
         }
 
         pendingLoads.push_back ({ plugin,
@@ -754,19 +874,19 @@ void IconMenu::migrateStateToVault()
 
     for (const auto& plugin : activePluginList.getTypes())
     {
-        const auto legacy = store.readState (plugin);
-
-        if (legacy.isEmpty())
-            continue;
-
         MemoryBlock block;
-        block.fromBase64Encoding (legacy);
 
-        if (block.getSize() == 0)
+        switch (lighthost::state::decodeLegacyState (store.readState (plugin), block))
         {
-            // Undecodable. Leave it: it is the only copy there is.
-            ++stayed;
-            continue;
+            case lighthost::state::DecodeResult::decoded:
+                break;
+
+            case lighthost::state::DecodeResult::nothingSaved:
+                continue;                 // nothing was ever stored here
+
+            case lighthost::state::DecodeResult::failed:
+                ++stayed;                 // undecodable, and the only copy there is
+                continue;
         }
 
         const auto identity = ChainStore::identityOf (plugin);
@@ -840,6 +960,13 @@ void IconMenu::listenTo (AudioProcessor& processor)
 void IconMenu::stopListeningTo (NodeID nodeId)
 {
     if (auto* node = graph.getNodeForId (nodeId))
+        if (auto* processor = node->getProcessor())
+            processor->removeListener (this);
+}
+
+void IconMenu::stopListeningToAll()
+{
+    for (auto* node : graph.getNodes())
         if (auto* processor = node->getProcessor())
             processor->removeListener (this);
 }
@@ -1204,7 +1331,13 @@ void IconMenu::timerCallback()
     menu.addSeparator();
     menu.addItem (3, "Quit");
 
-    #if JUCE_MAC || JUCE_LINUX
+    // Negative form on purpose. The #else reaches GetCursorPos, which exists
+    // only on Windows, so every platform that is not Windows belongs above --
+    // spelled as a list, this said "JUCE_MAC || JUCE_LINUX" and sent BSD into
+    // the Win32 branch, where it could not compile. The confirmation dialog two
+    // functions down had already been fixed to handle JUCE_BSD; this had not,
+    // so the two disagreed about which platforms exist.
+    #if ! JUCE_WINDOWS
     menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this),
                         ModalCallbackFunction::forComponent (menuInvocationCallback, this));
     #else

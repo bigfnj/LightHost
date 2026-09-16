@@ -2,6 +2,7 @@
 #include "GainProcessor.hpp"
 #include "LookAndFeel.hpp"
 #include "OfflineRender.hpp"
+#include "PluginChainStore.hpp"
 #include "SignalMetering.hpp"
 #include "UiMetrics.hpp"
 #include "Lanes.hpp"
@@ -2243,10 +2244,28 @@ private:
 
     void showAddPluginMenu()
     {
-        // Build set of already-staged plugins for greying-out
+        // Which plugins are already staged, so their menu entries can be greyed.
+        //
+        // Uses the settings store's definition of "the same plugin" rather than a
+        // second one written here. This was
+        //
+        //     fileOrIdentifier + pluginFormatName + name
+        //
+        // spelled out twice in this function, and it disagreed with identityOf in
+        // both directions. It included `name`, so a plugin renamed by an update
+        // read as a different plugin and could be added a second time even though
+        // the store would then treat both rows as one. And it omitted the unique
+        // ids, which are the only thing telling apart the several plugins a shell
+        // plugin packs into one file, so two of those sharing a display name
+        // greyed each other out.
+        const auto identityOf = [] (const juce::PluginDescription& pd)
+        {
+            return lighthost::chain::Store::identityOf (pd);
+        };
+
         std::set<juce::String> active;
         for (const auto& p : chainList.items)
-            active.insert (p.fileOrIdentifier + p.pluginFormatName + p.name);
+            active.insert (identityOf (p));
 
         // Sort available plugins: manufacturer then name
         auto types = knownPlugins.getTypes();
@@ -2292,8 +2311,7 @@ private:
 
             // Ids are 1-based indices into `types`, which the callback below
             // relies on, so this counter must advance once per plugin in order.
-            const auto key = pd.fileOrIdentifier + pd.pluginFormatName + pd.name;
-            subMenu.addItem (id++, pd.name, active.count (key) == 0);
+            subMenu.addItem (id++, pd.name, active.count (identityOf (pd)) == 0);
         }
 
         if (groupStarted)

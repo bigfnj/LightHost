@@ -57,6 +57,30 @@ void PluginWindow::closeAllCurrentlyOpenWindows()
             delete windows.getUnchecked (i);
 
         #if JUCE_MODAL_LOOPS_PERMITTED
+        // Gives the message queue one turn before the caller destroys the
+        // processors these editors belonged to.
+        //
+        // What it is for: a plugin's editor is its own UI toolkit, not ours.
+        // Closing one can leave posted messages or COM releases outstanding that
+        // want delivering before the AudioProcessor underneath goes away. This
+        // host loads plugins in-process, so that clean-up runs here or not at
+        // all. Current JUCE's equivalent (PluginGraph::closeAnyOpenPluginWindows)
+        // does not pump, and neither does closeCurrentlyOpenWindowsFor below --
+        // which is suggestive, but three no-pump call sites closing one node's
+        // windows is weaker evidence than it looks. Removing this needs a soak
+        // across real VST2 and browser-hosting editors, not an argument.
+        //
+        // What cannot run during it: the modal state is the point. It installs
+        // isEventBlockedByModalComps, so user input to other windows is swallowed
+        // while internal messages, timers and window destruction still flow. The
+        // caller is expected to have quiesced its own rewiring first --
+        // IconMenu::loadActivePlugins cancels its AsyncUpdater and detaches its
+        // processor listeners immediately before calling this, so a plugin
+        // reporting a latency change on the way out cannot rebuild a graph that
+        // is about to be cleared.
+        //
+        // The graph itself is still whole here. This runs between editor
+        // teardown and graph teardown, not during it.
         Component dummyModalComp;
         dummyModalComp.enterModalState();
         MessageManager::getInstance()->runDispatchLoopUntil (50);

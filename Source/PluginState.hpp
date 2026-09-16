@@ -22,6 +22,20 @@ namespace lighthost::state
         failed         // decode produced nothing, or setStateInformation threw
     };
 
+    /** Outcome of recovering bytes from a pre-5.0.0 base64 blob.
+
+        Separate from RestoreResult on purpose. Decoding is not restoring, and
+        folding a fourth value into RestoreResult left the switch in
+        IconMenu::restorePluginState quietly non-exhaustive -- it has no default,
+        so a new value there is a case that compiles and does nothing.
+    */
+    enum class DecodeResult
+    {
+        decoded,       // destination holds the state
+        nothingSaved,  // the string was empty; nothing was ever stored
+        failed         // something was stored and will not decode
+    };
+
     /** Applies raw state bytes to a processor. Never throws: a throwing plugin
         yields RestoreResult::failed, which the caller must treat as "do not
         overwrite the saved blob".
@@ -47,34 +61,70 @@ namespace lighthost::state
         }
     }
 
+    //==========================================================================
+    /** Decodes a pre-5.0.0 base64 state blob into raw bytes.
+
+        Three outcomes, and the caller has to tell them apart:
+
+          nothingSaved  the string was empty. No preset was ever stored, so
+                        factory defaults are the right answer and saving over
+                        it later is harmless.
+
+          failed        something WAS stored and will not decode. The bytes are
+                        unusable but they are also the only copy there is, so
+                        the caller must not overwrite them.
+
+          decoded       `destination` holds the state.
+
+        Sharing this mattered more than it looks. Both callers used to decode
+        inline, and they disagreed: the migration checked the result and left an
+        undecodable blob alone, while the load path discarded the return value of
+        fromBase64Encoding entirely. That second one lost data. An undecodable
+        legacy blob produced an empty MemoryBlock, restoreInto reported
+        `nothingSaved` rather than `failed`, the node never landed in
+        statesNotRestored, and the next savePluginStates wrote the plugin's
+        factory defaults over the user's only copy of the preset -- which is the
+        exact failure mode the note at the top of this file exists to prevent,
+        reached through the one door that was not guarded.
+    */
+    [[nodiscard]] inline DecodeResult decodeLegacyState (const juce::String& base64State,
+                                                         juce::MemoryBlock& destination)
+    {
+        destination.reset();
+
+        if (base64State.isEmpty())
+            return DecodeResult::nothingSaved;
+
+        // Both halves matter: fromBase64Encoding returns false on a malformed
+        // string, and a string of only invalid characters decodes to zero bytes
+        // while still returning true.
+        if (! destination.fromBase64Encoding (base64State) || destination.getSize() == 0)
+        {
+            destination.reset();
+            return DecodeResult::failed;
+        }
+
+        return DecodeResult::decoded;
+    }
+
     /** Applies base64-encoded state, as stored before 5.0.0.
 
-        Used only by the tests. The claim this comment used to make -- that the
-        migration reads that format through here, and that un-migrated state is
-        still loaded through here -- was not true of either caller: both
-        IconMenu::migrateStateToVault and IconMenu::loadActivePlugins decode the
-        base64 themselves and then call the MemoryBlock overload above.
-
-        Kept rather than deleted because it is the only place the decode-failure
-        rule is stated once and tested, and because those two call sites should
-        eventually come through here instead of repeating the decode. Recorded in
-        BACKLOG.md so that is a decision rather than a leftover.
-
-        Note the asymmetry with the overload above: state that fails to decode is
-        `failed`, not `nothingSaved`. Something was stored and could not be used,
-        and the caller must not overwrite it.
+        A thin façade over decodeLegacyState plus the MemoryBlock overload. It
+        exists because the tests drive the decode rules through it, which means
+        those tests now cover the same decoder the two production call sites use
+        rather than a parallel copy of it.
     */
     [[nodiscard]] inline RestoreResult restoreInto (juce::AudioProcessor& processor,
                                                     const juce::String& base64State)
     {
-        if (base64State.isEmpty())
-            return RestoreResult::nothingSaved;
-
         juce::MemoryBlock block;
-        block.fromBase64Encoding (base64State);
 
-        if (block.getSize() == 0)
-            return RestoreResult::failed;
+        switch (decodeLegacyState (base64State, block))
+        {
+            case DecodeResult::decoded:      break;
+            case DecodeResult::nothingSaved: return RestoreResult::nothingSaved;
+            case DecodeResult::failed:       return RestoreResult::failed;
+        }
 
         return restoreInto (processor, block);
     }
