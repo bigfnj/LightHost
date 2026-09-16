@@ -1,35 +1,90 @@
-# Backlog — Light Host
+# Backlog
 
-State as of 2026-08-27. What has already shipped is in
-[CHANGELOG.md](CHANGELOG.md); everything below is what is still outstanding.
+## Open items
 
-## Where this stands
+**None.**
 
-5.0.0 is tagged and released. `CMakeLists.txt` carries `VERSION 5.0.0`, which is
-the only place the version lives.
+Emptied 2026-09-16 for 5.2.0, from 24 items. "Empty" was reached four different
+ways, and the difference matters more than the count:
 
-### Not yet verified
+| How | Count | Where it went |
+|---|---|---|
+| Fixed | 10 | [CHANGELOG.md](CHANGELOG.md), `## [5.2.0]` |
+| Made testable instead of checked by hand | 2 | `Tests/ConfirmPolicyTests.cpp`, `Tests/PluginWindowTests.cpp` |
+| Already shipped, or the premise did not hold | 4 | see below |
+| Declined, with reasoning and a reversing trigger | 8 | [DECISIONS.md](DECISIONS.md) |
 
-- **Windows only for local builds.** Linux and macOS have never been built on a
-  developer machine; CI is the only evidence for those.
-- **The JUCE 9 manual checklist is only partly run.** 9.0.0 rewrote the SVG parser
-  and reworked the software renderer. The tray icon, right-click menu, Preferences
-  and several plugin editors have all been exercised in real use on Windows at
-  100% DPI. Still unchecked: 150% DPI, and a light taskbar.
-- **The delete-plugin-states confirmation has not been seen on Linux or macOS.**
-  Its button order is chosen per platform (see the comment in `IconMenu.cpp`)
-  because the platforms disagree about what a dismissed dialog reports. The
-  Windows path is exercised; the others are reasoned from JUCE's source, not
-  observed.
+Adding to this file is expected and good. It is empty because the items in it
+were dealt with, not because nothing is ever worth writing down.
 
-### Verified 2026-09-16
+### Two of them were misdiagnosed, which is worth remembering
+
+**"VST2 scanning does not descend into subdirectories" was not a defect.**
+`PluginDirectoryScanner` is constructed with `recursive = true` in both scan
+paths — JUCE hard-codes it for its own scan, and our custom-folder scan passes
+it — and the nine ReaPlugs DLLs were already present in the scanned list, found
+from the parent folder one level down, while the stored search path named only
+that parent. The entry appears to have been written from looking at the folder
+picker rather than from a scan that missed files. Two real defects were found
+next to it and fixed instead: failed plugin loads were discarded, and a custom
+folder was never stored so it was never re-scanned.
+
+**"A nested dispatch loop runs in the middle of a graph teardown" overstated
+where it runs.** The message pump in `PluginWindow::closeAllCurrentlyOpenWindows`
+runs *before* `graph.clear()`, so the graph is whole throughout — it sits between
+editor teardown and graph teardown, not inside one. The real gap was next to it
+and is fixed: the chain reload never cancelled its async updater, which a hosted
+plugin triggers when it reports a latency change on the way out. The pump itself
+is kept and now documented. Removing it would need a soak across real VST2 and
+browser-hosting editors, because whether any plugin needs a message-loop turn
+between its editor and its processor being destroyed is not answerable by reading
+code.
+
+### Three were stale rather than outstanding
+
+Per-plugin and device metering shipped in 5.1.0. Rewriting every plugin's state
+on every edit stopped in 5.0.0, when state moved to a file per plugin. The
+release procedure works — three releases have gone through it — and
+`RELEASING.md` has been rewritten to describe what is actually done rather than
+a release-candidate process that is not used.
+
+---
+
+## What has been verified, and how
+
+Kept because these were open questions for a long time and the answers should not
+have to be rediscovered. This is a record, not a work list.
+
+### Verified 2026-09-16 (5.2.0)
+
+- **The device-substitution report works on a real fallback.** The stored request
+  was pointed at a device that does not exist and the application launched
+  against it: both the input and the output substitution were named in the log
+  and raised through the status sink. Both sides move, because JUCE falls back to
+  the default device for each — which is what made the original incident send a
+  microphone chain to room speakers.
+- **It does not cry wolf.** The same build launched against the real settings,
+  with both requested devices present, reported nothing.
+- **The live chain is not byte-reproducible, and the regression gate does not
+  pretend otherwise.** Four paced renders of one input: ReaEQ gave one hash 4/4
+  times, Salvor gave two. This happens while the renderer reports a realtime
+  factor of 1.000 with no blocks behind, so "kept pace" does not imply
+  reproducible — the inference runs on a worker thread and lands on slightly
+  different block boundaries. `tools/render-regression.sh` therefore gates on a
+  deterministic reference chain, which still exercises everything in the host.
+- **Nothing in 5.2.0 changed a sample.** The render regression was checked after
+  every phase and stayed identical throughout.
+- **The confirmation dialog's button order is now checked by CI on all three
+  platforms**, rather than needing a person at a Linux machine to dismiss a
+  dialog and see what happened.
+
+### Verified 2026-09-16 (5.1.0)
 
 - **Plugin state is no longer copied three times per load.** It is moved into the
   async creation lambda; a real state measured 4,126,524 bytes, so a five-plugin
   chain was copying tens of megabytes on the message thread at startup.
 - **The self-test log poll re-reads only when the file grows**, rather than
   reading and scanning a 256 KB file up to 200 times per run.
-
 - **Metering does not alter the audio.** A fixed input renders byte-identical
   through `--render` before and after every phase of the 5.1.0 work, and a
   topology test asserts that a chain with no probes wires exactly as it did
@@ -41,9 +96,6 @@ the only place the version lives.
   API this codebase does not use.
 
 ### Verified 2026-09-08
-
-Recording these because they were open questions for a long time and the answers
-should not have to be rediscovered.
 
 - **Real plugins load and run.** Salvor, smartChain, Alt Denoiser and three Elgato
   plugins have all been instantiated through this code, live and through the
@@ -58,215 +110,22 @@ should not have to be rediscovered.
 - **The graph's inter-lane compensation is correct** and the host adds none of its
   own, which is what fixed the double-padding bug from 4.0.3.
 
-## Bugs
+---
 
-### A nested dispatch loop runs in the middle of a graph teardown
+## Standing checks
 
-`PluginWindow::closeAllCurrentlyOpenWindows` (`Source/PluginWindow.cpp`) enters a
-modal state and calls `runDispatchLoopUntil (50)`. `JUCE_MODAL_LOOPS_PERMITTED=1`
-is set, so this is compiled, and `IconMenu::loadActivePlugins` calls it between
-closing the editors and `graph.clear()`. Arbitrary UI callbacks, timers and async
-updates therefore run while the graph is half torn down.
+Things that are not work items but have to be re-run when something upstream
+changes. Automated where possible, so they are not a list someone has to
+remember.
 
-No concrete failure has been demonstrated: the load generation counter is bumped
-and `pendingLoads` cleared first, so a late plugin-load callback no-ops, and the
-tray timer only reads. It is listed because it is the largest undocumented
-re-entrancy surface in the codebase and the call site says nothing about it.
-Either justify it in a comment or drain the windows without pumping.
-
-### Two different definitions of "the same plugin"
-
-`chain::Store::identityOf` hashes `fileOrIdentifier | pluginFormatName |
-uniqueId | deprecatedUid`, and `PluginChainStore.hpp` explains at length why
-`name` is deliberately excluded -- including it is what orphaned settings on
-every plugin update.
-
-`Source/PreferencesWindow.cpp` decides which "+ Add Plugin" entries to grey out
-with a raw `fileOrIdentifier + pluginFormatName + name` concatenation, which
-includes `name` and omits `uniqueId`. So the menu and the store disagree: a
-renamed plugin is the same plugin to the store and a different one to the menu,
-and a shell plugin packing two sub-plugins under one display name is the reverse.
-The expression is also written out twice in the same function.
-
-### BSD is handled in one place and treated as Windows in another
-
-`IconMenu.cpp` has a `#if JUCE_LINUX || JUCE_BSD` branch for the delete
-confirmation's button order, but its tray menu is `#if JUCE_MAC || JUCE_LINUX`
-with an `#else` that reaches `POINT` and `GetCursorPos` -- and `<windows.h>` is
-only included under `#if JUCE_WINDOWS`. On BSD that would not compile. Whether
-BSD is a target at all is unresolved; either way the two blocks disagree about
-what "not Mac, not Linux" means.
-
-One, below. Everything else the audits turned up has been fixed and is described
-in `CHANGELOG.md` under `[5.0.0]`, which is the place to look before concluding a
-fault is new.
-
-### Renaming an audio device silently selects a different one
-
-Confirmed on 2026-08-28 with the log to prove it, having previously only been a
-suspected limitation. `juce::AudioDeviceSetup` persists the chosen device as a
-display name, so renaming an endpoint in Windows while Light Host has it selected
-leaves a stored name that matches nothing. JUCE then falls back to the default
-device, and nothing tells the user:
-
-```
-AudioConfig [startup]:       output='J-Dizzle Mic Chain (VB-Audio Virtual Cable)'
-AudioConfig [device-change]: output='Speakers (Plugable Audio)'      <-- orphaned
-AudioConfig [device-change]: output='Speakers (Plugable Audio)'
-AudioConfig [device-change]: output='Speakers (Plugable Audio)'
-AudioConfig [device-change]: output='Mic Chain INPUT (VB-Audio Virtual Cable)'
-```
-
-For those three cycles a processed microphone chain was being sent to the room
-speakers instead of into a virtual cable. The user noticed and re-selected the
-device; nothing in the application would have told them otherwise, and the tooltip
-stayed clean because from JUCE's point of view a device opened successfully.
-
-This is the same class of fault as the plugin-identity keys fixed in 5.0.0:
-settings keyed on a display name are orphaned by a rename. The difference is that
-this one lives inside `juce::AudioDeviceManager` rather than in this project, so
-the fix is to store the endpoint id beside the name, and on startup prefer the id
-and fall back to the name. Reporting the fallback through the status sink would at
-least make it visible in the meantime, and is much the smaller change of the two.
-
-Two things worth knowing when reading an older audit of this project, because both
-have come up more than once:
-
-- Analyses of the **original** Light Host do not apply here. That codebase is
-  JUCE 4.2.4 with a Projucer `.jucer`, a VS2015 exporter, and gitignored `lib/`,
-  `Builds/` and `JuceLibraryCode/`. This fork is CMake with JUCE 9.0.1 vendored and
-  committed, the VST2 SDK at `lib/vstsdk2.4`, and ASIO headers that ship with JUCE
-  rather than being a separate download. Line numbers in such an audit will point
-  at code that no longer exists.
-- The settings key **does** still collide for two instances of the same plugin,
-  which is a real observation. It is unreachable, because the chain lives in a
-  `juce::KnownPluginList` and that container refuses a duplicate on the same field
-  set the key is built from. Making it reachable and making it correct are the same
-  piece of work: see the allocated slot ids under Deferred.
-
-### VST2 scanning does not descend into subdirectories
-
-`lastPluginScanPath_VST` defaults to `C:\Program Files\Steinberg\VstPlugins;C:\Program Files\VstPlugins`,
-and a scan of those paths finds nothing in `C:\Program Files\VstPlugins\ReaPlugs\`
-one level below. Nine ReaPlugs VST2 plugins were invisible to the host until the
-subdirectory was added to the scan path by hand, and an older settings file shows
-they had been found before — so this reads as a regression or a path default that
-never matched where installers actually put things.
-
-Either scan recursively, or say in the UI that the path is not recursive. Silently
-finding nothing looks like the plugins are unsupported.
-
-## Features and refactors
-
-### The base64 restoreInto overload has no production caller
-
-`state::restoreInto (AudioProcessor&, const juce::String&)` is used only by the
-tests. Both `IconMenu::migrateStateToVault` and `IconMenu::loadActivePlugins`
-decode the base64 themselves and call the `MemoryBlock` overload, so the
-decode-failure rule is stated and tested in one place and then reimplemented in
-two others. Route those two call sites through it.
-
-### Optional: a signal view that shows shape, not just level
-
-The per-plugin column added in 5.1.0 reports peak, RMS and delta. A spectrum or a
-scrolling waveform would show *what* a plugin did rather than how much, which is
-the question a delta cannot answer. Deliberately not built: the level numbers
-answered every question this project has actually had, and a scrolling display is
-where the repaint cost would stop being negligible.
-
-Phase numbers refer to the 5.0.0 plan.
-
-- **Phase 5 remainder: extract `AudioEngine`.** Split `deviceManager`, `player`
-  and `graph` out of `IconMenu`. Read `~IconMenu` first: the shutdown
-  use-after-free fixed in v3.2.0 depends on member *declaration* order in that
-  class plus statement order in its destructor, and splitting those members
-  destroys the invariant with no compiler warning and no possible unit test. The
-  detach sequence must move wholesale into `AudioEngine`'s destructor as its
-  first statements, comment kept verbatim, and the smoke test should be run under
-  a sanitiser as part of the gate.
-
-  **Weigh this before starting it.** It is the only remaining item with no
-  user-visible payoff, it carries the worst failure mode in the project (a crash
-  on every shutdown, on a path no automated test can reproduce: with no audio
-  device there is no callback thread, so the race cannot occur on CI), and the
-  sanitiser gate that would justify it has not been set up. The argument for
-  doing it is that the invariant currently lives in a 1400-line class and would
-  end up in a 60-line one whose whole purpose is to hold it. The argument against
-  is that nothing else in the plan depends on it.
-- **Phase 6: metering.** The lane trims landed, so lanes can be balanced, but
-  there is nothing to look at while doing it. A peak meter per lane, and one on the
-  output, would make the trims usable without guessing. This is the remaining half
-  of "no trim, meter or dry/wet".
-- **Phase 6: dry/wet per lane.** A lane is either in or out. A blend against the
-  unprocessed input is what parallel processing is usually for, and the trim nodes
-  are the obvious place to hang it.
-- **Phase 6: test `PluginWindow.cpp`.** At ~200 lines with one stub processor it
-  is the cheapest file in the project to cover, and it holds three historical
-  fixes (duplicate Generic windows, a throwing editor constructor, a deprecated
-  editor-creation call).
-- **Phase 7: stop rewriting every plugin's state on every edit.** Plugin state
-  lives base64-encoded inline in one `PropertiesFile`, and each `setValue` plus
-  `saveIfNeeded()` rewrites the whole XML document on the message thread, so one
-  bypass toggle rewrites every plugin's state blob. Move state blobs to one file
-  per slot under a `state/` subdirectory and keep the properties file small. The
-  write itself is atomic via `TemporaryFile`, so this is latency, not corruption.
-- **Phase 7: `getTimeSortedList()` hands out a reference to a mutable cache.**
-  Callers hold it across a rebuild that clears it. The tray-menu handlers copy
-  defensively now, which is a patch and not a fix; return a snapshot
-  (`shared_ptr<const std::vector<...>>`) instead.
-- **Phase 8: version bump, changelog heading, tag, release.** The procedure is
-  written down in [RELEASING.md](RELEASING.md). The pipeline itself is ready:
-  three platforms, tests gating publication, licence files in every archive,
-  checksums, and prerelease tags producing drafts. It has never run end to end,
-  so budget for the first candidate exposing something.
-- **Code signing, if macOS or Windows downloads are to be first-class.** macOS
-  refuses an unsigned app until the quarantine attribute is cleared by hand, and
-  Windows shows a SmartScreen warning on every new binary. Certificates cost money
-  and are worth it only if the download counts justify them.
-
-## Deferred
-
-- **Allocated slot ids.** The chain settings store derives identity from the
-  plugin's file, format and unique ids. That survives an update and a rename but
-  still moves if the user relocates the plugin file. A monotonically allocated
-  id would survive that too, but it requires the chain to stop being a
-  `juce::KnownPluginList` and become the store's own container, which is a much
-  larger change than the faults it would fix. Revisit if users report losing
-  settings after moving their plugin folder.
-- **Duplicate plugins in one chain.** `KnownPluginList` holds unique types, so the
-  same plugin cannot appear twice. Would need the same container change as above.
-- **Regression tests for the four index-guard clauses and node id stability.**
-  These live inside `IconMenu` methods that need a device manager and a tray icon
-  to construct, so they need a seam before they can be tested. Not worth forcing
-  one on their own; they come for free with the `AudioEngine` split.
-- **Out-of-process plugin hosting.** Light Host runs plugins in-process, so a
-  plugin that crashes takes the host with it. Real sandboxing is a different
-  application, not a fix.
-- **Acoustic echo cancellation** — removing speaker bleed from the microphone —
-  was assessed and declined. It is not deferred pending effort; it is declined on
-  architecture, and the reasoning is in [DECISIONS.md](DECISIONS.md) so that it
-  does not have to be re-derived. The short version: it needs a reference signal,
-  which needs loopback, and even with loopback the microphone and the output are
-  on separate clocks.
-- **System-audio capture: re-check this on every JUCE bump.** Processing audio
-  from other applications currently needs a third-party virtual input device
-  (VB-CABLE or similar), and the Preferences window says so. That is a JUCE
-  limitation and not a Windows one, which is why it is worth re-checking rather
-  than treating as settled: WASAPI has supported loopback since Vista
-  (`AUDCLNT_STREAMFLAGS_LOOPBACK` on a render endpoint) and Windows 10 2004
-  added per-process loopback, but JUCE exposes neither. `WASAPIDeviceMode` is
-  `shared`, `exclusive` and `sharedLowLatency`, and `loopback` appears nowhere
-  in `juce_audio_devices` as of the vendored 9.0.1.
-
-  The check, after any change to `lib/juce`, is
-  `grep -ri loopback lib/juce/modules/juce_audio_devices`. A non-empty result
-  means a supported fix has become available, and both the hint text in
-  `PreferencesWindow.cpp` and this entry should be revisited.
-
-  Deliberately not worth hand-rolling in the meantime. It needs a fourth WASAPI
-  device mode, enumeration that presents render endpoints as inputs, and two
-  problems that are the actual work: a loopback capture and a render stream on
-  different endpoints are separate clock domains that drift, so it needs
-  continuous resampling; and a loopback stream delivers no packets at all while
-  nothing is playing to that endpoint, so the graph has to be fed synthesised
-  silence or it starves. Wiring stays as it is until JUCE does the work.
+- **System-audio loopback capture** is blocked on JUCE exposing it, and
+  `tools/update-juce.sh` greps for it on every version bump, so the answer is
+  re-checked without anyone deciding to.
+- **Display scaling at 150%, and the tray icon against a light taskbar**, cannot
+  be automated — they need a person looking at a display that is configured that
+  way. Recorded in [RELEASING.md](RELEASING.md) as pre-release checks rather than
+  as perpetually open backlog items.
+- **Linux and macOS are built by CI on every push**, on all three platforms,
+  including the unit, GUI and smoke suites. No developer machine here has ever
+  built them, and CI is stronger evidence than a local build would be, so this is
+  not an open item.

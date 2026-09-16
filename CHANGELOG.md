@@ -8,6 +8,194 @@ Nothing yet.
 
 ---
 
+## [5.2.0] — 2026-09-16
+
+A backlog-clearing release. `BACKLOG.md` held 24 items; it now holds none, and
+they did not all get there the same way. Nine were real defects and are fixed.
+Two verification gaps were closed by making the thing testable instead of asking
+someone to check it by hand. Five entries were already shipped or rested on a
+premise that did not survive checking. Eight are declined, with the reasoning and
+the trigger that would reverse them recorded in
+[DECISIONS.md](DECISIONS.md) rather than left implied.
+
+Minor rather than patch: the audio device fallback now speaks up, and plugin scan
+failures are reported, both of which change what the application does.
+
+### Fixed — a different audio device could be opened without saying so
+
+`juce::AudioDeviceSetup` identifies a device by its display name and nothing
+else, so renaming a Windows endpoint while it is selected leaves a stored name
+matching nothing on the system. JUCE falls back to the default device, which is
+reasonable, and says nothing about it, which is not.
+
+The silence was not an oversight here. A status report was already wired to the
+result of `AudioDeviceManager::initialise`, and it could never fire:
+
+```
+error = setAudioDeviceSetup (setup, true);
+
+if (error.isNotEmpty() && selectDefaultDeviceOnFailure)
+    error = initialise (..., nullptr, false, preferredDefaultDeviceName);
+```
+
+`setAudioDeviceSetup` returns exactly the wanted message — `No such device: X` —
+and the fallback's return value then overwrites it. The fallback succeeds, so the
+error that gets checked is empty, every time.
+
+What that cost: a processed microphone chain was routed to room speakers across
+three device-change cycles with nothing reported in the tray tooltip, the
+Preferences status row, or the log.
+
+Light Host now names the device that went missing and what is being used instead.
+It can do that because the fallback path never rewrites the stored request, so
+what the user actually chose is still on disk. The check therefore runs on every
+device change as well as at startup, because the first corrective sample-rate
+request or Preferences Apply replaces that stored name — after which the evidence
+is gone.
+
+Comparison is trimmed and case-insensitive, matching JUCE's own device lookup, so
+a capitalisation-only rename is not reported. A substitution is stated once
+rather than repeated on every subsequent device change, and an input-only setup
+and a first run both stay silent.
+
+Following the rename automatically would need a stable endpoint id, which no
+public JUCE API exposes. Assessed in [DECISIONS.md](DECISIONS.md).
+
+### Fixed — an undecodable saved preset was replaced with factory defaults
+
+The two places that decode pre-5.0.0 base64 state disagreed. The migration
+checked whether the decode worked and left a bad blob alone; the load path
+discarded the return value entirely. That produced an empty block, the restore
+reported "nothing was saved" rather than "this failed", the node never reached
+the set of failed restores that the save path skips, and the next save wrote the
+plugin's factory defaults over the user's only copy of the preset.
+
+One shared decoder now reports the three outcomes apart, and the tests that
+already covered the base64 rules exercise that decoder rather than a parallel
+copy of it.
+
+### Fixed — a plugin that failed to load during a custom-folder scan said nothing
+
+"Scan Custom Folder" discarded the scanner's list of failed files, so a folder
+where every plugin failed to load looked exactly like a folder that scanned
+cleanly. It also never stored the folder it was given, so the standard "Scan for
+new or updated plug-ins" never looked there again and an updated plugin in a
+custom folder kept the description recorded the first time.
+
+### Fixed — the Add Plugin menu had its own idea of "the same plugin"
+
+It compared `fileOrIdentifier + pluginFormatName + name`, written out twice, and
+that disagreed with the settings store in both directions. Including the name
+meant a plugin renamed by an update read as a new plugin and could be added
+twice; omitting the unique ids — the only thing telling apart the several plugins
+a shell plugin packs into one file — meant two of those sharing a display name
+greyed each other out. Both sites now use the store's definition.
+
+### Fixed — a chain reload could be rewired while it was being replaced
+
+Reloading the chain bumps a generation counter, which defuses a late plugin-load
+callback. It did not defuse the async updater that a hosted plugin triggers when
+it reports a latency change — and plugins commonly report one as their editor
+closes, which is exactly what the next line of the reload does. The destructor
+had always cancelled it; this path never did. It also stayed registered as a
+listener on processors that were about to be destroyed.
+
+### Fixed — BSD reached a Windows-only call
+
+The tray menu was guarded with `JUCE_MAC || JUCE_LINUX`, so BSD fell through to
+the `#else` and reached `GetCursorPos`. The confirmation dialog two functions away
+already handled `JUCE_BSD`, so the file disagreed with itself about which
+platforms exist.
+
+### Changed — the chain is handed out as a snapshot, not as a cache reference
+
+`getTimeSortedList()` returned a reference to a member vector that the next
+rebuild replaces. Nothing was broken, which is the point: it was correct only by
+arrangement. Three callers knew to copy the element they wanted out and carried a
+comment saying why, and two more were safe purely because of the order statements
+happened to be in.
+
+It now returns a shared pointer to a const vector, so a snapshot already handed
+out stays intact when the cache is replaced. The dirty flag is gone — null is the
+invalidation — and four call sites that deep-copied the whole vector on every
+Preferences open and refresh now copy a reference count.
+
+### Added — tests for three things that could not be verified before
+
+Test count 944 → 1120, plus a fifth CTest target.
+
+The confirmation dialog's button order is now a pure function. The rule is
+genuinely per-platform and the platforms pull opposite ways: Windows reports
+index 0 when a dialog is dismissed or fails to open, while Linux resolves both
+Escape and the close button to the last index, so neither "Cancel first" nor
+"Cancel last" is safe on both. That rule used to sit inside a function needing a
+plugin chain, a settings file, a state vault and a tray icon to reach, so
+confirming it meant a person clicking a dialog on a Linux machine. Both rules are
+now checked on every platform on every push, and the index acted on is derived
+from the order rather than written down twice.
+
+`PluginWindow.cpp` has tests for the first time, covering the three fixes it
+carries. The window-creating half runs as a separate `unit-gui` target behind the
+same display check the smoke tests use, because folding it into the main run
+would segfault on a headless runner.
+
+The reserved node-id bands are pinned, including their clamps — those numbers are
+written into user settings, so they are an on-disk contract, and a collision
+between bands does not fail loudly, it means one inserted node silently replaces
+another.
+
+### Added — a render regression gate that cannot fail at random
+
+Almost nothing here is supposed to change a sample, and "inaudible" is easier to
+get wrong than to verify. `tools/render-regression.sh` renders a fixed input and
+compares a hash.
+
+It deliberately does not use the live chain. Four paced renders of one input:
+ReaEQ produced one hash 4/4 times, Salvor produced two different hashes — while
+the render reported a realtime factor of 1.000 with no blocks behind it. Keeping
+pace does not imply being reproducible, because the inference happens on a worker
+thread that lands results on slightly different block boundaries. A gate built on
+that fails at random and teaches you to ignore it.
+
+### Changed — five hand-written bounds checks became one library call
+
+`index < 0 || index >= static_cast<int> (size)` appeared five times. It is
+`juce::isPositiveAndBelow` spelled out by hand, so the regression tests the
+backlog wanted for it would have been testing a local copy of something JUCE
+already tests.
+
+### Documentation
+
+`RELEASING.md` opened by saying the pipeline had never run to completion, three
+releases after it started working, and was built entirely around
+release-candidate tags that are not used. Rewritten around what is actually done,
+keeping the one lesson that matters: v5.0.1 was tagged before CI finished, macOS
+failed, and that tag still exists with no release behind it.
+
+`README.md` stopped contradicting itself — two places still said there is no
+metering, in the same file that documents the meters added in 5.1.0.
+
+`tools/update-juce.sh` now checks vendored JUCE for system-audio loopback support
+on every bump, because that feature is blocked solely upstream and would
+otherwise never be looked at again.
+
+### Not done, on purpose
+
+Extracting an `AudioEngine`, allocated slot ids, duplicate plugins in one chain,
+endpoint-id device selection, dry/wet per lane, a spectrum signal view,
+out-of-process hosting, and code signing. Each is recorded in
+[DECISIONS.md](DECISIONS.md) with what was asked, why the answer is no, and what
+would change it.
+
+The `AudioEngine` entry is worth reading if the idea comes back: the plan as
+written would have introduced a new data race rather than removing one, because a
+member destructor runs after the enclosing body, and the sanitiser gate offered
+to justify the risk cannot be built — no CI runner has an audio device, so no
+callback thread starts and the check would pass whether or not the invariant
+holds.
+
+---
+
 ## [5.1.0] — 2026-09-16
 
 The application can now show you the level of your own signal. It could not
