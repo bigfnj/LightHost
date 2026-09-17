@@ -57,7 +57,19 @@ private:
 namespace meterscale
 {
     inline constexpr int   refreshHz     = 25;
-    inline constexpr float fallDbPerTick = 1.8f;    // about 45 dB per second
+
+    /** How far a displayed bar falls between ticks.
+
+        Derived, never written. The same ballistic exists on the audio thread as
+        metering::kPeakDecayPerBlock, and when this was the hand-written literal
+        1.8f the two agreed only by having been calculated on the same
+        afternoon. A UI that falls faster than the held peak sags below the
+        number beside it; slower, and the bar sticks above a level that has
+        already gone.
+    */
+    inline constexpr float fallDbPerTick =
+        lighthost::metering::kPeakFallDbPerSecond / static_cast<float> (refreshHz);
+
     inline constexpr float bottomDb      = -60.0f;  // the bottom of every bar
 
     /** Where a level sits along a bar. Linear in decibels over the visible
@@ -677,22 +689,44 @@ public:
                                     && bypassed[static_cast<size_t> (i)];
 
             // ── Checkbox ───────────────────────────────────────────────────
+            // Feedback in drawRowButton's vocabulary -- brightness for hot, a
+            // darker fill plus an accent border for held, content nudged a
+            // pixel -- and NOT HeaderToggle's, which says both "on" and "held"
+            // by how much accent it washes in. That works on an empty bar, but
+            // a ticked box is already a solid accent fill, so accent-for-held
+            // would leave held-and-ticked indistinguishable from ticked and
+            // make held-and-unticked look half-ticked. Brightness and border
+            // are spare on both states, and they are already what the two
+            // buttons further along the same row use.
+            const auto accent    = juce::Colour (lighthost::ui::LookAndFeel::kAccent);
             const auto checkArea = getCheckboxArea (i).toFloat();
-            if (isBypassed)
+            const bool checkHot  = isHot  (i, Control::checkbox);
+            const bool checkHeld = isHeld (i, Control::checkbox);
+
+            auto checkFill = isBypassed ? bg.darker (0.1f) : accent;
+
+            if (checkHeld)     checkFill = checkFill.darker (0.30f);
+            else if (checkHot) checkFill = checkFill.brighter (0.22f);
+
+            g.setColour (checkFill);
+            g.fillRoundedRectangle (checkArea, 3.0f);
+
+            // The empty box always needs an outline to read as a box at all.
+            // The filled one gets one only while held, where it is the cue.
+            if (isBypassed || checkHeld)
             {
-                g.setColour (bg.darker (0.1f));
-                g.fillRoundedRectangle (checkArea, 3.0f);
-                g.setColour (txt.withAlpha (0.25f));
+                g.setColour (checkHeld ? accent.withAlpha (0.95f)
+                                       : txt.withAlpha (checkHot ? 0.42f : 0.25f));
                 g.drawRoundedRectangle (checkArea.reduced (0.5f), 3.0f, 1.0f);
             }
-            else
+
+            if (! isBypassed)
             {
-                g.setColour (juce::Colour (lighthost::ui::LookAndFeel::kAccent));
-                g.fillRoundedRectangle (checkArea, 3.0f);
-                // White tick mark
+                // White tick mark, dropping a pixel while held for the same
+                // reason drawRowButton's label does.
                 g.setColour (juce::Colours::white);
                 const float cx = checkArea.getCentreX();
-                const float cy = checkArea.getCentreY();
+                const float cy = checkArea.getCentreY() + (checkHeld ? 1.0f : 0.0f);
                 juce::Path tick;
                 tick.startNewSubPath (cx - 4.0f, cy + 0.5f);
                 tick.lineTo (cx - 1.0f, cy + 3.5f);
@@ -861,13 +895,16 @@ public:
                 });
             return;
         }
-        // Checkbox
+        // Checkbox. Arms rather than toggling, for the same reason Settings
+        // does below: a press dragged off the box has to cancel, and bypassing
+        // a plugin by accident is audible in a way that opening a settings
+        // window is not. It toggled on press and repainted the whole list.
         if (getCheckboxArea (row).contains (e.getPosition()))
         {
-            bypassed.resize (items.size(), false);
-            bypassed[static_cast<size_t> (row)] = !bypassed[static_cast<size_t> (row)];
-            if (onChange) onChange();
-            repaint();
+            pressedControl = Control::checkbox;
+            pressedRow     = row;
+            pressedInside  = true;
+            repaintRow (row);
             return;
         }
 
@@ -926,6 +963,34 @@ public:
             if (inside && row < static_cast<int> (items.size()) && onEditClicked)
                 onEditClicked (row);
 
+            return;
+        }
+
+        // The other half of arming the checkbox. Without a branch here the
+        // press below falls through to the drag path, which returns early on
+        // dragSourceRow < 0 and never clears pressedControl -- so the box would
+        // stay drawn held for the rest of the session.
+        if (pressedControl == Control::checkbox)
+        {
+            const int  row    = pressedRow;
+            const bool inside = row >= 0
+                             && getCheckboxArea (row).contains (e.getPosition());
+
+            clearPressed();
+
+            if (! inside || row >= static_cast<int> (items.size()))
+                return;
+
+            bypassed.resize (items.size(), false);
+            bypassed[static_cast<size_t> (row)] = ! bypassed[static_cast<size_t> (row)];
+
+            if (onChange) onChange();
+
+            // The row whose tick changed, and only that row -- the press path
+            // used to repaint the whole list here. Stated rather than left to
+            // clearPressed above, which happens to have queued the same
+            // rectangle for a different reason.
+            repaintRow (row);
             return;
         }
 
@@ -1119,7 +1184,8 @@ public:
         lighthost::metering::Meter* inputMeterToUse,
         lighthost::metering::Meter* outputMeterToUse,
         std::function<void (bool)> onSignalViewToggled,
-        std::function<lighthost::metering::Meter* (int)> probeMeterAt)
+        std::function<lighthost::metering::Meter* (int)> probeMeterAt,
+        std::function<std::vector<juce::String>()> committedChainNames)
         : deviceManager (dm),
           knownPlugins   (knownPlugins_),
           laneTrim       (std::move (laneTrimIn)),
@@ -1289,8 +1355,9 @@ public:
         bufferSizeHeadLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
         bufferSizeHeadLabel.setJustificationType (juce::Justification::centredRight);
 
-        onSignalViewToggledFn = std::move (onSignalViewToggled);
+        onSignalViewToggledFn  = std::move (onSignalViewToggled);
         probeMeterAtFn         = std::move (probeMeterAt);
+        committedChainNamesFn  = std::move (committedChainNames);
 
         // Added AFTER the section label so it is in front of it: JUCE paints and
         // hit-tests later children on top, and SectionLabel would otherwise
@@ -1375,8 +1442,29 @@ public:
     */
     void refreshSignalView (SignalViewPanel& panel, int chainLatencySamplesNow)
     {
+        // The row labels come from the COMMITTED chain, not from chainList.items.
+        //
+        // chainList.items is the STAGED chain: the user can reorder it or delete
+        // a row from it without pressing Apply, while the probes go on being
+        // indexed over what was committed, because reconnectGraph builds them
+        // from the committed list. Labelling row i from the staged list then
+        // names one plugin and meters another. refreshPluginChain hides that by
+        // setting items from the committed chain before it calls here; opening
+        // the view calls here directly, and does not. Taking both from the
+        // meters' own source makes them indexed identically by construction
+        // rather than by which caller got there first.
+        auto rowNames = committedChainNamesFn ? committedChainNamesFn()
+                                              : std::vector<juce::String>{};
+
+        // No callback at all is the only fallback case. An empty RESULT is not
+        // one: a committed chain with nothing in it genuinely has no rows to
+        // draw, and falling back there would put the staged rows straight back.
+        if (! committedChainNamesFn)
+            for (const auto& staged : chainList.items)
+                rowNames.push_back (staged.name);
+
         std::vector<SignalViewPanel::Tap> taps;
-        taps.reserve (chainList.items.size() + 2);
+        taps.reserve (rowNames.size() + 2);
 
         const auto rate = [this]
         {
@@ -1399,8 +1487,8 @@ public:
                           inputName.isEmpty() ? juce::String ("no device") : inputName,
                           deviceInputMeter });
 
-        for (size_t i = 0; i < chainList.items.size(); ++i)
-            taps.push_back ({ "after " + chainList.items[i].name,
+        for (size_t i = 0; i < rowNames.size(); ++i)
+            taps.push_back ({ "after " + rowNames[i],
                               juce::String{},
                               probeMeterAtFn ? probeMeterAtFn (static_cast<int> (i)) : nullptr });
 
@@ -1729,6 +1817,7 @@ private:
     lighthost::metering::Meter* deviceOutputMeter = nullptr;
     std::function<void (bool)> onSignalViewToggledFn;
     std::function<lighthost::metering::Meter* (int)> probeMeterAtFn;
+    std::function<std::vector<juce::String>()> committedChainNamesFn;
 
     // Apply button, version label, and the transient Apply confirmation
     juce::TextButton applyButton;
@@ -2458,6 +2547,7 @@ PreferencesWindow::PreferencesWindow (
     lighthost::metering::Meter* outputMeter,
     std::function<void (bool enabled)> onSignalViewToggled,
     std::function<lighthost::metering::Meter* (int index)> probeMeterAt,
+    std::function<std::vector<juce::String>()> committedChainNames,
     std::function<void()> onClose)
     : DocumentWindow ("Preferences",
                       juce::LookAndFeel::getDefaultLookAndFeel()
@@ -2481,7 +2571,8 @@ PreferencesWindow::PreferencesWindow (
 
             setSignalViewOpen (enabled);
         },
-        std::move (probeMeterAt));
+        std::move (probeMeterAt),
+        std::move (committedChainNames));
 
     // Height budget. The authority is fixedLayoutHeight(), not this comment --
     // which had drifted 34px out of date within one release of being written,
