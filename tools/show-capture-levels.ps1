@@ -1,3 +1,17 @@
+# Reports every active capture endpoint: slider percentage, the same level in
+# dB, the device's own dB range, and whether it is muted.
+#
+# Both numbers, because they answer different questions. The percentage is what
+# the Windows dialog shows, so it is the only figure a user can be talked
+# through over a call; the dB value is the one that means something, because
+# the slider is not linear in dB and "about 70%" is a guess.
+#
+# The range is there for the same reason the CLIP badge is. A microphone sat at
+# +30 dB hitting full scale for hours is what that badge exists to catch, and
+# in the Windows dialog that state looks like an unremarkable slider position
+# with no unit beside it.
+#
+# Read-only. tools/set-capture-level.ps1 is the half that writes.
 $src = @'
 using System;
 using System.Runtime.InteropServices;

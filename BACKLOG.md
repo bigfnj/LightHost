@@ -151,23 +151,40 @@ unreachable. The asymmetry is the trap, not a live defect.
 
 ## Tests that pass for the wrong reason
 
-The suite is 1363 headless assertions and 15 GUI. These are the ones that do not
-earn their place; the count is not the point, and two of them inflate it badly.
+These are the ones that do not earn their place; the count is not the point, and
+two of them inflate it badly. Run the binary for the current figure -- see the
+note about quoting assertion counts, further down, which this line used to
+contradict two items above itself.
 
 - **256 assertions that a probe did not alter the buffer**
   (`Tests/SignalMeteringTests.cpp`). `Meter::measure` takes a const reference, so
-  the property is enforced by the type system. One max-deviation assertion says
-  the same thing.
+  the property is enforced by the type system. One max-deviation assertion over
+  the block would say the same thing in one line -- the pattern to copy is
+  `largestDeparture` in `Tests/GainProcessorTests.cpp`, which is where it
+  already exists. There is nothing of that shape in `SignalMeteringTests.cpp`
+  today, so this is a rewrite, not a deletion.
 - **256 assertions on the lane-trim ramp** (`Tests/GainProcessorTests.cpp`) that
   would NOT fail if the unity skip were deleted, because the settled gain is
   exactly 1.0 and multiplying by it changes nothing.
-- **`isUnity` is never tested at its boundary** -- 0.0 and ±0.5 against a 0.001
-  tolerance. Widening the tolerance to 0.4 passes.
-- **The ramp-continuity test starts at `i = 1`**, so it never sees the
-  block-boundary discontinuity it exists to catch.
-- **A two-element tie-break test** would pass with the tie-break removed, because
-  both standard libraries use a stable insertion sort at that size. The
-  three-element version beside it is what actually catches it.
+- **`isUnity` is under-tested at its upper boundary** -- 0.0 and ±0.5 against a
+  0.001 tolerance, so widening the tolerance to 0.4 still passes. The LOWER side
+  is pinned, by "the buffer is skipped on the decibel rule, not a linear one" a
+  few tests down: 0.0005 dB must be inside the tolerance, because
+  `decibelsToGain (0.0005f)` is 1.0000576 and a linear re-derivation of the rule
+  would multiply the buffer there. So the gap is one-sided.
+- **The ramp-continuity test cannot see a block boundary.** Not because the loop
+  starts at `i = 1` -- that is correct within one block -- but because the
+  settling block before the gain change has its return value DISCARDED. The last
+  sample of that block is never compared with the first sample of the one that
+  is kept, which is the only place the discontinuity it exists to catch could
+  appear.
+- **A two-element tie-break test is redundant, not inert.** It would FAIL with
+  the tie-break removed, not pass: both standard libraries use a stable
+  insertion sort at that size, so `{1,second},{1,first}` and
+  `{1,first},{1,second}` would come back in opposite orders and the test asserts
+  they agree. The reason to consider retiring it is that the three-element
+  version beside it covers the same property, which is a weaker reason than "it
+  cannot fail" and may not be reason enough.
 - **`NodeIdTests`** asserts bounds that the exact-value assertions a few lines up
   already pin.
 
@@ -183,17 +200,14 @@ by a failing test.
 
 ## Hardening
 
-- **`PluginScan::run` writes once, after every format.** A plugin that hard-crashes
-  the scan therefore loses every plugin found in that run. The dead man's pedal
-  means the next run skips the offender, so N crashing plugins costs N+1 full
-  rescans. Writing incrementally would cost a settings flush per format.
 - **`--scan` combined with `-self-test`** writes the plugin list into the
   throwaway self-test folder. Harmless, and one guard would make it an error.
-- **`SampleRatePolicy` takes `availableRates.getLast()`** as the highest rate the
-  device admits to. Every backend here returns them ascending; none contracts it.
-  `std::max_element` costs nothing.
 - **The signal view has no scrollbar.** 5.3.0 stopped it silently truncating and
-  made it count the rows it cannot show. A `juce::Viewport` would show them.
+  made it count the rows it cannot show. A `juce::Viewport` would show them --
+  and this is less work than it sounds, because `PreferencesWindow.cpp` already
+  holds two worked examples: `chainViewport`, a plain `juce::Viewport` wrapping
+  the chain list, and `PreferencesPanelViewport`, a subclass that resizes its
+  viewed component to the visible width. Either pattern transfers.
 
 ---
 
@@ -203,23 +217,39 @@ by a failing test.
   predates the lane trims, the signal view and the status row, so the first thing
   a visitor sees is three releases out of date. Regenerating it needs a person at
   a display, which is why it is here and not fixed.
-- **Six `tools/` scripts are referenced by no document**:
-  `analyse-voice-headroom.py`, `compare-capture.py`, `audio-endpoints.ps1`,
-  `measure-idle-cpu.ps1`, `set-capture-level.ps1`, `show-capture-levels.ps1`.
-  Each carries a substantial header explaining itself, so they are legitimate
-  operator tooling rather than clutter; the gap is that nothing tells you they
-  exist. The other seven are cited from README, RELEASING or this file.
-- **`docs/mockups/level-meters.html`** is a design mockup that pins the accent
-  colour to `Source/LookAndFeel.hpp`. Nothing links it. Link it or drop it.
-- **`Resources/icon.png` is 1.1 MB**, an unoptimised 1024x1024 RGBA PNG used for
-  both `ICON_BIG` and `ICON_SMALL`. It is 2.5x the next largest non-vendored file
-  and would shrink substantially under `oxipng`.
 - **Do not quote an assertion count in a comment.** There were four, already
   disagreeing with each other before today: `CMakeLists.txt` and `BACKLOG.md`
   said 1120, `BACKLOG.md` also said 1131, `tools/build-linux-docker.sh` said
   1131. None had been right for weeks. They are gone, and the prose around them
   now says what it means without a number. The figure changes every time anyone
-  adds a test; run the binary.
+  adds a test; run the binary. This file quoted one two lines above the item
+  saying not to, until 2026-09-17.
+- **`Resources/icon.png` is still 1.0 MB** after a lossless pass on 2026-09-17
+  took it from 1,149,765 to 1,055,725 bytes (8.2%, pixel-identical). It is a
+  1024x1024 RGBA PNG used as both `ICON_BIG` and `ICON_SMALL`, and it remains
+  **8.7x** the next largest tracked non-vendored file
+  (`Source/PreferencesWindow.cpp`, 121,714 bytes). It was 9.4x before the pass,
+  and never the 2.5x this entry used to claim.
+
+  Only 8.2% came out because the artwork is a glossy 3D render carrying 277,089
+  unique colours across 1,048,576 pixels, which PNG has little to remove. The
+  remaining megabyte is not a compression problem, it is a **resolution** one:
+  `juceaide` downsamples this file at build time into
+  `LightHost_artefacts/JuceLibraryCode/icon.ico`, which holds 16, 32, 48 and 256
+  px entries and totals 118,042 bytes. Nothing above 256 px ever reaches the
+  binary. A 256x256 source would therefore cost about what that `.ico` already
+  does -- call it a tenth of the current file -- and change nothing that is
+  displayed anywhere.
+
+  Left open rather than done because it is a question about the master asset,
+  not about the build: whether this repo should keep the 1024 px original at
+  all, or keep it somewhere that is not the source tree. Whoever owns the
+  artwork decides that.
+
+  Measured and rejected on the way: zeroing the RGB under the 228,523 fully
+  transparent pixels (21.8% of the image, currently holding 3,068 distinct
+  colours that nothing can ever render) saves a further 9,936 bytes, 0.9%. Not
+  worth giving up a `magick compare -metric AE` of 0 for.
 
 ---
 
@@ -290,6 +320,21 @@ and the answers should not have to be rediscovered.
 
 ### Verified 2026-09-17 (5.3.0)
 
+- **Eight `tools/` files were cited by no document, not six.** The two this
+  file's own entry missed were `voice-headroom.sh`, referenced only from a
+  CHANGELOG bug-fix line, and `Dockerfile.linux-build`, referenced only from a
+  sibling script. Seven of the eight did carry a header comment; the eighth,
+  `show-capture-levels.ps1`, opened on `$src = @'` and explained nothing. All
+  fourteen are now indexed in [`tools/README.md`](tools/README.md), one line
+  each, and the missing header has been written.
+- **`docs/mockups/level-meters.html` pinned four colours to the source, not
+  one.** `--accent` (`kAccent`), `--warm` (`kCaution`), `--hot` (`kHot`) and
+  `--good` (the `0xff74d68c` literal in `PreferencesWindow.cpp`). All four still
+  match; only `--accent` said where it came from, so three could have drifted
+  silently. All four are annotated now and the page is linked from the README.
+  Its chrome colours (`--bg`, `--panel`, `--text`) do NOT match the source and
+  never did -- they were hand-picked, and that is recorded in the file so nobody
+  "fixes" them into a pin that was never there.
 - **The device-substitution record survives what erased its predecessor.** With
   the request pointed at devices that do not exist, both roles were named at
   startup and again on relaunch, while the stored `DEVICESETUP` held no device

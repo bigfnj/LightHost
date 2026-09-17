@@ -2,6 +2,8 @@
 
 #include <juce_core/juce_core.h>
 
+#include <memory>
+
 //==============================================================================
 // Where a headless scan looks.
 //
@@ -266,6 +268,89 @@ public:
             // rather than extra coverage.
             expect (defaults.isFileInPath (nested.getChildFile ("Acme EQ.vst3"), true),
                     "the parent entry should already cover the nested folder");
+        }
+
+        //======================================================================
+        // The write half. run() itself cannot be tested here -- it loads
+        // third-party code from the machine's real plugin folders, which is
+        // exactly what ctest must not do -- but the write it performs per
+        // format can be, and that is the part the crash-resilience change
+        // moved.
+        //======================================================================
+        const auto makeSettings = [] (const juce::File& target)
+        {
+            juce::PropertiesFile::Options options;
+            options.applicationName = "LightHostScanTests";
+            options.filenameSuffix  = "settings";
+            options.storageFormat   = juce::PropertiesFile::storeAsXML;
+
+            return std::make_unique<juce::PropertiesFile> (target, options);
+        };
+
+        // Fills rather than returns: juce::KnownPluginList is non-copyable and
+        // non-movable, so it cannot come back out of a factory.
+        const auto addOnePlugin = [] (juce::KnownPluginList& list)
+        {
+            juce::PluginDescription description;
+            description.name             = "Acme EQ";
+            description.version          = "1.0.0";
+            description.pluginFormatName = "VST3";
+            description.fileOrIdentifier = "C:/VST3/Acme EQ.vst3";
+
+            list.addType (description);
+        };
+
+        beginTest ("a written list reaches the file, under the key the app reads");
+        {
+            // The whole value of a scan is on the other side of this write. A
+            // scan that finds everything and persists nothing leaves --render
+            // --chain NAME unable to resolve a name, which is the state the
+            // headless scan was written to end.
+            const auto target = root.getChildFile ("written.settings");
+
+            juce::KnownPluginList list;
+            addOnePlugin (list);
+
+            {
+                const auto settings = makeSettings (target);
+                expect (writeList (*settings, list), "the write reported failure");
+            }
+
+            expect (target.existsAsFile(), "saveIfNeeded returned true without a file");
+
+            const auto reread = makeSettings (target);
+            const auto xml    = reread->getXmlValue (lighthost::keys::pluginList);
+
+            expect (xml != nullptr, "nothing was stored under the pluginList key");
+
+            juce::KnownPluginList recovered;
+            recovered.recreateFromXml (*xml);
+
+            expectEquals (recovered.getNumTypes(), 1);
+            expectEquals (recovered.getTypes()[0].name, juce::String ("Acme EQ"));
+        }
+
+        beginTest ("a write that cannot reach disk is reported, not swallowed");
+        {
+            // run() decides whether to carry on scanning from this return
+            // value, so a write that fails silently would let it report `ok`
+            // for a run whose results are gone. Failure is injected by putting
+            // the settings file UNDER a regular file: PropertiesFile::save
+            // calls createDirectory on the parent first, and a parent that is
+            // a file can never become a directory -- on any platform, without
+            // needing permissions the test runner may not be able to set.
+            const auto blocker = root.getChildFile ("not-a-directory");
+            blocker.replaceWithText ("a file, standing where a folder would go");
+
+            expect (blocker.existsAsFile(), "precondition: this must be a file");
+
+            const auto settings = makeSettings (blocker.getChildFile ("under.settings"));
+
+            juce::KnownPluginList list;
+            addOnePlugin (list);
+
+            expect (! writeList (*settings, list),
+                    "an impossible write reported success");
         }
 
         root.deleteRecursively();

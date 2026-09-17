@@ -5,6 +5,13 @@
 <title>Light Host - level metering mockups</title>
 <style>
   :root {
+    /* Chrome. These were hand-picked for the mockup and do NOT match the
+       application -- they never did. LookAndFeel.hpp's window is 0xff23272f
+       against --panel #232428, and its text is 0xffe4e7ec against --text
+       #e3e4e6. Left alone deliberately: this page is a design document, the
+       divergence is invisible at a glance, and "fixing" it would imply the
+       chrome is pinned to the source when only the four signal colours below
+       are. */
     --bg:      #17181b;
     --panel:   #232428;
     --section: #2a2c31;
@@ -12,10 +19,19 @@
     --line:    #34363c;
     --text:    #e3e4e6;
     --dim:     #8d9096;
-    --accent:  #4a9eff;   /* kAccent, from Source/LookAndFeel.hpp */
-    --warm:    #e0a83a;
-    --hot:     #e05252;
-    --good:    #74d68c;
+    /* The four signal colours below are PINNED TO THE SOURCE. All four still
+       match as of 5.3.0. If one of them is changed in the source and not here,
+       this page quietly stops depicting the application it documents -- which
+       is the failure mode a mockup has, since nothing compiles it. Only
+       --accent used to say where it came from; the other three were just as
+       load-bearing and said nothing. */
+    --accent:  #4a9eff;   /* kAccent,  Source/LookAndFeel.hpp */
+    --warm:    #e0a83a;   /* kCaution, Source/LookAndFeel.hpp -- approaching full scale */
+    --hot:     #e05252;   /* kHot,     Source/LookAndFeel.hpp -- at it, or clipped */
+    --good:    #74d68c;   /* 0xff74d68c, Source/PreferencesWindow.cpp, the signal
+                             view's "this row got quieter" delta. A literal there
+                             rather than a named constant, so it is the one of the
+                             four with nothing to grep for. */
   }
   * { box-sizing: border-box; }
   body {
@@ -128,6 +144,14 @@
   accent colour (<code>#4a9eff</code>, <code>kAccent</code>). Every figure shown is a
   real measurement from today, so each panel depicts a state the app was actually in
   and could not show you.
+</p>
+<p class="lede">
+  <b>What happened next.</b> All of this shipped in 5.1.0. <b>A</b> and <b>B</b> became
+  the two device meters and the latching <code>CLIP</code> badge; <b>C</b> became
+  <code>SignalViewPanel</code> -- the side column, the &Delta; column, and probes
+  that exist only while the panel is open. <b>D</b> was declined for the reason in its
+  own caption. The four signal colours in the stylesheet are pinned to the source and
+  all four still match; the chrome colours are not, and never were.
 </p>
 
 <div class="grid">

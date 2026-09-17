@@ -2,6 +2,8 @@
 
 #include <juce_core/juce_core.h>
 
+#include <algorithm>
+
 //==============================================================================
 // Choosing a sample rate when the device will not accept the current one, as a
 // decision rather than as control flow.
@@ -107,7 +109,25 @@ namespace lighthost::samplerate
                 return { Action::applyRate, rate, false };
 
         // Nothing standard on offer: take the highest the device admits to.
-        return { Action::applyRate, availableRates.getLast(), false };
+        //
+        // std::max_element, not getLast(). "The highest" and "the last" are the
+        // same value only while the list is sorted ascending, and nothing
+        // promises that: juce::AudioIODevice::getAvailableSampleRates() is
+        // documented as returning "the SET of sample-rates this device
+        // supports", and a set has no order. Every backend in this build
+        // happens to return them ascending, so a driver that did not would
+        // have us hand the device its LOWEST rate while the line above claimed
+        // the opposite -- 8000 out of { 96000, 8000 }, on a device offering 96k.
+        //
+        // Narrow on purpose: reaching this line needs a device offering none of
+        // the six preferred rates yet offering something, which no device seen
+        // here does. It is a linear scan of a list a dozen entries long, once
+        // per device change, so being right about it costs nothing measurable.
+        // The empty case returned at the top of this function, so there is
+        // always an element to dereference.
+        return { Action::applyRate,
+                 *std::max_element (availableRates.begin(), availableRates.end()),
+                 false };
     }
 
     //==========================================================================
