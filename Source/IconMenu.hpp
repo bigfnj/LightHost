@@ -1,10 +1,13 @@
 #pragma once
 
+// ConfirmPolicy.hpp, DevicePolicy.hpp and Lanes.hpp were here and are now
+// included by IconMenu.cpp instead: nothing declared below names a type or a
+// constant from any of them. The first two stop being parsed by everything
+// that includes this header; Lanes.hpp still arrives through NodeIds.hpp, so
+// moving it only puts the include where the use is. NodeIds.hpp itself stays,
+// because maxProbes sizes a member array below.
 #include "GainProcessor.hpp"
-#include "ConfirmPolicy.hpp"
-#include "DevicePolicy.hpp"
 #include "DeviceTap.hpp"
-#include "Lanes.hpp"
 #include "NodeIds.hpp"
 #include "PluginStateVault.hpp"
 #include "SettingsKeys.hpp"
@@ -51,6 +54,23 @@ public:
         of event the user has to be told about.
     */
     void reportStatus (const juce::String& message);
+
+    /** Records the audio devices the user chose, so that a substitution stays
+        detectable after JUCE has overwritten its own record of the request.
+
+        ONLY A DELIBERATE CHOICE MAY CALL THIS. Today that is the Preferences
+        Apply path, which is the only place in the application where a device
+        name is picked by hand. Anything that writes device state incidentally
+        must not: it would store whatever JUCE fell back to as the thing the
+        user asked for, and the substitution would be undetectable again --
+        exactly the failure this closes. autoMatchSampleRate is the concrete
+        example, and it does not call this.
+
+        Takes the combo entries as they stand. A placeholder such as
+        "(no input devices)" is dropped rather than recorded, so the caller does
+        not have to filter -- see lighthost::device::asRequest.
+    */
+    void recordRequestedDevices (const juce::String& input, const juce::String& output);
 
     // Menu action ID bands. Each action gets a band, and a plugin's item within
     // it is `offset + chainIndex`, so the band has to be wider than any chain.

@@ -1,4 +1,7 @@
 #include "IconMenu.hpp"
+#include "ConfirmPolicy.hpp"
+#include "DevicePolicy.hpp"
+#include "Lanes.hpp"
 #include "NodeIds.hpp"
 #include "GraphTopology.hpp"
 #include "PluginChainStore.hpp"
@@ -1249,13 +1252,39 @@ IconMenu::ChainSnapshot IconMenu::getTimeSortedList() const
     return sortedPluginCache;
 }
 
+void IconMenu::recordRequestedDevices (const juce::String& input, const juce::String& output)
+{
+    auto* settings = getAppProperties().getUserSettings();
+
+    const auto record = lighthost::device::encodeRequested (
+        lighthost::device::asRequest (input, output));
+
+    settings->setValue (lighthost::keys::requestedDevices, record.get());
+
+    // Flushed here rather than left to the caller. The write only matters
+    // across a restart, and the run that most needs it is the one that ends
+    // with the device gone and the process killed rather than quit.
+    flushSettings (*settings, "recording the chosen audio devices");
+
+    juce::Logger::writeToLog ("IconMenu: recorded requested devices, input='"
+                              + input + "' output='" + output + "'");
+}
+
 void IconMenu::reportDeviceSubstitutionIfAny (const juce::String& contextLabel)
 {
-    const auto stored = getAppProperties().getUserSettings()->getXmlValue (lighthost::keys::audioDeviceState);
-    const auto setup  = deviceManager.getAudioDeviceSetup();
+    auto* settings = getAppProperties().getUserSettings();
+
+    // Two sources, in that order of preference; requestToCompare explains why.
+    // The short version: DEVICESETUP stops being a record of the REQUEST the
+    // moment anything calls updateXml(), which three sites in this application
+    // do. So it is the fallback for installs with no record of their own yet,
+    // not the source of truth it was in 5.2.0.
+    const auto recorded = settings->getXmlValue (lighthost::keys::requestedDevices);
+    const auto stored   = settings->getXmlValue (lighthost::keys::audioDeviceState);
+    const auto setup    = deviceManager.getAudioDeviceSetup();
 
     const auto message = lighthost::device::describeSubstitution (
-        lighthost::device::requestedFrom (stored.get()),
+        lighthost::device::requestToCompare (recorded.get(), stored.get()),
         { setup.inputDeviceName, setup.outputDeviceName });
 
     if (! message.has_value())
@@ -1294,6 +1323,32 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
     }
     else if (changed == &activePluginList)
     {
+        // A throw from this write is unrecoverable, and is deliberately left to
+        // terminate the process.
+        //
+        // The two mutation sites -- handleDeletePlugin and applyPluginChain --
+        // wrap removeType/addType in a try/catch that rolls the settings back.
+        // Neither guard reaches here: sendChangeMessage is an async update, so
+        // the write lands on a later message-thread callback, by which time the
+        // scope that owned the rollback has returned.
+        //
+        // Moving the persist inside those guards was the other option and is
+        // refused, because it changes WHEN settings are written rather than
+        // only where the guard sits. applyPluginChain mutates the list once per
+        // arriving and departing plugin, so an inline write turns one save per
+        // apply into one per plugin, and this listener would still run
+        // afterwards and write again. Changing persistence timing to close a
+        // comment gap is the wrong trade.
+        //
+        // Catching it here without a rollback would be worse than terminating.
+        // The in-memory list has already changed; swallowing the failure leaves
+        // a settings file describing a chain that is not the one running, and
+        // the next launch restores that wrong chain with nothing to say so. A
+        // crash leaves the previous settings file intact and correct.
+        //
+        // In practice nothing here throws: createXml and setValue allocate, and
+        // flushSettings reports a failed write rather than throwing. This is a
+        // statement of what a std::bad_alloc would do, not a live hazard.
         if (auto xml = activePluginList.createXml())
         {
             settings->setValue (lighthost::keys::pluginListActive, xml.get());
@@ -1505,6 +1560,8 @@ void IconMenu::handleDeletePlugin (int index)
     // message thread, outside this scope. removeType itself only takes a lock
     // and mutates an Array, so in practice there is nothing here to throw. The
     // guard is kept because a rollback is the correct response if it ever does.
+    // What happens if the listener's own write throws is settled where it
+    // happens, in changeListenerCallback: unrecoverable, and left to terminate.
     try
     {
         activePluginList.removeType (pluginToDelete);  // triggers changeListener → persists XML
@@ -2077,6 +2134,9 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     // Nothing is written to the settings and no node is destroyed until every
     // list mutation has succeeded. A throw here leaves the settings exactly as
     // they were rather than describing a chain the user did not ask for.
+    //
+    // The listener's own XML write is outside this, and outside any guard --
+    // see changeListenerCallback for why that is deliberate.
     const auto abandon = [&] (const juce::String& what, const juce::String& detail)
     {
         store.rollback();
@@ -2115,6 +2175,10 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         }
     }
 
+    // Set when addType reported a replacement rather than an add. See the
+    // reconciliation below for what that means and why it is not ignorable.
+    bool anyAddReplaced = false;
+
     for (const auto& plugin : arriving)
     {
         if (store.readNodeId (plugin) == 0)
@@ -2122,7 +2186,16 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
 
         try
         {
-            activePluginList.addType (plugin);  // changeListener persists the XML
+            // The return value is "added", and false means addType REPLACED an
+            // existing entry instead (juce_KnownPluginList.cpp:110, `desc =
+            // type`). That is reachable because the two definitions of "the
+            // same plugin" disagree: ChainStore::identityOf includes
+            // pluginFormatName, PluginDescription::isDuplicateOf compares only
+            // fileOrIdentifier, uniqueId and deprecatedUid. Two descriptions
+            // sharing a file and ids under different format names are
+            // therefore two identities and one list entry.
+            if (! activePluginList.addType (plugin))  // changeListener persists the XML
+                anyAddReplaced = true;
         }
         catch (const std::exception& e)
         {
@@ -2134,6 +2207,66 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
             abandon ("activePluginList.addType", plugin.name);
             return;
         }
+    }
+
+    // ── Reconcile the list against what was asked for ────────────────────────
+    // Discarding the addType result left the chain one plugin shorter than the
+    // user asked for, with a full set of settings behind for the entry that
+    // lost -- keys and a state file belonging to nothing, invisible unless the
+    // settings file is read by hand, and silently dropped from the chain on
+    // every launch after.
+    //
+    // Done after the whole batch, not per add, because which description
+    // survives depends on the order the adds ran in.
+    std::vector<PluginDescription> dropped;
+
+    if (anyAddReplaced)
+    {
+        const auto finalTypes = activePluginList.getTypes();
+
+        for (const auto& wanted : newChain)
+            if (! sameAsAny (finalTypes, wanted))
+                dropped.push_back (wanted);
+
+        for (const auto& plugin : dropped)
+        {
+            // Treated exactly as a departing plugin, because that is what it
+            // has become. Its graph node needs no teardown here: a replacement
+            // can only happen with a non-empty `arriving`, which ends this
+            // function in loadActivePlugins, and that clears the graph.
+            store.stageErase (plugin);
+
+            const auto droppedIdentity = ChainStore::identityOf (plugin);
+            (void) vault.erase (droppedIdentity);
+            lastWrittenState.erase (droppedIdentity);
+        }
+
+        // addType returns early on a replacement and does NOT broadcast
+        // (juce_KnownPluginList.cpp:111, before the sendChangeMessage at :118),
+        // so an apply whose only mutation was a replacement would change the
+        // list in memory and never write it. Asking for the broadcast keeps the
+        // persist on its usual async path rather than adding a second writer.
+        activePluginList.sendChangeMessage();
+
+        if (! dropped.empty())
+        {
+            juce::StringArray names;
+
+            for (const auto& plugin : dropped)
+                names.add (plugin.name);
+
+            // Reported, not merely logged: the running chain is not the chain
+            // that was asked for, and a silently short chain is the class of
+            // failure this host has spent several releases removing.
+            reportStatus ("Not added to the chain: " + names.joinIntoString (", ")
+                          + ". Another plugin in the chain has the same file and"
+                            " plugin id under a different format, and the plugin"
+                            " list holds one entry for both.");
+        }
+
+        juce::Logger::writeToLog ("IconMenu: addType replaced an existing entry; "
+                                  + juce::String ((int) dropped.size())
+                                  + " plugin(s) dropped from the chain");
     }
 
     // ── Tear down the nodes of departed plugins ──────────────────────────────
@@ -2155,6 +2288,12 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     // pass, so the values stay consistent with each other.
     for (size_t i = 0; i < newChain.size(); ++i)
     {
+        // Nothing is staged for a plugin the list dropped. Store::commit
+        // applies removals before writes, so staging here would put back the
+        // keys stageErase has just taken out.
+        if (! dropped.empty() && sameAsAny (dropped, newChain[i]))
+            continue;
+
         store.stageOrder (newChain[i], static_cast<int> (i));
 
         if (i < bypassStates.size())

@@ -201,6 +201,195 @@ public:
                     "are genuinely different devices");
             expect (namesMatch ("", ""));
         }
+
+        //======================================================================
+        // The request recorded separately from JUCE's own state.
+        //
+        // DEVICESETUP stops being evidence of a REQUEST the moment anything
+        // calls updateXml(), which three sites in the application do. These
+        // cover the key that outlives those writes, and -- just as important --
+        // the cases where it must NOT take over from DEVICESETUP.
+
+        beginTest ("a recorded request survives the settings file it is stored in");
+        {
+            // Through a real PropertySet, because that is the path in
+            // production: setValue serialises the element to text and
+            // getXmlValue reparses it. Device names are arbitrary text, so the
+            // attribute escaping has to hold or a name comes back truncated and
+            // every launch reports a substitution that did not happen.
+            juce::PropertySet settings;
+
+            // Spelled with charToString so this source carries no escape of its
+            // own to get wrong.
+            const auto quote = juce::String::charToString ('"');
+            const Requested chosen { "Mic & <Line In> " + quote + "2" + quote,
+                                     "Line In (2- M-Audio M-Track)" };
+
+            settings.setValue ("requestedAudioDevices", encodeRequested (chosen).get());
+
+            const auto reread = decodeRequested (settings.getXmlValue ("requestedAudioDevices").get());
+
+            expectEquals (reread.input,  chosen.input);
+            expectEquals (reread.output, chosen.output);
+        }
+
+        beginTest ("no record at all reads as nothing requested");
+        {
+            expect (! hasRecord (nullptr));
+
+            const auto none = decodeRequested (nullptr);
+
+            expect (none.input.isEmpty());
+            expect (none.output.isEmpty());
+        }
+
+        beginTest ("an element written by something else is not a record");
+        {
+            // A DEVICESETUP is the element most likely to arrive here by
+            // mistake, and it carries the names under different attributes.
+            // Accepting one would compare the open devices against two empty
+            // strings and report nothing, for ever.
+            const auto foreign = setupXml ("Mic", "Speakers");
+
+            expect (! hasRecord (foreign.get()));
+
+            const auto decoded = decodeRequested (foreign.get());
+
+            expect (decoded.input.isEmpty());
+            expect (decoded.output.isEmpty());
+        }
+
+        beginTest ("one side chosen and the other not is recorded as exactly that");
+        {
+            const auto encoded = encodeRequested ({ {}, "Speakers" });
+            const auto decoded = decodeRequested (encoded.get());
+
+            expect (decoded.input.isEmpty(), "no input was chosen, so none is requested");
+            expectEquals (decoded.output, juce::String ("Speakers"));
+
+            expect (! describeSubstitution (decoded, { "Whatever Opened", "Speakers" }).has_value(),
+                    "an input that was never requested cannot have been substituted");
+        }
+
+        beginTest ("a combo placeholder is not a choice");
+        {
+            // The device combos show "(no input devices)" when a list is empty.
+            // Recording one would ask for a device that cannot exist, and
+            // report a substitution on every launch from then on.
+            expect (! isDeviceChoice ("(no input devices)"));
+            expect (! isDeviceChoice ("(no device)"));
+            expect (! isDeviceChoice (""));
+            expect (! isDeviceChoice ("   "));
+            expect (isDeviceChoice ("Speakers (Realtek(R) Audio)"),
+                    "a name that merely contains brackets is a real device");
+
+            const auto request = asRequest ("(no input devices)", "Speakers");
+
+            expect (request.input.isEmpty());
+            expectEquals (request.output, juce::String ("Speakers"));
+        }
+
+        beginTest ("surrounding whitespace is trimmed before it is recorded");
+        {
+            const auto request = asRequest ("   Mic   ", "  Speakers  ");
+
+            expectEquals (request.input,  juce::String ("Mic"));
+            expectEquals (request.output, juce::String ("Speakers"));
+
+            expect (! isDeviceChoice ("  (no device)  "),
+                    "a padded placeholder is still a placeholder");
+
+            expect (asRequest ("   ", "\t").input.isEmpty(),
+                    "whitespace is not a device name");
+        }
+
+        beginTest ("a recorded request beats the stored DEVICESETUP");
+        {
+            // The case the record exists for. JUCE has already adopted the
+            // fallback into DEVICESETUP -- one autoMatchSampleRate correction is
+            // enough -- so DEVICESETUP now agrees with what is open and has
+            // nothing to report. The record still holds what was asked for.
+            const auto adopted  = setupXml ("Mic", "Speakers (Dock)");
+            const auto recorded = encodeRequested ({ "Mic", "Mic Chain INPUT" });
+
+            expect (! describeSubstitution (requestedFrom (adopted.get()),
+                                            { "Mic", "Speakers (Dock)" }).has_value(),
+                    "DEVICESETUP on its own is exactly the blind spot being closed");
+
+            const auto message = describeSubstitution (
+                requestToCompare (recorded.get(), adopted.get()),
+                { "Mic", "Speakers (Dock)" });
+
+            expect (message.has_value(), "the recorded request has to win");
+            expect (message->contains ("Mic Chain INPUT"),
+                    "and it is the recorded name that must be reported missing");
+        }
+
+        beginTest ("with no record the check falls back to DEVICESETUP");
+        {
+            // 5.2.0 wrote no record, so an install upgrading from it has only
+            // this until the next Apply. Ignoring DEVICESETUP would switch the
+            // check off for those users in the meantime.
+            const auto stored = setupXml ("Mic", "Mic Chain INPUT");
+
+            const auto message = describeSubstitution (requestToCompare (nullptr, stored.get()),
+                                                       { "Mic", "Speakers" });
+
+            expect (message.has_value());
+            expect (message->contains ("Mic Chain INPUT"));
+        }
+
+        beginTest ("a record naming nothing does not fall back");
+        {
+            // Both combos on a placeholder is still a choice. Falling back here
+            // would resurrect the stale DEVICESETUP request that choice
+            // replaced, and report a substitution against a device the user has
+            // already stopped asking for.
+            const auto stored   = setupXml ("Old Mic", "Old Speakers");
+            const auto recorded = encodeRequested (asRequest ("(no input devices)",
+                                                              "(no output devices)"));
+
+            expect (hasRecord (recorded.get()), "an empty record is still a record");
+
+            const auto request = requestToCompare (recorded.get(), stored.get());
+
+            expect (request.input.isEmpty());
+            expect (request.output.isEmpty());
+            expect (! describeSubstitution (request, { "Something", "Else" }).has_value());
+        }
+
+        beginTest ("a first run has neither, and says nothing");
+        {
+            const auto request = requestToCompare (nullptr, nullptr);
+
+            expect (request.input.isEmpty());
+            expect (request.output.isEmpty());
+            expect (! describeSubstitution (request, { "Default In", "Default Out" }).has_value(),
+                    "nothing was asked for, so nothing can have been substituted");
+        }
+
+        beginTest ("recording then re-reading reports the device that went missing");
+        {
+            // End to end over the storage the application actually uses: record
+            // what the combos held, lose the device, and check the report names
+            // it. Everything between is the same code IconMenu runs.
+            juce::PropertySet settings;
+
+            settings.setValue ("requestedAudioDevices",
+                               encodeRequested (asRequest ("Microphone (USB audio CODEC)",
+                                                           "  Mic Chain INPUT  ")).get());
+
+            const auto recorded = settings.getXmlValue ("requestedAudioDevices");
+
+            const auto message = describeSubstitution (
+                requestToCompare (recorded.get(), nullptr),
+                { "Microphone (USB audio CODEC)", "Speakers (Dock)" });
+
+            expect (message.has_value());
+            expect (message->contains ("Mic Chain INPUT"));
+            expect (message->contains ("Speakers (Dock)"));
+            expect (message->contains ("Output"));
+        }
     }
 };
 
