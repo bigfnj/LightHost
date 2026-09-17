@@ -253,6 +253,15 @@ With the window shut, the clip warning still works and everything else is off.
 Closing the signal view returns the graph to exactly what it was before the
 feature existed, which a test asserts rather than assumes.
 
+### How this was designed
+
+[`docs/mockups/level-meters.html`](docs/mockups/level-meters.html) is the mockup
+these were chosen from: four options drawn at the real window width, including
+the one that was declined and the panel showing the clipping incident that
+prompted the whole feature. Open it in a browser. Its four signal colours are
+pinned to the source and annotated with where each one lives, so a colour change
+that leaves the mockup behind is visible rather than silent.
+
 ---
 
 ## Testing your chain on a file
@@ -343,6 +352,13 @@ can tell you and the thing a scan used to throw away.
 `--scan-path` is not optional on every machine. JUCE's default VST2 locations do
 not include `%COMMONPROGRAMFILES%\VST2`, which is where the ReaPlugs installer
 puts ReaEQ, so that whole folder is invisible to a bare `--scan`.
+
+The list is written after each format finishes rather than once at the end.
+Scanning loads every plugin it finds into this process, so a plugin that
+hard-crashes the scan takes Light Host down with it -- and a single write at the
+end would lose everything that run had already found. It skips the offender next
+time (that is what the crash list is for), but only if the work before it
+survived.
 
 `--scan` is the only command line here that writes to your settings file, and
 the scanned list is all it writes. A render writes nothing back: not settings,
@@ -616,7 +632,11 @@ What they cover:
   rather than cleared, and that nothing on it can switch pacing off by accident.
 - **Scan path precedence**: a format's own defaults first, a folder remembered
   from *Edit Plugins* next, `--scan-path` last, and a folder that is not there
-  skipped rather than searched.
+  skipped rather than searched. Plus the write at the end of each format's
+  scan: that the list lands under the key the application reads, and that a
+  write which cannot reach disk is reported rather than swallowed. The scan
+  itself is not covered, because it loads whatever plugins are installed on the
+  machine running the tests.
 - **The self-test's own checks**: that every startup and shutdown marker is
   checked one at a time rather than as a set, and that the assertion a smoke
   test is allowed to ignore is one named file and not a topic.
@@ -684,6 +704,15 @@ Answers whether CI actually passed on a commit. It exists because
 needs the run's `conclusion` to be exactly `success` and every job to agree; no
 run at all is a failure, because no evidence is not success.
 
+### The rest of `tools/`
+
+[`tools/README.md`](tools/README.md) indexes all of it in one line each: the
+build and CI scripts above, and the operator tooling that measured the real
+microphone chain -- capture, level analysis, WASAPI endpoint and role listing,
+capture-level read and write, and idle CPU. None of it is part of the
+application or run by CTest, and most of it needs a real audio device, which is
+why none of it is a gate.
+
 ---
 
 ## Project layout
@@ -694,7 +723,8 @@ run at all is a failure, because no evidence is not success.
 ├── Tests/           Unit tests (juce::UnitTestRunner)
 ├── Resources/       Icons and binary resources
 ├── docs/images/     Screenshots used by this README
-├── tools/           Build, CI and audio regression scripts
+├── docs/mockups/    Design mockups, annotated with what shipped
+├── tools/           Build, CI and audio scripts -- see tools/README.md
 ├── Utilities/       Helper scripts
 ├── lib/             Vendored JUCE 9.0.2 + VST2 SDK
 ├── .github/         CI and release workflows

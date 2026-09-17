@@ -104,6 +104,29 @@ namespace lighthost::scan
         return combined;
     }
 
+    /** Puts the list into the settings file, now rather than at shutdown.
+
+        `juce::PropertiesFile` only auto-saves on a timer, so a process that
+        exits promptly after a scan can otherwise do all the work and persist
+        none of it.
+
+        Returns false when the list did not reach disk. `createXml` returning
+        null is counted as a failed write rather than as a write that was
+        skipped: the old code took the `if (xml)` branch and reported `ok`
+        either way, which is a success the run had not earned.
+    */
+    [[nodiscard]] inline bool writeList (juce::PropertiesFile& settings,
+                                         const juce::KnownPluginList& list)
+    {
+        const auto xml = list.createXml();
+
+        if (xml == nullptr)
+            return false;
+
+        settings.setValue (keys::pluginList, xml.get());
+        return settings.saveIfNeeded();
+    }
+
     //==========================================================================
     /** Scans every format that can be scanned and writes the result to the
         settings file under the same key the application reads at startup.
@@ -164,32 +187,56 @@ namespace lighthost::scan
             // Kept rather than discarded: a folder in which every plugin failed
             // to load has to look different from a folder that scanned cleanly.
             result.failedFiles.addArray (scanner.getFailedFiles());
+
+            result.listed = known.getNumTypes();
+            result.added  = result.listed - before;
+
+            // Written HERE, per scanned format, rather than once after the
+            // loop. Scanning loads third-party code in this process by design,
+            // so a plugin that hard-crashes the scan takes the process with it
+            // -- and with a single write at the end, every plugin found in that
+            // run dies with it. The dead man's pedal then skips the offender
+            // next time, so the same crash costs a full rescan of everything
+            // already found: N crashing plugins, N+1 complete rescans.
+            //
+            // The cost is bounded and small. Only a format that CAN scan and
+            // has somewhere to look reaches this line, which is one to three
+            // formats on a real machine, not one flush per format enumerated.
+            if (! writeList (settings, known))
+            {
+                // A failed write ABORTS the remaining formats rather than
+                // carrying on. A write fails because of the settings file --
+                // read-only, full disk, a path that has gone away -- and none
+                // of those is a property of the format being scanned, so every
+                // remaining format would fail identically. Carrying on would
+                // spend minutes loading more third-party code in-process, at
+                // the crash exposure this whole change exists to bound, to
+                // produce a result that still cannot be kept.
+                //
+                // Whatever earlier formats wrote is already on disk, which is
+                // the point, so the message names what survived.
+                result.message = "scanned " + juce::String (result.listed)
+                               + " plugin(s) but could not write "
+                               + settings.getFile().getFullPathName()
+                               + " after " + format->getName()
+                               + "; formats not yet scanned were skipped";
+                return result;
+            }
         }
 
+        // Repeated from inside the loop, because the loop body does not run
+        // when no format could scan -- and the count still has to be the size
+        // of the list that came out of the settings file, not zero.
         result.listed = known.getNumTypes();
         result.added  = result.listed - before;
 
+        // After the loop, because "no format had anywhere to look" is a fact
+        // about the whole run. Nothing was scanned, so nothing was written and
+        // there is nothing to report but the reason.
         if (result.formatsScanned.isEmpty())
         {
             result.message = "no plugin format had anywhere to look";
             return result;
-        }
-
-        if (auto xml = known.createXml())
-        {
-            settings.setValue (keys::pluginList, xml.get());
-
-            // Written now rather than at shutdown. A scan is the whole point of
-            // the run, and PropertiesFile only auto-saves on a timer -- so a
-            // process that exits promptly after this can otherwise do all the
-            // work and persist none of it.
-            if (! settings.saveIfNeeded())
-            {
-                result.message = "scanned " + juce::String (result.listed)
-                               + " plugin(s) but could not write "
-                               + settings.getFile().getFullPathName();
-                return result;
-            }
         }
 
         result.ok = true;

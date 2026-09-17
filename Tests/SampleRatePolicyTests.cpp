@@ -62,6 +62,34 @@ public:
             expectEquals (decision.rate, 22050.0);
         }
 
+        beginTest ("the highest rate is the highest one, not the last one listed");
+        {
+            // The test above passes either way, because its rates happen to be
+            // ascending and the last entry IS the largest. That is the trap:
+            // decide() used to return availableRates.getLast() under a comment
+            // saying "the highest the device admits to", and nothing in
+            // juce::AudioIODevice::getAvailableSampleRates() contracts an
+            // order. Descending and unsorted lists are the two shapes that tell
+            // the two implementations apart, and both would hand a device that
+            // offers 22050 its 8000 instead.
+            const auto descending = decide (48000.0, rates ({ 22050.0, 11025.0, 8000.0 }), 0);
+
+            expect (descending.action == Action::applyRate);
+            expectEquals (descending.rate, 22050.0,
+                          "a descending rate list gave the LAST rate rather than the highest");
+
+            const auto unsorted = decide (48000.0, rates ({ 11025.0, 22050.0, 8000.0 }), 0);
+
+            expect (unsorted.action == Action::applyRate);
+            expectEquals (unsorted.rate, 22050.0,
+                          "an unsorted rate list gave the LAST rate rather than the highest");
+
+            // A single-entry list is the degenerate case where the two agree,
+            // pinned so that a future rewrite cannot pass by handling only the
+            // interesting shapes.
+            expectEquals (decide (48000.0, rates ({ 64000.0 }), 0).rate, 64000.0);
+        }
+
         beginTest ("a device that reports no rates at all is not guessed at");
         {
             // Asking a device that admits to no rates would be the start of the
