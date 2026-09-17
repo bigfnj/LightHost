@@ -8,6 +8,205 @@ Nothing yet.
 
 ---
 
+## [5.3.0] — 2026-09-17
+
+**5.2.0 was written up and never tagged**, so this release carries both. The
+5.2.0 section below still describes what landed then; nothing in it shipped to
+anyone until now.
+
+A release about evidence. Most of what follows is not a new feature but a check
+that could not fail, a claim nothing verified, or a guarantee that had quietly
+stopped holding. Four audit passes over the 5.2.0 tree found 30 of them, and
+three of the worst were introduced by the same day's work that was meant to fix
+them.
+
+### Fixed — the device-substitution report could be silenced by pressing Apply
+
+5.2.0 taught Light Host to say when it opened a different audio device than the
+one asked for. It read the request out of JUCE's stored `DEVICESETUP`, on the
+grounds that the fallback path does not rewrite it. True of the fallback, false
+of everything else: `autoMatchSampleRate`, Preferences Apply and
+`setCurrentAudioDeviceType` all pass `treatAsChosenDevice = true`, which adopts
+the fallback device as the stored choice. After any of them the request was
+gone and the substitution became permanently invisible.
+
+The names the user picks are now recorded separately, and only when a device
+combo actually changed. That second condition is the whole fix: the first
+attempt recorded on every Apply, and after a fallback the combo shows the
+*substituted* device, because the missing one is not in the list at all. So
+opening Preferences to look at the warning and pressing Apply for any reason
+would have written the substitute down as the thing you asked for.
+
+Verified on real hardware: with a request pointing at devices that do not
+exist, both roles were named at startup and again on relaunch, with the stored
+`DEVICESETUP` holding nothing at all -- the state the old code could not see
+through. With the real settings restored, it said nothing.
+
+### Fixed — audio was cut across a settings-file write on every plugin delete
+
+`graph.removeNode` defaults to a synchronous rebuild, so deleting a plugin
+published a render sequence with the lane cut, then wrote the settings file,
+then rewired. Delete the only plugin in a chain and the output was silent for
+the length of a disk write. The graph mutations in the load and probe paths had
+the same shape; a chain reload used to publish seven render sequences before
+the one that mattered, and now publishes one.
+
+### Fixed — a sample-rate give-up on one device disarmed the next
+
+The correction budget was only reset when a device already supported the
+current rate, so once one device exhausted it, the next device to arrive was
+given up on before it had been asked for anything. The budget now belongs to a
+device, in a tested policy object rather than in three loose members. The
+give-up message is also genuinely once per episode, which its comment had
+claimed while the counter kept incrementing.
+
+### Fixed — the signal view labelled rows from a chain it was not metering
+
+Row *i* was named from the Preferences list, which the user can reorder without
+pressing Apply, and fed from a probe indexed over the committed chain. Reorder
+a row, open the view, and every row was named after one plugin and metered from
+another. Rows now come from the same chain the meters do. Apply also refreshes
+the view, which it never did -- so the fix covers the busiest route into the
+bug, not just the one that was reported.
+
+Rows that do not fit the window are now counted rather than drawn into a
+zero-height rectangle. Past roughly the eleventh plugin the view simply stopped
+showing them, and a meter you cannot see reads exactly like one showing
+silence.
+
+### Fixed — deleting a plugin from the tray restored its preset when you added it back
+
+The tray delete erased the settings keys and left the state file and the
+in-memory copy behind, so re-adding the plugin restored the preset that had
+just been deleted -- while deleting the same plugin from the Preferences list
+did not. Two ways to remove a plugin, two meanings, and the difference only
+appeared on the next add. The state file was also orphaned permanently, since
+nothing enumerates the vault directory.
+
+### Fixed — quitting with a plugin editor open leaked the plugin
+
+`closeAllCurrentlyOpenWindows` was called from one place, and it was not the
+shutdown path. An open editor holds a refcounted graph node, so the hosted
+plugin outlived the graph and its own teardown never ran.
+
+### Fixed — a lane trim was applied after the ramp had been prepared
+
+The trim node was added to the graph, which prepared it at unity, and only then
+given its stored value -- so a muted lane ramped down from full level instead
+of starting where it was left. Reachable when a whole chain instantiates in one
+call stack.
+
+### Fixed — smaller things found in the same passes
+
+- `Meter` never cleared its RMS accumulator when nothing was watching, so
+  reopening the signal view showed a phantom level from the previous session
+  for about 100 ms.
+- `reconnectGraph` rewrote every hosted plugin's bypass parameter on every
+  rewire, pushing an automation-visible change with no value change.
+- Apply could open an input device the user never chose, because the combo
+  falls back to the first entry when nothing is open.
+- `activePluginList.addType`'s return value was discarded, and
+  `KnownPluginList` does not broadcast on its replacement path -- so an Apply
+  whose only change was a replacement mutated the list and never persisted it.
+- `setAudioDeviceSetup`'s error string was discarded at the one site that
+  exists to handle device trouble.
+
+### Changed — warnings are errors, on all three compilers
+
+`/W4` and JUCE's warning flags were already on everywhere and nobody read the
+output. Nine real diagnostics had to be cleared first. Applied per source file
+rather than per target, because JUCE compiles its module sources *into* our
+target: a target-scoped `-Werror` failed on a vendored JUCE warning and would
+have broken the macOS job. `/w14062` is set on Windows, where an unhandled
+enumerator is off at every warning level unless asked for by name.
+
+### Added — `--scan`, so the offline render works on a fresh checkout
+
+`--render --chain NAME` resolves against the scanned plugin list, and filling
+that list needed a person clicking Scan in a window a headless run does not
+have. The project's only check that can prove a sample did not change therefore
+depended on manual setup it could neither perform nor verify. `--scan-path`
+adds a folder the defaults miss, which on Windows includes
+`%COMMONPROGRAMFILES%\VST2` -- where ReaPlugs installs ReaEQ, the default
+regression chain.
+
+### Added — Linux builds on a developer machine
+
+`tools/build-linux-docker.sh` builds and runs the whole suite in `ubuntu:24.04`.
+Before this, the first evidence that Linux compiled arrived from CI after the
+push, and 5.2.0 fell into that gap twice in one day. The dependency list lived
+in `ci.yml` and again in `release.yml`; both now read one
+`tools/linux-build-deps.txt`, as does the container and the README.
+
+The `clang-release` preset also works for the first time. `CMakeLists.txt` was
+handing MSVC slash-form flags to `clang++`, which rejects `/utf-8` as a missing
+input file -- so the preset `BACKLOG.md` recommended for catching MSVC-only
+divergence had never once built.
+
+### Added — `tools/ci-status.sh`, because `gh run watch` lies
+
+`gh run watch --exit-status` returned 0 for two runs that had failed. That was
+recorded as a warning telling the reader to check a field by hand, which is a
+control that works until someone forgets. It is now a script that exits 0 only
+when the run's `conclusion` is exactly `success` and every job agrees, and
+treats a missing run as failure, because no evidence is not success.
+
+### Fixed — checks that could not fail
+
+Found by auditing the gates themselves rather than the code they guard.
+
+- Both workflows installed Linux dependencies with `grep file | xargs apt-get
+  install`. GitHub's shell has no `pipefail`, so a missing list exited **0**
+  having installed nothing. Losing `xvfb` that way builds green, registers no
+  smoke tests, and reports 100% passed on one test.
+- `render-regression.sh` checked that the render "produced no file" against a
+  file it had created itself three lines earlier, so an empty render would have
+  been hashed and, on `capture`, baselined. The baseline also recorded no
+  provenance, so a capture with the wrong input silently rebaselined the gate.
+  It now records the input and chain, and refuses to compare across them rather
+  than calling the difference a regression.
+- `update-juce.sh` printed "nothing (as expected)" when `grep` could not find
+  the directory at all, which would have turned the only automated standing
+  check into a permanent pass after any JUCE restructure.
+- `voice-headroom.sh` printed `CAPTURE DONE` without reading ffmpeg's exit
+  status.
+- `ci-status.sh` itself exited 1 -- its own code for "the run failed" -- when
+  `gh` merely could not answer.
+
+### Fixed — tests that could not fail
+
+- 36 assertions checked that channel indices fell inside a range two `std::min`
+  calls had just clamped them to. They now use the real per-node channel counts,
+  as the non-probed version of the same test always did.
+- A blank category name in `TestMain.cpp` ran every test including the GUI ones,
+  silently, and nothing noticed a test class whose category was never listed.
+  Both are now build-time failures.
+- A confirmation-dialog test decided the expected button order with the same
+  `#if` the production code uses, so it compared a copy of the condition
+  against itself.
+- `Tests/OfflineRenderTests.cpp`, `Tests/PluginScanTests.cpp` and
+  `Tests/SelfTestChecksTests.cpp` are new: the offline renderer's five argument
+  parsers, the headless scanner's path precedence, and the rule that decides
+  which assertion failures a smoke test is allowed to ignore all had no tests at
+  all.
+- `LyingLatencyStub` now exists. `StubProcessors.hpp` referred readers to it for
+  two releases; it was never written, so the case it named read as covered.
+
+1191 assertions at the start of the day, 1363 now, every new one mutation-tested.
+
+### Fixed — documentation that was not true
+
+- `third_party` said JUCE 9.0.1 while the tree was on 9.0.2, and that file is
+  copied into all three published archives, so the attribution travelling with
+  every binary was wrong. `update-juce.sh` now maintains it.
+- README documented neither `--scan` nor the Linux container script, and carried
+  a fourth copy of the apt list that was short by seven packages.
+- `DECISIONS.md` described the `DEVICESETUP` comparison as the mechanism; it is
+  now the fallback.
+- `RELEASING.md` said there is no GCC or Clang on the development machine.
+
+---
+
 ## [5.2.0] — 2026-09-16
 
 A backlog-clearing release. `BACKLOG.md` held 24 items; it now holds none, and

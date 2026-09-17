@@ -11,8 +11,8 @@
 # only evidence that Linux still compiled arrived from CI, after the push. That
 # is the wrong order, and BACKLOG.md said so: 5.2.0 fell into the gap twice in
 # one day -- once on an expectEquals overload MSVC resolved and GCC refused, and
-# once on the GUI tests failing under X11. A clean local build and 1131 passing
-# tests said nothing about either.
+# once on the GUI tests failing under X11. A clean local build and a fully
+# green test run said nothing about either.
 #
 # GCC is also much fussier than MSVC, which matters now that warnings are
 # errors. Most of what /WX will never catch, -Werror here will.
@@ -46,6 +46,28 @@ esac
 builddir=build/linux-docker
 
 mode=${1:-all}
+
+# Validated, because an unrecognised argument used to run the full build and
+# test: `--buld` or `-h` fell through to the default and looked like it had
+# been understood.
+case "$mode" in
+    all|--build|--shell) ;;
+    *)
+        echo "unknown argument: $mode" >&2
+        echo "usage: tools/build-linux-docker.sh [--build|--shell]" >&2
+        exit 2
+        ;;
+esac
+
+# Run as the invoking user on a POSIX host, so the build directory does not
+# come out owned by root and refuse a later unprivileged rm -rf. Skipped on
+# Windows, where the ids are meaningless to the daemon and the bind mount is
+# already owned by the user.
+docker_user=()
+
+case "$(uname -s)" in
+    Linux|Darwin) docker_user=(--user "$(id -u):$(id -g)") ;;
+esac
 
 if ! docker info >/dev/null 2>&1; then
     echo "docker is not running" >&2

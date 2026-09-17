@@ -68,9 +68,17 @@ jobs:
         # was the third, and the most expensive one to have wrong: a release
         # that cannot build Linux fails after the tag is already public.
         run: |
+          set -o pipefail
+          packages=$(grep -vE '^[[:space:]]*(#|$)' tools/linux-build-deps.txt)
+          # See the identical step in ci.yml for why this is not a one-liner.
+          # Short version: GitHub's default shell is `bash -e` with no
+          # pipefail, so `grep missing | xargs apt-get install` exits 0 and
+          # installs nothing. Losing xvfb that way would build green and skip
+          # every smoke test. On this workflow that ships.
+          test -n "$packages" || { echo 'tools/linux-build-deps.txt yielded no packages' >&2; exit 1; }
+          echo "$packages"
           sudo apt-get update -qq
-          grep -vE '^[[:space:]]*(#|$)' tools/linux-build-deps.txt \
-            | xargs sudo apt-get install -y --no-install-recommends
+          echo "$packages" | xargs -r sudo apt-get install -y --no-install-recommends
 
       - name: Configure
         # Pin the make program to the stable apt path, matching ci.yml.

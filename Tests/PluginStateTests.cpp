@@ -159,18 +159,16 @@ public:
             // node and leave the stored blob alone. Reporting `nothingSaved`
             // here would let the save overwrite a real preset with defaults.
             //
-            // This used to build blobOnDisk behind `if (restoreOk)`, which the
-            // expect above had already established was false -- so the final
-            // comparison was savedBlob against savedBlob and could not fail.
+            // This used to end by building blobOnDisk behind `if (restoreOk)`
+            // and comparing it to savedBlob. The expect above had already
+            // established restoreOk was false, so the branch was dead and the
+            // comparison was savedBlob against savedBlob: an assertion with no
+            // reachable input that could fail it. It is gone rather than
+            // reworded -- the line below is the whole of what it was trying to
+            // say, and says it against a value the code under test produced.
             expect (result == RestoreResult::failed,
                     "a refused restore must report failed, not nothingSaved, or "
                     "savePluginStates will overwrite the stored preset");
-
-            juce::String blobOnDisk = savedBlob;
-            if (restoreOk)
-                blobOnDisk = base64Of (reopened);   // would clobber with defaults
-
-            expectEquals (blobOnDisk, savedBlob, "the user's saved state was overwritten");
         }
 
         //======================================================================

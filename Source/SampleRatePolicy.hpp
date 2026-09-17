@@ -23,10 +23,31 @@
 // nothing at all. The recursion it was written to stop is exactly the one it
 // cannot see.
 //
-// What bounds it is counting attempts, and that is what this decides. The count
-// resets as soon as the device reports a rate it actually supports, so a genuine
-// device change later gets its full budget again; a driver that never settles is
-// given up on, loudly, after a few tries.
+// What bounds it is counting attempts, and that is what this decides. A driver
+// that never settles is given up on, loudly, after a few tries.
+//
+// WHERE THE COUNT IS RESET, AND WHY IT IS NOT ALL HERE
+//
+// Two things end an episode, and only one of them is visible from inside a
+// decision:
+//
+//   the device settles   decide() sees it, because the rate it is handed is one
+//                        the device admits to, and says so via resetAttempts.
+//
+//   the device changes   decide() cannot see it. It is handed a rate and a list
+//                        of rates, never an identity, and the reset above can
+//                        never fire for a device already given up on: the rate
+//                        it is stuck at is by definition one that device says it
+//                        does not support.
+//
+// So the caller owns the second one. IconMenu holds a Budget, names its device
+// on every callback, and the Budget zeroes the count when that name moves. Up
+// to 5.2.0 there was no such reset, and this header claimed "a genuine device
+// change later gets its full budget again" while device A exhausting its budget
+// meant device B was given up on by its first callback, having been asked for
+// nothing. The identity is still not a parameter of decide(): that stays a pure
+// function of a rate and a list, so the budget can be exercised without a
+// device.
 //==============================================================================
 namespace lighthost::samplerate
 {
@@ -88,4 +109,87 @@ namespace lighthost::samplerate
         // Nothing standard on offer: take the highest the device admits to.
         return { Action::applyRate, availableRates.getLast(), false };
     }
+
+    //==========================================================================
+    /** The attempt count decide() is handed, and the two things that end an
+        episode.
+
+        Held by the caller across callbacks, because decide() is deliberately a
+        pure function of a rate and a list. It lives here rather than as loose
+        members of IconMenu so the DEVICE-CHANGE reset is reachable from a test:
+        it was one loose int there, with no device half at all, and that is how
+        the header comment above came to describe a reset that did not happen.
+        A rule that only exists inside a component no test can construct is a
+        rule nothing checks.
+    */
+    class Budget
+    {
+    public:
+        /** What to hand decide() as `attemptsSoFar`. */
+        [[nodiscard]] int attempts() const noexcept { return attemptsMade; }
+
+        /** Names the device the next decision is about, before making it.
+
+            A different identity is a different episode: full budget, and a
+            give-up worth logging again. The identity is whatever tells devices
+            apart; IconMenu uses driver type + device name. Returns true when
+            the budget was restored, which is a fact worth logging and worth
+            asserting.
+
+            Deliberately NOT reset when a device goes away, only when a
+            different one arrives. Treating every momentary close as a new
+            episode would hand three more requests to each one, which is the
+            unbounded loop this whole file exists to stop.
+        */
+        bool useDevice (const juce::String& identity)
+        {
+            if (identity == deviceIdentity)
+                return false;
+
+            deviceIdentity = identity;
+            restore();
+            return true;
+        }
+
+        /** Records what decide() returned, before acting on it.
+
+            A settle restores the budget; a request spends one. giveUp spends
+            nothing: the count is already at the limit there, so counting it
+            again only makes an unbounded number out of a bounded one.
+        */
+        void note (const Decision& decision)
+        {
+            if (decision.resetAttempts)
+                restore();
+            else if (decision.action == Action::applyRate)
+                ++attemptsMade;
+        }
+
+        /** True the first time a give-up is reached in an episode, false after.
+
+            Every decision after a give-up is another give-up -- the count stays
+            at the limit until something restores it -- so a log guarded only by
+            reaching the branch repeats on every device broadcast for as long as
+            the driver misbehaves.
+        */
+        [[nodiscard]] bool takeGiveUpLog() noexcept
+        {
+            if (giveUpLogged)
+                return false;
+
+            giveUpLogged = true;
+            return true;
+        }
+
+    private:
+        void restore() noexcept
+        {
+            attemptsMade = 0;
+            giveUpLogged = false;
+        }
+
+        juce::String deviceIdentity;
+        int  attemptsMade = 0;
+        bool giveUpLogged = false;
+    };
 }

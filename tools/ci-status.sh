@@ -89,8 +89,28 @@ echo "run $run_id for $short ($ref), workflow $workflow"
 
 # Polled on `status` alone: `conclusion` is empty until the run completes, and
 # reading it early is how a gate ends up treating "not finished" as "fine".
+# gh failing is NOT the run failing, and the two must not share an exit code.
+# Under `set -e` a bare `status=$(gh ...)` aborts the script with gh's own
+# status, normally 1 -- which this script defines as "the run finished and did
+# not succeed". A network blip while polling would therefore have reported a
+# CI failure that never happened. Exit 2 is "gh could not answer", as the
+# header promises.
+query_run()
+{
+    local field=$1 value
+
+    if ! value=$(gh run view "$run_id" --json "$field" --jq ".$field // \"\"" 2>&1); then
+        echo "CI FAIL: gh could not read $field for run $run_id" >&2
+        echo "  $value" >&2
+        echo "  This is a tooling failure, not a verdict on the run." >&2
+        exit 2
+    fi
+
+    printf '%s' "$value"
+}
+
 waited=0
-status=$(gh run view "$run_id" --json status --jq '.status // ""')
+status=$(query_run status)
 
 while [[ "$status" != "completed" ]]; do
     if (( waited >= timeout )); then
@@ -102,12 +122,12 @@ while [[ "$status" != "completed" ]]; do
     echo "  ${status:-unknown} ... waiting (${waited}s of ${timeout}s)"
     sleep "$interval"
     waited=$(( waited + interval ))
-    status=$(gh run view "$run_id" --json status --jq '.status // ""')
+    status=$(query_run status)
 done
 
 # The field, explicitly, rather than an exit code from something that watched
 # the run. This line is the whole point of the script.
-conclusion=$(gh run view "$run_id" --json conclusion --jq '.conclusion // ""')
+conclusion=$(query_run conclusion)
 
 # Every job as well. A run whose conclusion says success while a job does not is
 # the same shape of disagreement as the one that made this script necessary, so

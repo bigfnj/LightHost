@@ -568,11 +568,21 @@ struct Result
     return params.contains ("--render") || params.contains ("-render");
 }
 
-/** The two file arguments following --render, or empty strings when absent. */
+/** The two file arguments following --render, or empty strings when absent.
+
+    Both outputs are cleared on entry, so an absent path really does come back
+    empty rather than as whatever the caller happened to pass in. The doc
+    comment claimed that before the code did it; both callers pass empty
+    strings, so nothing was wrong, and a third caller reusing a variable would
+    have rendered to a path it never asked for.
+*/
 inline void parseArguments (const juce::StringArray& params,
                             juce::String& inPath,
                             juce::String& outPath)
 {
+    inPath  = {};
+    outPath = {};
+
     for (int i = 0; i < params.size(); ++i)
     {
         if (params[i] != "--render" && params[i] != "-render")

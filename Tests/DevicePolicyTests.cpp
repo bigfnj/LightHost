@@ -1,4 +1,5 @@
 #include "../Source/DevicePolicy.hpp"
+#include "../Source/SettingsKeys.hpp"
 
 #include <juce_core/juce_core.h>
 
@@ -225,9 +226,16 @@ public:
             const Requested chosen { "Mic & <Line In> " + quote + "2" + quote,
                                      "Line In (2- M-Audio M-Track)" };
 
-            settings.setValue ("requestedAudioDevices", encodeRequested (chosen).get());
+            // The shared constant, not a hand-typed copy of it. Spelling the
+            // literal here made this read as an end-to-end check of the key the
+            // application uses while testing a string of its own: rename
+            // keys::requestedDevices and the production read and write would
+            // move together, this test would keep passing against the old name,
+            // and the user's recorded device choice would be silently orphaned.
+            settings.setValue (lighthost::keys::requestedDevices, encodeRequested (chosen).get());
 
-            const auto reread = decodeRequested (settings.getXmlValue ("requestedAudioDevices").get());
+            const auto reread = decodeRequested (
+                settings.getXmlValue (lighthost::keys::requestedDevices).get());
 
             expectEquals (reread.input,  chosen.input);
             expectEquals (reread.output, chosen.output);
@@ -375,11 +383,11 @@ public:
             // it. Everything between is the same code IconMenu runs.
             juce::PropertySet settings;
 
-            settings.setValue ("requestedAudioDevices",
+            settings.setValue (lighthost::keys::requestedDevices,
                                encodeRequested (asRequest ("Microphone (USB audio CODEC)",
                                                            "  Mic Chain INPUT  ")).get());
 
-            const auto recorded = settings.getXmlValue ("requestedAudioDevices");
+            const auto recorded = settings.getXmlValue (lighthost::keys::requestedDevices);
 
             const auto message = describeSubstitution (
                 requestToCompare (recorded.get(), nullptr),

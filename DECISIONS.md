@@ -264,13 +264,26 @@ problem that has been reported zero times.
 fallback itself — falling back to the default device is the right behaviour when
 the requested one is gone. The damage was that it happened in silence, so audio
 turned up somewhere unexpected with nothing on screen to explain it.
-`Source/DevicePolicy.hpp` now compares the requested names from the stored
-`DEVICESETUP` against the names actually open, and reports the difference by
-name: which role changed, what was asked for, and what is being used instead.
-It is said once per distinct substitution rather than on every device change,
-because the stored request is deliberately not rewritten by the fallback. A user
-who can see that their interface is missing can re-select it; a user who cannot
-see it has no way to know there is anything to do.
+`Source/DevicePolicy.hpp` compares what was requested against the names actually
+open, and reports the difference by name: which role changed, what was asked
+for, and what is being used instead. A user who can see that their interface is
+missing can re-select it; a user who cannot see it has no way to know there is
+anything to do.
+
+**Updated 2026-09-17.** 5.2.0 read the request out of the stored `DEVICESETUP`,
+on the grounds that JUCE's fallback path does not rewrite it. That is true of
+the fallback and false of everything else: `autoMatchSampleRate`, Preferences
+Apply and `setCurrentAudioDeviceType` all pass `treatAsChosenDevice = true`,
+which calls `updateXml()` and adopts the fallback device as the stored choice.
+After any of them the request was gone and the substitution became permanently
+undetectable.
+
+Light Host now records the names the user picked under its own key,
+`lighthost::keys::requestedDevices`, written only from the Preferences combo
+boxes and only when one of them actually changed. `DEVICESETUP` remains the
+fallback for a first run and for settings written by 5.2.0. None of this
+changes the answer below about endpoint ids: the comparison is still by name,
+because a name is still the only thing JUCE gives us.
 
 ### What would change the answer
 

@@ -119,7 +119,14 @@ namespace lighthost::gain
 
         using juce::AudioProcessor::processBlock;
 
-        void processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer&) override
+        /** noexcept for the same reason Probe::processBlock is: everything it
+            reaches -- an atomic load, a Decibels conversion, SmoothedValue --
+            is non-throwing, and nothing third-party is reachable from it.
+            DeviceTap's device callback deliberately keeps the opposite promise,
+            because it forwards into plugin code where noexcept would turn a
+            plugin's throw into std::terminate.
+        */
+        void processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer&) noexcept override
         {
             const auto db = currentDb.load (std::memory_order_relaxed);
 

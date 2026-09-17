@@ -117,9 +117,11 @@ namespace
         /** Adds a lane of latency stubs with a metering probe after each one,
             wired the way IconMenu wires them when the signal view is open.
 
-            PassthroughStub is used for the plain comparison lane: it reports no
-            latency and leaves the buffer alone, which is exactly the
-            "transparent node" this needs and is why it exists.
+            The comparison lane uses LatencyStub too, not PassthroughStub as
+            this said for two releases. That matters: the whole point is that
+            the probed and unprobed lanes differ ONLY by the probes, so both
+            sides have to be built from the same processor. A comment naming a
+            different stub invites someone to "restore" the asymmetry.
         */
         void addProbedLane (const std::vector<int>& latencies)
         {

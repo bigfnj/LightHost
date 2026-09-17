@@ -1,315 +1,188 @@
 # Backlog
 
-Open items found by two audit passes over the 5.2.0 tree on 2026-09-16, after the
-release work had emptied the previous 24. They are written to be picked up cold:
+Open items after the 2026-09-17 work, which cleared the nineteen that were here
+and added four audit passes of its own. They are written to be picked up cold:
 what is wrong, where, why it matters, and what the fix is.
 
-Nothing here blocks a release. The highest-severity item is a gap in a feature
-that shipped in 5.2.0 working — it reports a substituted audio device correctly,
-and can lose the ability to notice one later.
+Nothing here blocks a release. The highest-severity items are two ways to lose
+an unapplied edit in the Preferences window, both of which have been present
+since the window existed and neither of which loses anything already committed.
+
+Three of the items cleared today were introduced the same day, by the work that
+was meant to fix the thing next to them. That is the argument for auditing a
+change rather than only testing it, and it is why the sections below separate
+what was traced from what was only reasoned about.
 
 ---
 
 ## Bugs
 
-### The device-substitution report can lose the evidence it depends on
+### Staged chain edits are discarded without saying so
 
-`Source/DevicePolicy.hpp`, `IconMenu::reportDeviceSubstitutionIfAny`
-(`Source/IconMenu.cpp:1248`)
+`Source/PreferencesWindow.cpp`, `setChain`, against `IconMenu::refreshPreferencesIfOpen`
 
-The check compares the persisted `audioDeviceState` against the live setup, which
-works because JUCE's fallback path does not rewrite the stored request. But
-`autoMatchSampleRate`, Preferences Apply, and **any** change made in the device
-panel — including something as incidental as a buffer size — call
-`setAudioDeviceSetup` with `treatAsChosenDevice = true`, which calls
-`updateXml()` and adopts the *fallback* device as the stored choice.
+`setChain` overwrites `chainList.items`, `bypassed` and `lanes` wholesale from
+the committed chain. It is reached from `refreshPreferencesIfOpen`, which fires
+on a plugin re-declaring its latency, on every tray bypass, move and delete, and
+on the Apply-abandon path.
 
-Once that happens the requested name is gone. The comparison then finds nothing
-wrong, so a substitution that is still in force becomes undetectable, and a
-device that was silently replaced looks correct forever after. 5.2.0 added the
-missing check before the third write site and documented the limit; it did not
-close it.
+So: open Preferences, add three plugins with "+ Add Plugin", then open a plugin's
+editor and switch it to linear phase. The latency change triggers an async update,
+the panel is refreshed from the committed chain, and all three staged additions
+vanish with no message and nothing in the log.
 
-**Fix:** record the requested device names in a settings key of our own, written
-when the user explicitly chooses a device rather than whenever JUCE decides to,
-and compare against that instead of against `DEVICESETUP`. The hard part is
-detecting "the user explicitly chose", because the device panel does not
-distinguish a deliberate device change from an incidental one. Storing an
-endpoint id is declined for separate reasons — see `DECISIONS.md`.
+Nothing committed is lost, which is why this is not higher. What is lost is work
+the user has done and not yet applied, and the refresh that destroys it exists
+for a good reason, so it cannot simply be removed.
 
-### Signal-view rows can be attributed to the wrong plugin
+**Fix:** reconcile rather than overwrite -- keep staged additions and removals
+that do not conflict with the incoming committed chain, and say so in the status
+row when something had to be dropped. Alternatively make the window dirty-aware
+and prompt. Either is a design decision, not a patch.
 
-`Source/PreferencesWindow.cpp:1403` against `IconMenu::reconnectGraph`
-(`Source/IconMenu.cpp:1126`)
+### The async row menus act on whatever is now at that index
 
-`refreshSignalView` labels row `i` from `chainList.items[i]`, which is the
-**staged** chain, and fills it from `probeMeterAtFn(i)`, which resolves to a probe
-indexed over the **committed** chain. The two agree when the view is refreshed
-through `refreshPluginChain`, which sets `items` from the committed chain first.
-They do not agree on the other path: opening the view calls `refreshSignalView`
-directly.
+`Source/PreferencesWindow.cpp`, the right-click delete and lane menus
 
-Reorder or delete a row in the Preferences list without pressing Apply, then open
-the signal view: every row is labelled with one plugin and metered from another.
-That is the same mis-attribution a 5.1.0 fix called "worse than showing nothing",
-reached by a different route. Diagnostic only — no effect on audio.
+Both capture `row` by value and re-validate only the upper bound when the menu
+closes. If the list is replaced while the menu is open -- the same triggers as
+the item above -- "Delete" removes a different plugin than the one that was
+right-clicked, and the lane menu assigns a lane to a different plugin. The bounds
+checks hold, so there is no crash, only the wrong plugin edited silently.
 
-**Fix:** label the rows from the same source the meters come from. Add a callback
-beside `probeMeterAt` returning the committed chain's names in display order, and
-iterate that rather than `chainList.items`, so labels and meters are indexed
-identically by construction.
+**Fix:** capture the `PluginDescription` rather than the index, and resolve it
+back to a row when the menu closes. If it is no longer present, do nothing.
 
-### The bypass checkbox has no hover or pressed state
+### A throw from the chain-list XML write is still uncaught
 
-`Source/PreferencesWindow.cpp:970`, `:1014`
+`Source/IconMenu.cpp`, both `activePluginList` mutation sites
 
-`Control::checkbox` is produced by `controlAt` but no consumer distinguishes it:
-`pressedControl` is only ever set to `lane`, `settings` or `none`, and the paint
-path asks only about those two. So the checkbox is the one row control with no
-visual feedback, though it does get the pointing-hand cursor.
+Both wrap `removeType` / `addType` in a `try`/`catch` with a settings rollback,
+and the change listener that writes the XML runs later on the message thread via
+an async update, so a throw from the write itself escapes with no rollback.
+5.2.0 documented the gap; 5.3.0 took the "let it terminate" half of the choice in
+the listener and left the asymmetry.
 
-**Fix:** either handle it in the press and paint paths like the other two, or stop
-returning it from `controlAt` and say why.
+In practice neither can realistically throw, which is why this has been low for
+two releases running.
 
-### A throw from the chain-list XML write is uncaught
-
-`Source/IconMenu.cpp:1484`, `:2125`
-
-Both mutation sites wrap `activePluginList.removeType` / `addType` in a
-`try`/`catch` with a settings rollback. The comment now says what that does not
-cover, which was the 5.2.0 fix — but the gap is still there: the change listener
-that writes the XML runs later on the message thread via an async update, so a
-throw from the write itself escapes with no rollback. In practice neither can
-realistically throw, which is why this is low.
-
-**Fix:** either move the persist inside the guarded scope, or state in the
-listener that a throw there is unrecoverable and let it terminate.
-
-### `activePluginList.addType` result is discarded
-
-`Source/IconMenu.cpp:2125`
-
-`false` means "replaced an existing entry rather than adding". The arriving set is
-filtered with `Store::identityOf`, which includes `pluginFormatName`, while
-`addType` uses `PluginDescription::isDuplicateOf`, which does not. Two
-descriptions sharing a file and unique ids under different format names are
-therefore two identities and one list entry, leaving settings for an entry that
-does not exist. Narrow, and the asymmetry is acknowledged in `identityOf`'s own
-comment.
+**Fix:** move the persist inside the guarded scope, or state in the listener that
+a throw there is unrecoverable and let it terminate -- and then delete the
+rollback, because a guard that covers half a transaction is worse than one that
+covers none of it.
 
 ---
 
-## Duplication with a real drift cost
+## Suspected, not traced
 
-### `"audioDeviceState"` has no single home
+### `status.onChange` can dereference the Preferences window during its destruction
 
-`Source/IconMenu.cpp:342` (read), `:1254` (read), `:1330` (write), `:1927` (write)
+`Source/IconMenu.cpp`, the `status.onChange` wiring
 
-5.2.0 added the second reader, and its correctness depends on matching the writers
-exactly. A drift means `describeSubstitution` compares the open devices against an
-absent stored request and reports nothing, forever — a silent regression of the
-feature that release is named for.
+The handler tests `preferencesWindow != nullptr`, and `std::unique_ptr` does not
+null its pointer before running the deleter, so that test passes throughout
+teardown. Reachable path: the content component's destructor commits a dirty lane
+trim, the settings write fails, `status.report` fires `onChange`, and the handler
+calls into a panel that is inside its own destructor body.
 
-**Fix:** one header owning the key name, in the style of `Source/NodeIds.hpp`.
+It survives today because `preferencesWindow` is IconMenu's last-declared member,
+so the panel's own members are still alive. That is a coincidence of declaration
+order which nothing states and no test pins.
 
-### `"pluginList"` and `"pluginListActive"` are string literals in four files
+**Fix:** reset the pointer before destroying, or clear `status.onChange` in the
+window's destructor. Needs a failing settings write during window close to
+reproduce.
 
-`Source/IconMenu.cpp:370`, `:1299`; `Source/OfflineRender.hpp:156`;
-`Source/SelfTest.hpp:110`; `Tests/PluginChainStoreTests.cpp:445`, `:452` — and
-`Source/PluginChainStore.hpp:474` reasons about them in a comment without owning
-them.
+### A plugin could drive a self-sustaining rewire loop
 
-These are the on-disk chain-membership keys. A drift means `--render` reads a key
-`IconMenu` does not write, so the offline renderer renders an empty chain and
-reports success — and that file exists to produce trustworthy measurements, with a
-whole 5.1.0 entry about five ways it used to report success it had not earned.
+`Source/IconMenu.cpp`, `reconnectGraph` against `audioProcessorChanged`
 
-**Fix:** the same header as above. `DECISIONS.md` explains why these sit outside
-`chain::Store`; that argues for a home for the key *names*, not for literals.
+A plugin that re-announces its latency in response to a bypass write would drive
+`reconnectGraph` to `setBypassed` to `audioProcessorChanged` to
+`triggerAsyncUpdate` and round again, one turn per message-loop iteration. The
+`AsyncUpdater` coalesces, so it would rebuild forever rather than blow the stack.
 
-### The peak-decay ballistic is written twice, in different units
+5.3.0 guards `setBypassed` on the value actually changing, which closes the
+obvious route. Not reproduced -- it needs a plugin that behaves this way.
 
-`Source/SignalMetering.hpp:78` (`kPeakDecayPerBlock = 0.9496f`, per block, audio
-thread) and `Source/PreferencesWindow.cpp:60` (`fallDbPerTick = 1.8f`, per tick at
-25 Hz, message thread). Both comments claim "about 45 dB per second" and they
-agree today.
+### Drag-reorder guards its erase and not its insert
 
-If they drift, the UI's fall rate diverges from the held peak's and bars either
-sag or stick — the exact symptom that made 5.1.0 move the ballistics into `Meter`.
+`Source/PreferencesWindow.cpp`, the row drag path
 
-**Fix:** derive one from the other, or assert the equivalence in
-`Tests/SignalMeteringTests.cpp`.
-
-### `gain::isUnity` is unused, and disagrees with the code that should use it
-
-`Source/GainProcessor.hpp:52` against `Processor::processBlock`
-
-`isUnity` is a named, unit-tested rule with no production caller. The place that
-should use it re-derives a different test on the linear gain instead, and the two
-disagree: `isUnity(0.0005f)` is true while `decibelsToGain(0.0005f)` fails
-`approximatelyEqual`. The cost of the disagreement is a redundant `applyGain`,
-which is inaudible; the cost of leaving it is a rule that looks live and is not.
-
-**Fix:** call it from `processBlock`, or delete it and its tests.
+`bypassed.erase` and `lanes.erase` are bounds-checked; the matching `insert` calls
+are not. Every mutation site keeps the three vectors in lockstep today, so it is
+unreachable. The asymmetry is the trap, not a live defect.
 
 ---
 
 ## Dead and test-only code
 
-- **`Processor::getGainDb()`** (`Source/GainProcessor.hpp:78`) has no production
-  caller; `IconMenu::getLaneGainDb` reads the value back out of the chain store
-  instead.
-- **`StatusSink::all()` and `clear()`** (`Source/StatusSink.hpp:67`, `:72`) are
-  reached only by tests, and `int total` (`:90`) is read only by
-  `totalReported()`. So `clear()`'s documented contract — "a cleared sink still
-  admits that something happened earlier" — describes behaviour no shipped path
-  can reach. Either annotate them as test-only, as `Meter::isWatched` does, or
-  remove them.
-- **`toString` in `Source/PluginWindow.h`** carries `default: return {};` on a
-  switch that already covers both enumerators, which suppresses `-Wswitch`. A
-  third window type added later compiles silently and yields the key
-  `"uiLastX_"` — the exact silent-orphan failure the enum's own comment says the
-  derived keys prevent.
-- **Two includes in `Source/IconMenu.hpp`** (`ConfirmPolicy.hpp`,
-  `DevicePolicy.hpp`) are used only by the `.cpp`, as is the pre-existing
-  `Lanes.hpp`. Move them.
+- **`chain::Store::read` and `Store::stage (const Slot&)`**, and therefore
+  `Slot::state`, have no production caller -- every shipped path uses the
+  per-field readers and stagers. Unlike `Meter::isWatched` and
+  `StatusSink::totalReported` they carry no "for tests" annotation, so they read
+  as live API.
+- **`PluginWindow.cpp`, the trailing `return nullptr`** after the `ui != nullptr`
+  branch is unreachable.
+
+---
+
+## Tests that pass for the wrong reason
+
+The suite is 1363 headless assertions and 15 GUI. These are the ones that do not
+earn their place; the count is not the point, and two of them inflate it badly.
+
+- **256 assertions that a probe did not alter the buffer**
+  (`Tests/SignalMeteringTests.cpp`). `Meter::measure` takes a const reference, so
+  the property is enforced by the type system. One max-deviation assertion says
+  the same thing.
+- **256 assertions on the lane-trim ramp** (`Tests/GainProcessorTests.cpp`) that
+  would NOT fail if the unity skip were deleted, because the settled gain is
+  exactly 1.0 and multiplying by it changes nothing.
+- **`isUnity` is never tested at its boundary** -- 0.0 and ±0.5 against a 0.001
+  tolerance. Widening the tolerance to 0.4 passes.
+- **The ramp-continuity test starts at `i = 1`**, so it never sees the
+  block-boundary discontinuity it exists to catch.
+- **A two-element tie-break test** would pass with the tie-break removed, because
+  both standard libraries use a stable insertion sort at that size. The
+  three-element version beside it is what actually catches it.
+- **`NodeIdTests`** asserts bounds that the exact-value assertions a few lines up
+  already pin.
+
+### And one gap that matters more than any of them
+
+**There is no `Tests/PreferencesWindowTests.cpp`.** The committed-chain callback,
+the device-choice recording, the parallel-vector invariant and the press/release
+checkbox contract have no assertions anywhere. Three of the four confirmed bugs
+fixed in 5.3.0 were in that file, and all three were found by reading rather than
+by a failing test.
 
 ---
 
 ## Hardening
 
-- **`Probe::processBlock` and `gain::Processor::processBlock` could be
-  `noexcept`.** Everything they call is non-throwing. Note `DeviceTap`'s device
-  callback deliberately must **not** be: it forwards into third-party plugin code,
-  where `noexcept` would turn a plugin's throw into `std::terminate`.
-- **No `-Werror` / `/WX` anywhere.** `-Wunused-parameter` and `/W4` are on across
-  three platforms, so a warning lands in a CI log without failing anything.
-  Turning it on would make the compiler a gate rather than a commentator; it would
-  also need a pass over existing warnings first.
-- **`Tests/PluginWindowTests.cpp`**, the last `PluginWindowGui` block, does not
-  assert the window registry is empty on the way out — the only one of eight that
-  does not. Harmless because it is last, and it is the seam a future appended
-  block falls through.
-- **`tools/render-regression.sh`** hard-codes the MSVC artefact path
-  (`build/release/...` plus `.exe`), so it only runs on Windows. It fails loudly
-  rather than silently, so this is a limit rather than a bug.
+- **`PluginScan::run` writes once, after every format.** A plugin that hard-crashes
+  the scan therefore loses every plugin found in that run. The dead man's pedal
+  means the next run skips the offender, so N crashing plugins costs N+1 full
+  rescans. Writing incrementally would cost a settings flush per format.
+- **`--scan` combined with `-self-test`** writes the plugin list into the
+  throwaway self-test folder. Harmless, and one guard would make it an error.
+- **`SampleRatePolicy` takes `availableRates.getLast()`** as the highest rate the
+  device admits to. Every backend here returns them ascending; none contracts it.
+  `std::max_element` costs nothing.
+- **The signal view has no scrollbar.** 5.3.0 stopped it silently truncating and
+  made it count the rows it cannot show. A `juce::Viewport` would show them.
 
 ---
 
 ## Process
 
-- **`gh run watch --exit-status` returns 0 for runs that failed.** Observed twice
-  on 2026-09-16, on two different failed runs. Anything gating a release on CI
-  must read the run's `conclusion` explicitly. A gate that reports success on
-  failure is worse than no gate, and this one is exactly the gate that stops a
-  repeat of v5.0.1. Recorded in `RELEASING.md`.
-
----
-
-## How the previous 24 items were cleared
-
-For 5.2.0, on 2026-09-16. Six different dispositions, and which one applied
-matters more than the count — only seven of the twenty-four were defects:
-
-| How | Count | Where it went |
-|---|---|---|
-| Fixed | 7 | [CHANGELOG.md](CHANGELOG.md), `## [5.2.0]` |
-| Declined, with reasoning and a reversing trigger | 7 | [DECISIONS.md](DECISIONS.md) |
-| Already shipped, or the premise did not hold | 6 | see below |
-| Closed by making it testable rather than checking by hand | 2 | `Tests/ConfirmPolicyTests.cpp`, `Tests/PluginWindowTests.cpp` |
-| Automated so it re-checks itself | 1 | `tools/update-juce.sh` |
-| Moved to the release procedure, because it needs a person | 1 | [RELEASING.md](RELEASING.md) |
-
-### Two were misdiagnosed, which is worth remembering
-
-**"VST2 scanning does not descend into subdirectories" was not a defect.**
-`PluginDirectoryScanner` is constructed with `recursive = true` in both scan
-paths — JUCE hard-codes it for its own scan, and our custom-folder scan passes
-it — and the nine ReaPlugs DLLs were already present in the scanned list, found
-from the parent folder one level down, while the stored search path named only
-that parent. The entry appears to have been written from looking at the folder
-picker rather than from a scan that missed files. Two real defects were found next
-to it and fixed instead: failed plugin loads were discarded, and a custom folder
-was never stored so it was never re-scanned.
-
-**"A nested dispatch loop runs in the middle of a graph teardown" overstated where
-it runs.** The message pump in `PluginWindow::closeAllCurrentlyOpenWindows` runs
-*before* `graph.clear()`, so the graph is whole throughout. The real gap was next
-to it and is fixed: the chain reload never cancelled its async updater, which a
-hosted plugin triggers when it reports a latency change on the way out. The pump
-is kept and now documented. Removing it would need a soak across real VST2 and
-browser-hosting editors, because whether any plugin needs a message-loop turn
-between its editor and its processor being destroyed is not answerable by reading
-code.
-
-### Three were stale rather than outstanding
-
-Per-plugin and device metering shipped in 5.1.0. Rewriting every plugin's state on
-every edit stopped in 5.0.0, when state moved to a file per plugin. The release
-procedure works — three releases have gone through it — and `RELEASING.md` was
-rewritten to describe what is actually done rather than a release-candidate
-process that is not used.
-
----
-
-## What has been verified, and how
-
-A record, not a work list. Kept because these were open questions for a long time
-and the answers should not have to be rediscovered.
-
-### Verified 2026-09-16 (5.2.0)
-
-- **The device-substitution report works on a real fallback.** The stored request
-  was pointed at a device that does not exist and the application launched against
-  it: both the input and the output substitution were named in the log and raised
-  through the status sink. Both sides move, because JUCE falls back to the default
-  device for each — which is what made the original incident send a microphone
-  chain to room speakers.
-- **It does not cry wolf.** The same build launched against the real settings, with
-  both requested devices present, reported nothing.
-- **The live chain is not byte-reproducible, and the regression gate does not
-  pretend otherwise.** Four paced renders of one input: ReaEQ gave one hash 4/4
-  times, Salvor gave two. This happens while the renderer reports a realtime factor
-  of 1.000 with no blocks behind, so "kept pace" does not imply reproducible — the
-  inference runs on a worker thread and lands on slightly different block
-  boundaries. `tools/render-regression.sh` therefore gates on a deterministic
-  reference chain, which still exercises everything in the host.
-- **Nothing in 5.2.0 changed a sample.** The render regression was checked after
-  every phase and stayed identical throughout.
-- **The confirmation dialog's button order is now checked by CI on all three
-  platforms**, rather than needing a person at a Linux machine to dismiss a dialog
-  and see what happened.
-
-### Verified 2026-09-16 (5.1.0)
-
-- **Plugin state is no longer copied three times per load.** It is moved into the
-  async creation lambda; a real state measured 4,126,524 bytes, so a five-plugin
-  chain was copying tens of megabytes on the message thread at startup.
-- **The self-test log poll re-reads only when the file grows**, rather than reading
-  and scanning a 256 KB file up to 200 times per run.
-- **Metering does not alter the audio.** A fixed input renders byte-identical
-  through `--render` before and after every phase of the 5.1.0 work, and a topology
-  test asserts that a chain with no probes wires exactly as it did before probes
-  existed.
-- **Probe insertion works on a live graph.** The startup self-test opens the signal
-  view part way through its run, so adding nodes to a running graph and rewiring it
-  is exercised on all three platforms in CI.
-- **JUCE 9.0.2 is clean for this project.** Its one breaking change removes an API
-  this codebase does not use.
-
-### Verified 2026-09-08
-
-- **Real plugins load and run.** Salvor, smartChain, Alt Denoiser and three Elgato
-  plugins have all been instantiated through this code, live and through the
-  offline render. Bypass, lane moves, quit and relaunch all survive; order, lanes
-  and state persist.
-- **The settings migration ran on a real settings file.** 7,489,165 bytes of base64
-  plugin state migrated to the vault, leaving roughly twelve kilobytes of readable
-  XML. Not synthetic data.
-- **Declared latency is honest.** A chain declaring 4512 samples (94 ms) measured
-  80–84 ms by envelope cross-correlation, agreeing within the method's resolution.
-- **The graph's inter-lane compensation is correct** and the host adds none of its
-  own, which is what fixed the double-padding bug from 4.0.3.
+- **Do not quote an assertion count in a comment.** There were four, already
+  disagreeing with each other before today: `CMakeLists.txt` and `BACKLOG.md`
+  said 1120, `BACKLOG.md` also said 1131, `tools/build-linux-docker.sh` said
+  1131. None had been right for weeks. They are gone, and the prose around them
+  now says what it means without a number. The figure changes every time anyone
+  adds a test; run the binary.
 
 ---
 
@@ -319,33 +192,106 @@ Not work items, but they have to be re-run when something upstream changes.
 Automated where possible, so they are not a list someone has to remember.
 
 - **System-audio loopback capture** is blocked on JUCE exposing it, and
-  `tools/update-juce.sh` greps for it on every version bump, so the answer is
-  re-checked without anyone deciding to.
-- **The GUI unit tests do not run on Linux.** `LightHostTests` is a console app and
-  JUCE's X11 backend cannot create a window from one — it dies with `BadAtom` on
-  `X_ChangeProperty` before any assertion runs, even with a working display under
-  xvfb. The application is a GUI app and is unaffected, and the smoke tests open
-  the real Preferences window under xvfb on the same runner, so Linux window
-  creation is covered. What is not covered there is the host logic around windows,
-  which has no platform component and is checked on Windows and macOS.
-  `CMakeLists.txt` prints a configure-time notice rather than skipping quietly.
-  Making the test target a GUI app would fix it and would cost stdout on Windows,
-  which is where the other 1131 assertions report from.
-- **Display scaling at 150%, and the tray icon against a light taskbar**, cannot be
-  automated — they need a person looking at a display configured that way.
-  Recorded in [RELEASING.md](RELEASING.md) as pre-release checks.
-- **Linux and macOS are built by CI on every push**, including the unit, GUI and
-  smoke suites. No developer machine here has ever built them, and there is no GCC
-  or Clang on the development box, so CI is not merely the best evidence for those
-  platforms — it is the only evidence, and it arrives after the push rather than
-  before it.
+  `tools/update-juce.sh` greps for it on every version bump. As of 5.3.0 that
+  check fails loudly when it cannot look, rather than reporting "nothing (as
+  expected)" about a directory that is not there.
+- **The GUI unit tests do not run on Linux.** `LightHostTests` is a console app
+  and JUCE's X11 backend cannot create a window from one -- it dies with
+  `BadAtom` before any assertion runs, even under xvfb. The application is a GUI
+  app and is unaffected, and the smoke tests open the real Preferences window
+  under xvfb on the same runner. `CMakeLists.txt` prints a configure-time notice
+  rather than skipping quietly.
+- **`DeviceTap`'s ordering guarantee is untestable here.** It needs
+  `juce_audio_devices`, which the test target deliberately does not link. A known
+  limit rather than a gap to close.
+- **Display scaling at 150%, and the tray icon against a light taskbar**, cannot
+  be automated. Recorded in [RELEASING.md](RELEASING.md) as pre-release checks.
+- **macOS is built only by CI.** Linux and Clang can now be run before a push --
+  `tools/build-linux-docker.sh` and the `clang-release` preset -- so macOS is the
+  only platform whose first evidence still arrives after the commit. Its Clang is
+  close enough to the local one that they rarely disagree, and rarely is not
+  never.
 
-  5.2.0 fell into that gap twice. `expectEquals` was handed a `juce::uint32`; MSVC
-  picked an `operator<<` overload and compiled it, and both GCC and Clang
-  correctly refused because `juce::String` has overloads for `int`, `int64` and
-  `uint64` but not `unsigned int`. Then `unit-gui` failed on X11 as described
-  above. A clean local build and 1120 passing tests said nothing about either. The
-  tripwire worked as intended — the tag was held until CI was green, which is the
-  whole point of that rule — but if MSVC-only divergence happens again, installing
-  Clang locally and exercising the `clang-release` preset before pushing is the
-  fix.
+---
+
+## How the previous nineteen were cleared
+
+For 5.3.0, on 2026-09-17. Fifteen were defects, which is a much higher proportion
+than the twenty-four before them, because that pass had already taken out the
+easy declines.
+
+| How | Count | Where it went |
+|---|---|---|
+| Fixed | 15 | [CHANGELOG.md](CHANGELOG.md), `## [5.3.0]` |
+| Fixed and the premise corrected | 2 | see below |
+| Turned from a warning into a tool | 1 | `tools/ci-status.sh` |
+| Still open | 1 | the uncaught XML write, above |
+
+### Two premises did not survive being checked
+
+**"The hard part is detecting that the user explicitly chose."** The entry assumed
+a device panel that cannot distinguish a deliberate device change from an
+incidental one. There is no `AudioDeviceSelectorComponent` in this codebase; the
+panel is Light Host's own combo boxes, and nothing writes a device until Apply.
+The hard part was real but it was a different one -- the combo shows the
+substituted device after a fallback, so reading it at Apply records the wrong
+name. A flag on the combos' `onChange` is the honest signal.
+
+**"`toString`'s `default:` label suppresses `-Wswitch`."** Only on MSVC. JUCE
+already passes `-Wswitch-enum`, which warns even with a default present, so GCC
+and Clang would have caught a missing enumerator all along. MSVC warns for
+neither form at `/W4`, because C4062 is off unless named. The silent failure the
+entry described could only ever have happened on the machine this is developed
+on -- which is the worst place for it, and is now fixed with `/w14062`.
+
+---
+
+## What has been verified, and how
+
+A record, not a work list. Kept because these were open questions for a long time
+and the answers should not have to be rediscovered.
+
+### Verified 2026-09-17 (5.3.0)
+
+- **The device-substitution record survives what erased its predecessor.** With
+  the request pointed at devices that do not exist, both roles were named at
+  startup and again on relaunch, while the stored `DEVICESETUP` held no device
+  names at all -- two empty strings, which the old code reads as "nothing was
+  requested" and reports in silence. With the real settings restored it said
+  nothing.
+- **Nothing in 5.3.0 changed a sample.** The render regression was checked after
+  every phase and stayed at `ee915b91…` throughout, including across the lane
+  trim's rewrite from two atomics to one.
+- **Linux builds and passes on a developer machine**, for the first time in this
+  project's history, in `ubuntu:24.04` with the same dependency list CI uses.
+- **Warnings are errors and the gate was mutation-tested four ways**: an unused
+  local in a header failed both targets, a third enumerator on `WindowFormatType`
+  produced C4062 naming it, an unused local in a `.cpp` failed after the switch
+  from per-target to per-file scoping, and an unused file-scope static correctly
+  did NOT fire, because that is not a `/W4` warning. The last one is recorded so
+  nobody later reads it as a gap.
+- **The dependency-install step now fails when the list is missing.** Measured
+  against the old form, which exits 0 having installed nothing.
+
+### Verified 2026-09-16 (5.2.0)
+
+- **The device-substitution report works on a real fallback**, and does not cry
+  wolf when both requested devices are present.
+- **The live chain is not byte-reproducible, and the regression gate does not
+  pretend otherwise.** Four paced renders of one input: ReaEQ gave one hash 4/4
+  times, Salvor gave two, because its inference lands on different block
+  boundaries. The gate therefore uses a deterministic reference chain.
+- **The confirmation dialog's button order is checked by CI on all three
+  platforms**, rather than needing a person at a Linux machine.
+
+### Verified 2026-09-08
+
+- **Real plugins load and run.** Salvor, smartChain, Alt Denoiser and three Elgato
+  plugins have all been instantiated through this code, live and through the
+  offline render. Bypass, lane moves, quit and relaunch all survive.
+- **The settings migration ran on a real settings file.** 7,489,165 bytes of
+  base64 plugin state migrated to the vault.
+- **Declared latency is honest.** A chain declaring 4512 samples (94 ms) measured
+  80-84 ms by envelope cross-correlation.
+- **The graph's inter-lane compensation is correct** and the host adds none of its
+  own, which is what fixed the double-padding bug from 4.0.3.

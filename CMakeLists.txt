@@ -35,7 +35,7 @@ if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 project(LightHost
-    VERSION 5.2.0
+    VERSION 5.3.0
     DESCRIPTION "Lightweight VST/AU/VST3 Audio Plugin Host"
     HOMEPAGE_URL "https://github.com/BigFNj"
     LANGUAGES C CXX
@@ -294,11 +294,14 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/GraphTopologyTests.cpp
         Tests/InstanceNameTests.cpp
         Tests/NodeIdTests.cpp
+        Tests/OfflineRenderTests.cpp
         Tests/PluginChainStoreTests.cpp
+        Tests/PluginScanTests.cpp
         Tests/PluginStateTests.cpp
         Tests/PluginStateVaultTests.cpp
         Tests/PluginWindowTests.cpp
         Tests/SampleRatePolicyTests.cpp
+        Tests/SelfTestChecksTests.cpp
         Tests/SettingsKeysTests.cpp
         Tests/SignalMeteringTests.cpp
         Tests/StatusSinkTests.cpp
@@ -325,8 +328,14 @@ if(LIGHTHOST_BUILD_TESTS)
         JUCE_MODAL_LOOPS_PERMITTED=1
     )
 
+    # juce_audio_formats is here for Tests/OfflineRenderTests.cpp and nothing
+    # else. Source/OfflineRender.hpp includes it for the WAV reader and writer,
+    # and it is NOT reachable through juce_audio_processors: that module's
+    # declared dependencies are juce_gui_extra and juce_audio_processors_headless
+    # only, so without this line the header does not even resolve its include.
     target_link_libraries(LightHostTests PRIVATE
         juce::juce_audio_basics
+        juce::juce_audio_formats
         juce::juce_audio_processors
         juce::juce_core
         juce::juce_events
@@ -392,7 +401,9 @@ if(LIGHTHOST_BUILD_TESTS)
     #
     # Making the test target a GUI app would fix it and cost more than it buys:
     # on Windows that switches the subsystem and stdout stops reaching the
-    # terminal, so the other 1120 assertions would lose their output.
+    # terminal, so every headless assertion would lose its output. The count
+    # used to be quoted here and was wrong within a week; run the binary if
+    # you want the number.
     if(APPLE OR WIN32)
         add_test(NAME unit-gui COMMAND LightHostTests --gui)
         set_tests_properties(unit-gui PROPERTIES LABELS unit TIMEOUT 120)

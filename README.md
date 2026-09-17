@@ -309,6 +309,31 @@ are measuring.
 "Light Host" --render take.wav out.wav --chain "Alt Denoiser" --param "Attenuation Limit=0"
 ```
 
+### Scanning for plugins without opening a window
+
+`--chain` resolves names against the scanned plugin list, which is empty on a
+machine that has never opened *Edit Plugins* from the tray. `--scan` fills it
+from the command line, so a render — or the regression gate that depends on one
+— works on a fresh checkout without anyone clicking anything.
+
+```
+"Light Host" --scan
+"Light Host" --scan --scan-path "C:\Program Files\Common Files\VST2"
+```
+
+| Flag | What it does |
+|------|--------------|
+| `--scan` | Scans every format's default locations plus any folder you added in *Edit Plugins*, and writes the result to the settings file |
+| `--scan-path DIR` | Also scans `DIR`. Repeatable. Added to the defaults, never instead of them |
+
+It prints each file as it tries it, then a count, and lists anything that looked
+like a plugin and would not load — which is the single most useful thing a scan
+can tell you and the thing a scan used to throw away.
+
+`--scan-path` is not optional on every machine. JUCE's default VST2 locations do
+not include `%COMMONPROGRAMFILES%\VST2`, which is where the ReaPlugs installer
+puts ReaEQ, so that whole folder is invisible to a bare `--scan`.
+
 A render writes nothing back: not settings, not plugin state, not node ids. It is
 safe to run against a live configuration, and it opens no audio devices, so it
 does not disturb a running instance.
@@ -460,16 +485,38 @@ build.
 
 - GCC or Clang, Ninja, CMake `3.28+`, `pkg-config`
 
+The package list is [`tools/linux-build-deps.txt`](tools/linux-build-deps.txt),
+and it is not repeated here on purpose. It used to be, and the copy here was
+already short by seven packages including the two mesa ones — which is exactly
+the drift that put a missing `libxi-dev` into CI in the first place. Both
+workflows and the container script read that one file, so this reads it too:
+
 ```bash
-sudo apt install libasound2-dev libfontconfig1-dev libfreetype6-dev \
-  libxcomposite-dev libxcursor-dev libxi-dev libxinerama-dev \
-  libxkbcommon-dev libxrandr-dev libxrender-dev
+sudo apt update
+grep -vE '^[[:space:]]*(#|$)' tools/linux-build-deps.txt \
+  | xargs sudo apt install -y --no-install-recommends
 cmake --preset ninja-release
-cmake --build build/ninja-release -j2
+cmake --build build/ninja-release -j"$(nproc)"
 ```
 
 `libxi-dev` is needed by JUCE 9 and was not by JUCE 8; without it the build fails
 on `X11/extensions/XInput2.h`.
+
+### Building for Linux from Windows
+
+[`tools/build-linux-docker.sh`](tools/build-linux-docker.sh) configures, builds
+and runs the whole test suite in `ubuntu:24.04`, using the same dependency list
+CI does:
+
+```bash
+tools/build-linux-docker.sh            # configure, build, test
+tools/build-linux-docker.sh --build    # stop after the build
+tools/build-linux-docker.sh --shell    # a shell in the container
+```
+
+It needs Docker. It exists because GCC is much fussier than MSVC and warnings
+are errors here, so without it the first evidence that Linux still compiles
+arrives from CI, after the push. macOS has no local equivalent.
 
 ### Presets
 

@@ -5,12 +5,14 @@
 // constant from any of them. The first two stop being parsed by everything
 // that includes this header; Lanes.hpp still arrives through NodeIds.hpp, so
 // moving it only puts the include where the use is. NodeIds.hpp itself stays,
-// because maxProbes sizes a member array below.
+// because maxProbes sizes a member array below, and SampleRatePolicy.hpp for
+// the same reason: a samplerate::Budget is a member, held by value.
 #include "GainProcessor.hpp"
 #include "HostServices.hpp"
 #include "DeviceTap.hpp"
 #include "NodeIds.hpp"
 #include "PluginStateVault.hpp"
+#include "SampleRatePolicy.hpp"
 #include "SettingsKeys.hpp"
 #include "StatusSink.hpp"
 
@@ -125,7 +127,16 @@ private:
     // still works, it just stops being probed past the limit.
     static constexpr int kMaxProbes = lighthost::nodeids::maxProbes;
     [[nodiscard]] static NodeID probeNodeId (int index);
-    void syncProbeNodes();
+
+    /** Brings the probe nodes into line with the chain, mutating the graph with
+        UpdateKind::none throughout so reconnectGraph publishes once.
+
+        Returns the indices of the probes it removed. Their meters must be reset
+        by the caller AFTER graph.rebuild(), never here: the removal does not
+        republish, so the old render sequence is still feeding them. See the
+        body.
+    */
+    [[nodiscard]] std::vector<int> syncProbeNodes();
     bool signalViewEnabled = false;
 
     // The probe meters live HERE, not inside the Probe processors, because the
@@ -147,7 +158,16 @@ public:
     void setSignalViewEnabled (bool shouldBeEnabled);
 
     /** The meter for the probe sitting after chain position `index`, or nullptr
-        when the signal view is off or that position has no probe.
+        when `index` is outside the reserved range (see nodeids::maxProbes).
+
+        A valid index always yields a valid pointer, whether or not a probe
+        currently exists there: the meters outlive the graph on purpose, because
+        the signal view caches what this returns and a pointer into a Probe
+        would dangle the moment the chain reloaded. With no probe feeding it the
+        meter simply reads silence. This said "nullptr when the signal view is
+        off or that position has no probe", which is the opposite of what the
+        implementation does and would have had a caller writing a null check
+        that can never fire.
     */
     [[nodiscard]] lighthost::metering::Meter* getProbeMeter (int index);
 
@@ -273,12 +293,14 @@ private:
     // Stops a *synchronous* re-entry into the device-change handler. It cannot
     // stop the recursion that actually happens: change broadcasts are async, so
     // the second callback arrives after this has already been cleared. What bounds
-    // that is sampleRateCorrections, see Source/SampleRatePolicy.hpp.
+    // that is sampleRateBudget, see Source/SampleRatePolicy.hpp.
     bool isHandlingDeviceChange = false;
 
-    // Corrective sample-rate requests made since the device last reported a rate
-    // it supports. Reset the moment it settles.
-    int sampleRateCorrections = 0;
+    // Corrective sample-rate requests made since this device last reported a
+    // rate it supports. Reset when it settles, and when the device changes --
+    // the second of those is the half decide() cannot see, so it lives in the
+    // Budget rather than here. See Source/SampleRatePolicy.hpp.
+    lighthost::samplerate::Budget sampleRateBudget;
 
     // Where failures go so the user can see them, rather than only the log file.
     lighthost::status::Sink status;

@@ -48,8 +48,41 @@ cp -R "$SRC/." "$ROOT/lib/juce/"
 
 echo
 echo "vendored version is now:"
-grep -E "JUCE_(MAJOR_VERSION|MINOR_VERSION|BUILDNUMBER)" \
-  "$ROOT/lib/juce/modules/juce_core/system/juce_StandardHeader.h"
+
+version_header="$ROOT/lib/juce/modules/juce_core/system/juce_StandardHeader.h"
+
+if [[ ! -f "$version_header" ]]; then
+  echo "  CANNOT READ THE VERSION: $version_header is missing." >&2
+  echo "  The old lib/juce has already been replaced, so the tree is on the new" >&2
+  echo "  JUCE with no version recorded. Find where the version moved to." >&2
+  exit 1
+fi
+
+grep -E "JUCE_(MAJOR_VERSION|MINOR_VERSION|BUILDNUMBER)" "$version_header"
+
+# Written into the files that quote it, rather than left for someone to
+# remember. They did not: `third_party` said 9.0.1 while the tree was on 9.0.2
+# for a whole release cycle, and `third_party` is the attribution file that
+# gets copied into all three published archives -- so the version travelling
+# with the binary was the one that was wrong.
+juce_version="$(sed -n 's/.*JUCE_MAJOR_VERSION[[:space:]]*\([0-9]*\).*/\1/p' "$version_header")"
+juce_version+=".$(sed -n 's/.*JUCE_MINOR_VERSION[[:space:]]*\([0-9]*\).*/\1/p' "$version_header")"
+juce_version+=".$(sed -n 's/.*JUCE_BUILDNUMBER[[:space:]]*\([0-9]*\).*/\1/p' "$version_header")"
+
+if [[ ! "$juce_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "  could not parse a version out of $version_header (got '$juce_version')" >&2
+  exit 1
+fi
+
+echo
+echo "updating the files that quote the JUCE version to $juce_version:"
+
+for quoting_file in "$ROOT/third_party" "$ROOT/README.md"; do
+  if [[ -f "$quoting_file" ]] \
+     && sed -i -E "s/JUCE 9\.[0-9]+\.[0-9]+/JUCE $juce_version/g" "$quoting_file"; then
+    echo "  $(basename "$quoting_file"): $(grep -c "JUCE $juce_version" "$quoting_file") mention(s)"
+  fi
+done
 
 # System-audio loopback capture: re-checked on every bump, because the answer can
 # only ever change upstream. Processing audio from other applications needs a
@@ -66,12 +99,40 @@ grep -E "JUCE_(MAJOR_VERSION|MINOR_VERSION|BUILDNUMBER)" \
 # text in Source/PreferencesWindow.cpp that tells users to install a virtual cable.
 echo
 echo "checking whether JUCE has gained system-audio loopback support:"
-if grep -ri loopback "$ROOT/lib/juce/modules/juce_audio_devices"; then
-  echo "  ^^ loopback now appears in juce_audio_devices -- see the system-audio"
-  echo "     capture entry in DECISIONS.md, which this check exists to revisit"
-else
-  echo "  nothing (as expected) -- WASAPI loopback is still not exposed by JUCE"
+
+# The directory is checked FIRST, because grep exits 2 for "no such directory"
+# and 1 for "no match", and an `if grep ...; then ... else ... fi` cannot tell
+# them apart -- both take the else branch. So a JUCE restructure that renames
+# or moves juce_audio_devices would have turned the only automated standing
+# check in BACKLOG.md into a permanent silent pass, reporting "as expected"
+# about a directory it never read.
+loopback_dir="$ROOT/lib/juce/modules/juce_audio_devices"
+
+if [[ ! -d "$loopback_dir" ]]; then
+  echo "  CHECK BROKEN: $loopback_dir does not exist." >&2
+  echo "  JUCE has been restructured. This check cannot answer, and must not" >&2
+  echo "  be read as 'no loopback'. Find the new path and update this script." >&2
+  exit 1
 fi
+
+set +e
+grep -ri loopback "$loopback_dir"
+loopback_status=$?
+set -e
+
+case "$loopback_status" in
+  0)
+    echo "  ^^ loopback now appears in juce_audio_devices -- see the system-audio"
+    echo "     capture entry in DECISIONS.md, which this check exists to revisit"
+    ;;
+  1)
+    echo "  nothing (as expected) -- WASAPI loopback is still not exposed by JUCE"
+    ;;
+  *)
+    echo "  CHECK BROKEN: grep failed with status $loopback_status" >&2
+    exit 1
+    ;;
+esac
 
 echo
 echo "next: rm -rf build/release && cmake -S . --preset release && cmake --build build/release --config Release && ctest --test-dir build/release -C Release"

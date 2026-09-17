@@ -285,6 +285,21 @@ namespace lighthost::metering
                     previous + kRmsCoefficient * (channelMeanSquare - previous),
                     std::memory_order_relaxed);
             }
+            else
+            {
+                // The ACCUMULATOR is zeroed while nothing is watching, not just
+                // the flag below. Clearing the flag hides the old figure; it
+                // does not remove it, and the smoother is recursive, so with
+                // kRmsCoefficient at 0.30 the first block after a watcher came
+                // back read 70% of whatever was in here when the last one left.
+                // Open the signal view with audio playing, close it, silence
+                // the input and reopen: a phantom level for ~100 ms, sourced
+                // from audio that had stopped.
+                //
+                // One relaxed store on a path that is already doing a store, so
+                // the realtime rules at the top of this file still hold.
+                smoothedMeanSquare.store (0.0f, std::memory_order_relaxed);
+            }
 
             // Cleared as soon as nothing is watching, so a reader that arrives
             // later is not shown a frozen figure from the last time it was.

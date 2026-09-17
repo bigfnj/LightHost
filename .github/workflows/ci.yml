@@ -55,9 +55,20 @@ jobs:
         # list existed only in this file, so the only machine that could find
         # out it was wrong was a runner, after a push.
         run: |
+          set -o pipefail
+          packages=$(grep -vE '^[[:space:]]*(#|$)' tools/linux-build-deps.txt)
+          # An empty or missing list must not pass for "installed". GitHub's
+          # default shell is `bash -e` with NO pipefail, so the obvious
+          # `grep ... | xargs apt-get install` exits 0 when the file is gone:
+          # grep's failure is discarded by the pipe, xargs runs the command
+          # once with no package names, and apt-get with no arguments is a
+          # no-op. Missing compile deps would fail the build a step later --
+          # but xvfb is not a compile dep. Losing that one builds green, skips
+          # registering all three smoke tests, and reports 100% passed on one.
+          test -n "$packages" || { echo 'tools/linux-build-deps.txt yielded no packages' >&2; exit 1; }
+          echo "$packages"
           sudo apt-get update -qq
-          grep -vE '^[[:space:]]*(#|$)' tools/linux-build-deps.txt \
-            | xargs sudo apt-get install -y --no-install-recommends
+          echo "$packages" | xargs -r sudo apt-get install -y --no-install-recommends
 
       - name: Configure (Ninja Release preset)
         # Pin the make program to the stable apt path so the generator can never

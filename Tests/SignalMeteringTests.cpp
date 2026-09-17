@@ -268,6 +268,44 @@ public:
                     "RMS was still reported with no watcher");
         }
 
+        beginTest ("the RMS accumulator is cleared while nothing is watching");
+        {
+            // Hiding the figure is not the same as removing it. The smoother is
+            // recursive, so with kRmsCoefficient at 0.30 the first block after
+            // a watcher came back read 70% of whatever the last one left
+            // behind: open the signal view with audio playing, close it,
+            // silence the input, reopen, and the row shows a phantom level for
+            // ~100 ms sourced from audio that had already stopped.
+            Meter meter;
+
+            {
+                const Meter::Watch watch (&meter);
+
+                for (int i = 0; i < 40; ++i)
+                    feedConstant (meter, 0.5f);
+
+                expectWithinAbsoluteError (meter.read().rmsDb, -6.02f, 0.2f,
+                                           "the fixture never established a level to go stale");
+            }
+
+            // Nothing watching, and the signal has gone.
+            for (int i = 0; i < 40; ++i)
+                feedConstant (meter, 0.0f);
+
+            {
+                const Meter::Watch watch (&meter);
+                feedConstant (meter, 0.0f);
+
+                const auto reading = meter.read();
+
+                expect (reading.rmsValid, "the watcher should have re-armed RMS");
+                expect (reading.rmsDb < -60.0f,
+                        "the first watched block read " + juce::String (reading.rmsDb, 2)
+                            + " dB on a silent input, which is the level left over from the "
+                              "last time something was watching");
+            }
+        }
+
         beginTest ("clipping latches, and survives reads until it is cleared");
         {
             Meter meter;

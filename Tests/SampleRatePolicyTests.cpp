@@ -87,15 +87,129 @@ public:
             expect (decide (192000.0, unsupported, kMaxCorrections + 40).action == Action::giveUp);
         }
 
-        beginTest ("giving up on one device does not disarm the next");
+        beginTest ("a settled device restores the budget from inside the decision");
         {
-            // The counter resets the moment a device reports a rate it supports,
-            // so a later genuine change gets the full budget again.
+            // The only reset decide() can see for itself.
             const auto settled = decide (48000.0, rates ({ 48000.0 }), kMaxCorrections);
 
             expect (settled.action == Action::keepCurrentRate);
             expect (settled.resetAttempts, "the budget should be restored once settled");
+        }
+
+        beginTest ("a spent budget gives up whatever device spent it");
+        {
+            // The call the test named "giving up on one device does not disarm
+            // the next" was missing. It only ever asked
+            // decide (48000.0, rates ({ 48000.0 }), kMaxCorrections), which
+            // returns at the supported-rate check above before the budget check
+            // is reached -- so it passed no matter what the budget did, and the
+            // defect it was named after was invisible to it.
+            //
+            // This is what that check actually says: decide() has no idea which
+            // device spent the count, so a new device whose rates exclude the
+            // current rate is given up on by its first callback.
+            expect (decide (192000.0, rates ({ 48000.0 }), kMaxCorrections).action
+                        == Action::giveUp,
+                    "a spent count gives up regardless of which device spent it");
+
+            // Which is why the device half of the reset has to come from
+            // outside. Given it, the same device and rates correct normally.
             expect (decide (192000.0, rates ({ 48000.0 }), 0).action == Action::applyRate);
+        }
+
+        beginTest ("the budget spends one attempt per request, and nothing else");
+        {
+            Budget budget;
+            budget.useDevice ("wasapi/Interface A");
+
+            expectEquals (budget.attempts(), 0);
+
+            budget.note ({ Action::applyRate, 48000.0, false });
+            expectEquals (budget.attempts(), 1);
+
+            budget.note ({ Action::keepCurrentRate, 0.0, false });
+            expectEquals (budget.attempts(), 1, "nothing was asked for, so nothing was spent");
+
+            budget.note ({ Action::giveUp, 0.0, false });
+            expectEquals (budget.attempts(), 1,
+                          "giving up counted as an attempt, which makes a bounded count unbounded");
+        }
+
+        beginTest ("settling restores the budget the caller holds");
+        {
+            Budget budget;
+            budget.useDevice ("wasapi/Interface A");
+
+            for (int i = 0; i < kMaxCorrections; ++i)
+                budget.note ({ Action::applyRate, 48000.0, false });
+
+            expectEquals (budget.attempts(), kMaxCorrections);
+
+            budget.note ({ Action::keepCurrentRate, 0.0, /*resetAttempts*/ true });
+            expectEquals (budget.attempts(), 0);
+        }
+
+        beginTest ("giving up on one device does not disarm the next");
+        {
+            // The property the old test named and could not reach. Spend device
+            // A's budget through the real decision, then arrive at device B
+            // whose rates also exclude the current rate: B must be corrected,
+            // not given up on before it has been asked for anything.
+            Budget budget;
+            budget.useDevice ("wasapi/Interface A");
+
+            for (int i = 0; i < kMaxCorrections; ++i)
+                budget.note (decide (192000.0, rates ({ 48000.0 }), budget.attempts()));
+
+            expect (decide (192000.0, rates ({ 48000.0 }), budget.attempts()).action
+                        == Action::giveUp,
+                    "device A should be out of budget by now");
+
+            expect (budget.useDevice ("wasapi/Interface B"),
+                    "a different device should be reported as a new episode");
+
+            expect (decide (192000.0, rates ({ 48000.0 }), budget.attempts()).action
+                        == Action::applyRate,
+                    "device B was given up on before it had been asked for anything");
+        }
+
+        beginTest ("the same device is not a new episode");
+        {
+            // Sticky on purpose. Treating a repeat callback, or a device that
+            // closes and reopens under one name, as a fresh episode would hand
+            // three more requests to every one of them, which is the unbounded
+            // loop the count exists to stop.
+            Budget budget;
+            expect (budget.useDevice ("wasapi/Interface A"), "the first device is a change");
+            expect (! budget.useDevice ("wasapi/Interface A"));
+
+            for (int i = 0; i < kMaxCorrections; ++i)
+                budget.note ({ Action::applyRate, 48000.0, false });
+
+            expect (! budget.useDevice ("wasapi/Interface A"));
+            expectEquals (budget.attempts(), kMaxCorrections,
+                          "the same device was handed its budget back");
+        }
+
+        beginTest ("the give-up is logged once per episode, not once per broadcast");
+        {
+            Budget budget;
+            budget.useDevice ("wasapi/Interface A");
+
+            expect (budget.takeGiveUpLog(), "the first give-up in an episode is worth saying");
+            expect (! budget.takeGiveUpLog(),
+                    "the message repeats on every later broadcast, which is every device change "
+                    "for as long as the driver misbehaves");
+            expect (! budget.takeGiveUpLog());
+
+            expect (budget.useDevice ("wasapi/Interface B"),
+                    "a different device is a new episode and worth saying again");
+            expect (budget.takeGiveUpLog());
+            expect (! budget.takeGiveUpLog());
+
+            budget.note ({ Action::keepCurrentRate, 0.0, /*resetAttempts*/ true });
+            expect (budget.takeGiveUpLog(),
+                    "a device that settled and then went wrong again is a second episode");
         }
     }
 };

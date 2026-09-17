@@ -139,8 +139,19 @@ public:
         // A render must never hand off either. Handing off would exit 0 having
         // rendered nothing, which reads as success -- the same false pass the
         // self-test guards against.
+        //
+        // Nor a scan, and this one was shipped broken for a few hours: --scan
+        // was added to initialise() and not here, so on the normal setup --
+        // a tray application the user leaves running -- JUCE took the handoff
+        // path, never called initialise(), printed nothing, exited 0, and
+        // popped the Preferences window open on the user's desktop instead.
+        // A scan exists to write the plugin list; handing off writes nothing.
+        //
+        // EVERY MODE THAT DOES WORK AND EXITS BELONGS IN THIS LIST. That is
+        // the rule the three above share, and the one that was missed.
         return lighthost::selftest::isRequested (getCommandLineParameterArray())
             || lighthost::render::isRequested (getCommandLineParameterArray())
+            || lighthost::scan::isRequested (getCommandLineParameterArray())
             || getMultiInstanceName().isNotEmpty();
     }
 

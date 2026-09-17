@@ -429,6 +429,18 @@ IconMenu::~IconMenu()
     pendingLoads.clear();
 
     savePluginStates();
+
+    // Close any editor still on screen, AFTER the states above have been read
+    // out of the live instances and BEFORE the graph goes.
+    //
+    // This was called from exactly one place, loadActivePlugins, so quitting
+    // from the tray with a plugin's Settings window open leaked both. A
+    // PluginWindow holds a refcounted Node::Ptr, so the node and the hosted
+    // plugin outlived the graph that owned them, and the registry of open
+    // windows is a function-local static Array that is destroyed at exit
+    // without deleting what it points at. The plugin's own editor teardown
+    // therefore never ran -- third-party code, skipped on every shutdown.
+    PluginWindow::closeAllCurrentlyOpenWindows();
 }
 
 //==============================================================================
@@ -493,18 +505,34 @@ void IconMenu::loadActivePlugins()
 
     sortedPluginCache.reset();
     PluginWindow::closeAllCurrentlyOpenWindows();
-    graph.clear();
+
+    // UpdateKind::none here and on every mutation down to reconnectGraph(), so
+    // the whole reload reaches the audio thread as ONE render sequence. The
+    // defaults published one for the clear, one per IO node and one per lane
+    // trim -- every one of them a chain in the middle of being assembled, and
+    // the first of them silence. The old sequence keeps running and keeps
+    // passing audio until the rebuild at the end of reconnectGraph() replaces
+    // it, because it holds a Node::Ptr to each node it renders
+    // (juce_AudioProcessorGraph.cpp, NodeOp) and so keeps the outgoing
+    // instances alive.
+    //
+    // Nothing between here and that reconnectGraph() may return early: the
+    // graph would be left mutated and unpublished, running the old chain
+    // forever.
+    graph.clear (AudioProcessorGraph::UpdateKind::none);
 
     // Checked, like createLaneGainNodes and syncProbeNodes already are. Without
     // an IO node reconnectGraph simply skips the wiring it cannot do, so the
     // failure presents as a host that is running and passing no audio at all.
     const auto inputNode = graph.addNode (
         std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
-            AudioProcessorGraph::AudioGraphIOProcessor::audioInputNode), kInputNodeId);
+            AudioProcessorGraph::AudioGraphIOProcessor::audioInputNode), kInputNodeId,
+        AudioProcessorGraph::UpdateKind::none);
 
     const auto outputNode = graph.addNode (
         std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
-            AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode), kOutputNodeId);
+            AudioProcessorGraph::AudioGraphIOProcessor::audioOutputNode), kOutputNodeId,
+        AudioProcessorGraph::UpdateKind::none);
 
     if (inputNode == nullptr || outputNode == nullptr)
         status.report ("The audio graph could not be built, so no audio is being"
@@ -728,18 +756,27 @@ void IconMenu::createLaneGainNodes()
 
     for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
     {
-        auto node = graph.addNode (std::make_unique<lighthost::gain::Processor>(),
-                                   laneGainNodeId (lane));
+        // Trimmed BEFORE it is handed to the graph, not after. addNode prepares
+        // the node, and gain::Processor::prepareToPlay seeds the ramp from
+        // whatever gain is set at that instant -- so adding first and trimming
+        // after left the ramp seeded at 0 dB and made the first block sweep
+        // from unity DOWN to the stored trim, which is the fade that
+        // prepareToPlay's own comment says it exists to prevent. Reachable
+        // whenever the chain is built in one call stack, i.e. every startup and
+        // every Apply that adds a plugin.
+        auto trim = std::make_unique<lighthost::gain::Processor>();
+        trim->setGainDb (store.readLaneGainDb (lane));
+
+        // UpdateKind::none for the reason given at the top of
+        // loadActivePlugins: the caller rewires and rebuilds once, so a publish
+        // per lane only puts half-assembled chains in front of the audio
+        // thread.
+        const auto node = graph.addNode (std::move (trim), laneGainNodeId (lane),
+                                         juce::AudioProcessorGraph::UpdateKind::none);
 
         if (node == nullptr)
-        {
             status.report ("Lane " + juce::String (lane)
                            + " trim could not be created; that lane runs at unity.");
-            continue;
-        }
-
-        if (auto* processor = dynamic_cast<lighthost::gain::Processor*> (node->getProcessor()))
-            processor->setGainDb (store.readLaneGainDb (lane));
     }
 }
 
@@ -751,7 +788,7 @@ juce::AudioProcessorGraph::NodeID IconMenu::probeNodeId (int index)
     return lighthost::nodeids::probe (index);
 }
 
-void IconMenu::syncProbeNodes()
+std::vector<int> IconMenu::syncProbeNodes()
 {
     // Re-derived from the chain every time rather than tracked, so adding or
     // removing a plugin while the panel is open cannot leave a stale probe
@@ -759,6 +796,8 @@ void IconMenu::syncProbeNodes()
     const auto wanted = signalViewEnabled
                             ? juce::jmin (static_cast<int> (getTimeSortedList()->size()), kMaxProbes)
                             : 0;
+
+    std::vector<int> retired;
 
     for (int i = 0; i < kMaxProbes; ++i)
     {
@@ -770,8 +809,14 @@ void IconMenu::syncProbeNodes()
         {
             const auto slot = static_cast<size_t> (i);
 
+            // UpdateKind::none, like the removal below, and this line used to
+            // default to sync while the comment beside the removal claimed
+            // "every other mutation here uses it". Opening the signal view on a
+            // chain of six therefore published six render sequences before the
+            // one reconnectGraph builds, each of them a graph with a probe
+            // spliced in and nothing wired to it.
             if (graph.addNode (std::make_unique<lighthost::metering::Probe> (probeMeters[slot]),
-                               id) == nullptr)
+                               id, juce::AudioProcessorGraph::UpdateKind::none) == nullptr)
             {
                 juce::Logger::writeToLog ("IconMenu: probe " + juce::String (i)
                                           + " could not be created; that position shows no level");
@@ -779,16 +824,24 @@ void IconMenu::syncProbeNodes()
         }
         else if (doesExist && ! shouldExist)
         {
-            // Cleared so the row reads silence rather than the level frozen at
-            // the moment the probe went away. The meter itself survives.
-            probeMeters[static_cast<size_t> (i)].reset();
-
-            // UpdateKind::none for the same reason every other mutation here
-            // uses it: one rebuild at the end of reconnectGraph, not one per
-            // node, so the audio thread never sees a half-wired graph.
+            // UpdateKind::none: one rebuild at the end of reconnectGraph, not
+            // one per node, so the audio thread never sees a half-wired graph.
             graph.removeNode (id, juce::AudioProcessorGraph::UpdateKind::none);
+
+            // The meter is NOT cleared here. Because the removal above does not
+            // republish, the live render sequence still contains this probe and
+            // the audio thread goes on calling Probe::processBlock into its
+            // meter until reconnectGraph's rebuild swaps that sequence out.
+            // Meter::publish is a load-modify-store on heldPeak, so a block
+            // landing between the reset and the rebuild put back exactly the
+            // level the reset existed to clear, and the row kept showing a
+            // level for a probe that no longer exists. Returned to the caller
+            // to be cleared after the rebuild instead.
+            retired.push_back (i);
         }
     }
+
+    return retired;
 }
 
 void IconMenu::setSignalViewEnabled (bool shouldBeEnabled)
@@ -1039,6 +1092,14 @@ void IconMenu::onAllPluginsLoaded (int generation)
     nextLoadIndex = 0;
     reconnectGraph();
     refreshTooltip();
+
+    // The probes were just re-derived over the committed chain, so anything
+    // the Preferences window is showing about that chain is now one edit
+    // behind. This is the completion of the load an Apply started, and it is
+    // the point at which the instances exist, so it is the right place for
+    // the refresh rather than at the end of applyPluginChain.
+    refreshPreferencesIfOpen();
+
     juce::Logger::writeToLog ("IconMenu: loadActivePlugins complete");
 
     if (applyInitiatedLoad)
@@ -1089,7 +1150,7 @@ void IconMenu::reconnectGraph()
     // consistent sequence. A change that alters nothing applies nothing.
 
     // Before the layout, so the nodes referenced below exist.
-    syncProbeNodes();
+    const auto retiredProbes = syncProbeNodes();
 
     lighthost::topology::Layout layout;
     layout.inputNodeId  = inputNodeId;
@@ -1130,17 +1191,30 @@ void IconMenu::reconnectGraph()
         if (node == nullptr)
             continue;
 
-        node->setBypassed (store.readBypassed (pd));
+        // Written only on a change. Node::setBypassed is unconditional, and for
+        // a plugin that exposes a bypass parameter it routes to
+        // setValueNotifyingHost, which is unconditional too -- so every device
+        // change, latency report, bypass toggle, move, delete, Apply and
+        // signal-view toggle pushed an automation-visible parameter change into
+        // every hosted plugin, carrying the value each already had. Anything
+        // recording automation from the plugin sees those.
+        if (const auto wantBypass = store.readBypassed (pd); node->isBypassed() != wantBypass)
+            node->setBypassed (wantBypass);
 
         auto* processor = node->getProcessor();
         if (processor == nullptr)
             continue;
 
-        // Lane comes straight from the settings file, so it is clamped rather
-        // than trusted; nothing else validates it.
         lighthost::topology::NodeFacts facts;
         facts.nodeId            = nodeId;
-        facts.lane              = store.readLane (pd);
+
+        // Clamped rather than trusted: the lane comes straight from the
+        // settings file and nothing between here and there validates it.
+        // topology::buildConnections clamps again and is what actually holds
+        // the guarantee, but OfflineRender.hpp clamps at its equivalent site
+        // too, and this is the third copy of the same wiring rule -- the copies
+        // drifting apart is what NodeIds.hpp exists to stop.
+        facts.lane              = juce::jlimit (0, lighthost::kMaxLane, store.readLane (pd));
         facts.numInputChannels  = processor->getTotalNumInputChannels();
         facts.numOutputChannels = processor->getTotalNumOutputChannels();
 
@@ -1170,6 +1244,17 @@ void IconMenu::reconnectGraph()
 
     // One publish to the audio thread, whatever changed.
     graph.rebuild();
+
+    // Cleared here rather than in syncProbeNodes, so the row of a probe that
+    // has gone reads silence instead of the level frozen at the moment it went.
+    // It has to be after the rebuild: until the new sequence is published the
+    // old one is still feeding these meters, and Meter::publish would put the
+    // level straight back. What this cannot cover is a block already in flight
+    // when rebuild() returns -- the audio thread picks the new sequence up at
+    // the start of its next callback -- so one block of stale level remains
+    // possible. That is ~10 ms rather than the whole of the work above.
+    for (const int index : retiredProbes)
+        probeMeters[static_cast<size_t> (index)].reset();
 
     for (const auto& connection : diff.refused)
         juce::Logger::writeToLog ("IconMenu: graph refused connection "
@@ -1214,12 +1299,33 @@ void IconMenu::autoMatchSampleRate()
 
     auto setup = deviceManager.getAudioDeviceSetup();
 
+    // The attempt budget belongs to ONE device, and naming that device is the
+    // half of it decide() cannot do: it is handed a rate and a list of rates,
+    // never an identity. The reset it CAN see -- the device reporting a rate it
+    // supports -- never fires for a device that has been given up on, because
+    // the rate it is stuck at is by definition one that device says it does not
+    // support. So the count stayed at the limit after device A exhausted it,
+    // and device B plugged in afterwards, whose rates also exclude the current
+    // rate, was given up on by its FIRST callback with zero attempts of its
+    // own: no correction at all, and a log line blaming a driver that had not
+    // yet been asked for anything.
+    //
+    // Type as well as name, because two drivers can present the same device
+    // under the same name and they do not offer the same rates.
+    if (sampleRateBudget.useDevice (deviceManager.getCurrentAudioDeviceType()
+                                        + "/" + device->getName()))
+    {
+        juce::Logger::writeToLog ("IconMenu: sample-rate correction budget restored for "
+                                  + device->getName());
+    }
+
     const auto decision = lighthost::samplerate::decide (setup.sampleRate,
                                                          device->getAvailableSampleRates(),
-                                                         sampleRateCorrections);
+                                                         sampleRateBudget.attempts());
 
-    if (decision.resetAttempts)
-        sampleRateCorrections = 0;
+    // Before the switch, so the attempt number logged below is the one just
+    // spent rather than the one before it.
+    sampleRateBudget.note (decision);
 
     switch (decision.action)
     {
@@ -1227,24 +1333,40 @@ void IconMenu::autoMatchSampleRate()
             return;
 
         case lighthost::samplerate::Action::giveUp:
-            // Logged once per episode: the counter only advances on a request, so
-            // this cannot repeat until the device settles and goes wrong again.
-            ++sampleRateCorrections;
-            juce::Logger::writeToLog ("IconMenu: giving up on the sample rate after "
-                                      + juce::String (lighthost::samplerate::kMaxCorrections)
-                                      + " attempts. The driver keeps reporting "
-                                      + juce::String (setup.sampleRate, 0)
-                                      + "Hz, which it also says it does not support.");
+            // Once per episode, and now actually once. The count is already at
+            // the limit on this branch, so every later broadcast from the same
+            // device lands here too -- the increment that used to sit here
+            // bought nothing but an unbounded count, and the "logged once"
+            // claim beside it was false for every repeat.
+            if (sampleRateBudget.takeGiveUpLog())
+                juce::Logger::writeToLog ("IconMenu: giving up on the sample rate after "
+                                          + juce::String (lighthost::samplerate::kMaxCorrections)
+                                          + " attempts. The driver keeps reporting "
+                                          + juce::String (setup.sampleRate, 0)
+                                          + "Hz, which it also says it does not support.");
             return;
 
         case lighthost::samplerate::Action::applyRate:
-            ++sampleRateCorrections;
             juce::Logger::writeToLog ("IconMenu: sample rate " + juce::String (setup.sampleRate, 0)
                                       + "Hz is unsupported; asking for "
                                       + juce::String (decision.rate, 0) + "Hz (attempt "
-                                      + juce::String (sampleRateCorrections) + ")");
+                                      + juce::String (sampleRateBudget.attempts()) + ")");
             setup.sampleRate = decision.rate;
-            deviceManager.setAudioDeviceSetup (setup, true);
+
+            // The refusal, in the device's own words, rather than discarded.
+            // This is the one place that knows the rate could not be set, and
+            // without it the symptom is a host running at a rate the device
+            // says it does not support with nothing anywhere saying why. Every
+            // other device call in this file already reports its error string.
+            if (const auto error = deviceManager.setAudioDeviceSetup (setup, true);
+                error.isNotEmpty())
+            {
+                juce::Logger::writeToLog ("IconMenu: the device refused "
+                                          + juce::String (decision.rate, 0) + "Hz: " + error);
+                status.report ("The audio device refused " + juce::String (decision.rate, 0)
+                               + "Hz: " + error);
+            }
+
             return;
     }
 }
@@ -1570,6 +1692,23 @@ void IconMenu::handleDeletePlugin (int index)
     // a delete left an orphan lane key for the next plugin to inherit.
     store.stageErase (pluginToDelete);
 
+    // The state file and the in-memory copy go with the settings keys, exactly
+    // as applyPluginChain does it for a departing plugin. This path did only
+    // the stageErase above, which cost two things:
+    //
+    // The .lhs file was orphaned permanently. Nothing enumerates the vault
+    // directory, so no sweep could ever collect it, and a real plugin state
+    // here measured four megabytes.
+    //
+    // Worse, lastWrittenState kept the bytes too, so re-adding the same plugin
+    // later RESTORED the preset the user had deleted -- while deleting the
+    // same plugin from the Preferences list did not. Two ways to remove a
+    // plugin, two different meanings, and the difference only showed up on
+    // the next add.
+    const auto deletedIdentity = ChainStore::identityOf (pluginToDelete);
+    (void) stateVault().erase (deletedIdentity);
+    lastWrittenState.erase (deletedIdentity);
+
     // Remove from the list first, so nothing destructive happens until it has
     // succeeded.
     //
@@ -1612,7 +1751,24 @@ void IconMenu::handleDeletePlugin (int index)
         const NodeID nodeId { static_cast<uint32> (nodeIdVal) };
         stopListeningTo (nodeId);
         PluginWindow::closeCurrentlyOpenWindowsFor (nodeId);  // close UI first
-        graph.removeNode (nodeId);                             // destroy only this instance
+
+        // UpdateKind::none, not the default sync. A sync removal disconnects the
+        // node and publishes a render sequence with the lane cut, and the wiring
+        // is not restored until reconnectGraph() below -- which is AFTER
+        // store.commit() and flushSettings(), i.e. after a whole XML settings
+        // document has been written to disk. Delete the only plugin in the chain
+        // and the output was silent for the length of that write. The wiring is
+        // recomputed a few lines down regardless, so nothing is lost by not
+        // publishing here.
+        //
+        // The node survives the removal: the live render sequence holds a
+        // Node::Ptr to it (juce_AudioProcessorGraph.cpp, NodeOp), so the instance
+        // is destroyed only when that sequence is replaced.
+        //
+        // stopListeningTo and closeCurrentlyOpenWindowsFor above need no
+        // equivalent: neither touches the graph topology, so neither publishes
+        // anything to the audio thread.
+        graph.removeNode (nodeId, juce::AudioProcessorGraph::UpdateKind::none);
     }
 
     store.commit();
@@ -2313,7 +2469,14 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         const NodeID nodeId { static_cast<uint32> (plugin.nodeId) };
         stopListeningTo (nodeId);
         PluginWindow::closeCurrentlyOpenWindowsFor (nodeId);
-        graph.removeNode (nodeId);
+
+        // UpdateKind::none, for the reason spelled out in handleDeletePlugin:
+        // a sync removal publishes a sequence with this node's lane cut, and
+        // the rewire that closes the gap does not happen until the bottom of
+        // this function -- after store.commit() and flushSettings() have
+        // written the settings document. Remove the last plugin in a lane with
+        // Apply and that lane was silent for the length of the write.
+        graph.removeNode (nodeId, juce::AudioProcessorGraph::UpdateKind::none);
     }
 
     // ── Write the new order, bypass and lane ─────────────────────────────────
@@ -2356,9 +2519,26 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
                                                              : "Loading plugins...");
 
     if (! arriving.empty())
+    {
         loadActivePlugins();
+    }
     else
+    {
         reconnectGraph();
+
+        // Push the committed chain back into the open window. Every OTHER
+        // chain mutation pairs its rewire with this -- the tray bypass, move
+        // and delete handlers all do -- and Apply did not, which left the
+        // signal view labelled from the chain as it was before the Apply
+        // while its meters came from the chain after it. That is the same
+        // mis-attribution the labels were just fixed for, reached through the
+        // busiest door rather than the one that was closed.
+        //
+        // Only on this branch. The loadActivePlugins path refreshes from
+        // onAllPluginsLoaded once the instances exist, because refreshing
+        // here would show rows for plugins that have not finished loading.
+        refreshPreferencesIfOpen();
+    }
 }
 
 //==============================================================================

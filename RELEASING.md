@@ -53,10 +53,26 @@ hand does the same job, for as long as you remember to do it.
 A gate that reports success on a failed run is worse than no gate, and this is
 the one gate standing between you and a repeat of v5.0.1.
 
-Local green is not evidence for the other two platforms. There is no GCC or
-Clang on the development machine, so an MSVC-only compile error reaches CI
-having passed everything locally — that happened twice during 5.2.0, once on an
-ambiguous `operator<<` overload MSVC resolves and GCC and Clang refuse.
+Local green on MSVC alone is not evidence for the other two platforms. That
+happened twice during 5.2.0: once on an ambiguous `operator<<` overload MSVC
+resolves and GCC and Clang refuse, and once on the GUI tests failing under X11.
+
+Two of the three can now be checked before the push, which is the right order:
+
+```bash
+tools/build-linux-docker.sh          # GCC, in ubuntu:24.04, full test suite
+cmake --preset clang-release && cmake --build build/clang-release   # Clang
+```
+
+Clang is installed on the development machine as of 2026-09-17 and the
+`clang-release` preset works — it had never built before that date, because
+`CMakeLists.txt` was handing MSVC slash-flags to `clang++`. Warnings are errors
+on all three compilers now, and GCC and Clang are much fussier than MSVC, so
+running both locally is worth more than it used to be.
+
+**macOS remains CI-only.** There is no Mac here, so the first evidence that the
+macOS build compiles still arrives after the push. Its Clang is close enough to
+the local one that the two rarely disagree, but "rarely" is not "never".
 
 ---
 
@@ -145,6 +161,26 @@ None of these are automated, and two of them need a person looking at a display.
   installed — so a fresh clone has to capture its own before the check means
   anything. If a sample did change and that was intended, re-capture in the same
   commit and say why.
+
+  A fresh clone needs a scanned plugin list before `--chain` can resolve
+  anything, and that no longer requires opening a window:
+
+  ```bash
+  "Light Host" --scan
+  "Light Host" --scan --scan-path "C:\Program Files\Common Files\VST2"
+  ```
+
+  The default chain is ReaEQ, which the ReaPlugs installer puts in
+  `%COMMONPROGRAMFILES%\VST2` — a folder JUCE does not search by default, hence
+  the second form. The baseline records which input and chain it was taken
+  from, and `check` refuses to compare against a baseline from a different one
+  rather than calling it a regression.
+
+  The chain is deliberately a plain deterministic plugin, not the live chain:
+  measured on 2026-09-16, four paced renders of one input gave ReaEQ one hash
+  4/4 times and Salvor two different hashes, because Salvor's inference lands
+  on different block boundaries. A gate that fails at random teaches you to
+  ignore it.
 
 ---
 

@@ -7,7 +7,9 @@
 #include <juce_core/juce_core.h>
 
 #include <algorithm>
+#include <memory>
 #include <set>
+#include <vector>
 
 //==============================================================================
 // Wiring rules for the plugin chain, tested as a pure function.
@@ -102,6 +104,55 @@ namespace
         return (int) std::count_if (connections.begin(), connections.end(),
                                     [nodeId] (const Connection& c)
                                     { return c.destination.nodeID == nodeId; });
+    }
+
+    /** How wide a node in this layout really is, in each direction.
+
+        Read off the Layout, never off the connections, which is the whole point:
+        an edge may only name a channel the node it names actually has. Checking
+        an edge against a constant like kMaxChannels instead proves nothing --
+        appendEdge caps both indices with std::min (GraphTopology.hpp:144-151),
+        so "the index is below two" is a theorem about the function under test
+        and no Layout could ever break it.
+
+        Every kind of node the wiring can name is covered. The probes are the
+        interesting ones: a probe carries only what reaches it, so the one after
+        a mono plugin is ONE channel wide, and an edge into its channel 1 is a
+        real fault that a stereo assumption would wave through.
+
+        -1 in both directions for an id the layout does not describe, so a
+        connection to an unknown node fails the range check rather than passing
+        it, and 0 for the direction a node has no ports in -- nothing may feed
+        the input node, and nothing may be taken from the output node.
+    */
+    struct ChannelCounts
+    {
+        int out = -1;
+        int in  = -1;
+    };
+
+    ChannelCounts channelsOf (const Layout& layout, NodeID id)
+    {
+        if (id == layout.inputNodeId)  return { layout.inputNodeChannels, 0 };
+        if (id == layout.outputNodeId) return { 0, layout.outputNodeChannels };
+
+        for (const auto& node : layout.nodes)
+        {
+            if (node.nodeId == id)
+                return { node.numOutputChannels, node.numInputChannels };
+
+            if (node.probeNodeId.uid != 0 && node.probeNodeId == id)
+            {
+                const auto width = std::min (kMaxChannels, node.numOutputChannels);
+                return { width, width };
+            }
+        }
+
+        for (const auto& gainNodeId : layout.laneGainNodeIds)
+            if (gainNodeId.uid != 0 && gainNodeId == id)
+                return { layout.laneGainChannels, layout.laneGainChannels };
+
+        return {};
     }
 
     using IOProc = juce::AudioProcessorGraph::AudioGraphIOProcessor;
@@ -331,46 +382,11 @@ public:
             // UpdateKind::none and trust them: an out-of-range channel would be
             // refused by the graph, and the lane would go silent with only a log
             // line to show for it.
-            const auto layout = layoutOf ({ plugin (10, 0, 1, 1),
-                                            plugin (11, 0, 2, 2),
-                                            plugin (12, 1, 2, 1),
-                                            plugin (13, 2, 1, 2) },
-                                          1, 2);
-            const auto connections = buildConnections (layout);
-
-            const auto channelsOut = [&layout] (NodeID id)
-            {
-                if (id == layout.inputNodeId)  return layout.inputNodeChannels;
-                if (id == layout.outputNodeId) return 0;
-
-                for (const auto& node : layout.nodes)
-                    if (node.nodeId == id)
-                        return node.numOutputChannels;
-
-                return -1;
-            };
-
-            const auto channelsIn = [&layout] (NodeID id)
-            {
-                if (id == layout.outputNodeId) return layout.outputNodeChannels;
-                if (id == layout.inputNodeId)  return 0;
-
-                for (const auto& node : layout.nodes)
-                    if (node.nodeId == id)
-                        return node.numInputChannels;
-
-                return -1;
-            };
-
-            for (const auto& c : connections)
-            {
-                expect (c.source.channelIndex >= 0
-                            && c.source.channelIndex < channelsOut (c.source.nodeID),
-                        "source channel out of range");
-                expect (c.destination.channelIndex >= 0
-                            && c.destination.channelIndex < channelsIn (c.destination.nodeID),
-                        "destination channel out of range");
-            }
+            expectEveryChannelExists (layoutOf ({ plugin (10, 0, 1, 1),
+                                                  plugin (11, 0, 2, 2),
+                                                  plugin (12, 1, 2, 1),
+                                                  plugin (13, 2, 1, 2) },
+                                                1, 2));
         }
 
         beginTest ("a lane's trim sits between its last plugin and the output");
@@ -583,18 +599,48 @@ public:
 
         beginTest ("every probed connection still names a channel that exists");
         {
-            const auto layout = withProbes (withLaneGains (layoutOf ({ plugin (10, 0, 2, 1),
-                                                                       plugin (11, 0, 1, 2),
-                                                                       plugin (12, 1) })));
+            // Same check as the unprobed one above, through the same helper,
+            // and that is the fix. This used to assert each index was inside
+            // [0, kMaxChannels), which appendEdge guarantees by construction
+            // for EVERY possible Layout -- 36 assertions, three per cent of the
+            // suite, that no input could fail. In particular it could not see a
+            // stereo edge into the one-channel probe that sits after plugin 10.
+            expectEveryChannelExists (withProbes (withLaneGains (
+                layoutOf ({ plugin (10, 0, 2, 1),
+                            plugin (11, 0, 1, 2),
+                            plugin (12, 1) }))));
+        }
+    }
 
-            for (const auto& edge : buildConnections (layout))
-            {
-                expect (edge.source.channelIndex >= 0 && edge.source.channelIndex < kMaxChannels,
-                        "source channel out of range");
-                expect (edge.destination.channelIndex >= 0
-                            && edge.destination.channelIndex < kMaxChannels,
-                        "destination channel out of range");
-            }
+private:
+    /** Every connection this layout produces names a channel the node it names
+        actually has, in the direction it is used.
+
+        Shared by the probed and unprobed cases so they cannot drift apart, and
+        so the probed one gets the per-node counts rather than a constant.
+    */
+    void expectEveryChannelExists (const Layout& layout)
+    {
+        const auto describe = [] (const Connection& c)
+        {
+            return "node " + juce::String (c.source.nodeID.uid)
+                 + " ch "  + juce::String (c.source.channelIndex)
+                 + " -> node " + juce::String (c.destination.nodeID.uid)
+                 + " ch "  + juce::String (c.destination.channelIndex);
+        };
+
+        for (const auto& c : buildConnections (layout))
+        {
+            const auto source      = channelsOf (layout, c.source.nodeID);
+            const auto destination = channelsOf (layout, c.destination.nodeID);
+
+            expect (c.source.channelIndex >= 0 && c.source.channelIndex < source.out,
+                    "source channel does not exist: " + describe (c)
+                        + " (the source has " + juce::String (source.out) + " out)");
+
+            expect (c.destination.channelIndex >= 0 && c.destination.channelIndex < destination.in,
+                    "destination channel does not exist: " + describe (c)
+                        + " (the destination has " + juce::String (destination.in) + " in)");
         }
     }
 };
@@ -775,3 +821,180 @@ public:
 };
 
 static ChainRewiringTests chainRewiringTests;
+
+//==============================================================================
+// What the no-compensation decision costs.
+//
+// GraphTopology.hpp's header says Light Host deliberately adds no delay
+// compensation: juce::AudioProcessorGraph already pads every path by what each
+// node DECLARES, and a second layer would double-compensate. Until now that was
+// a comment and nothing else, and the consequence it implies -- the graph never
+// MEASURES, so a plugin can misreport its latency and the host will believe it
+// -- was described in StubProcessors.hpp by a reference to a stub that did not
+// exist. An untested case that reads as covered is worse than an untested case.
+//
+// So: one impulse, through an honest plugin and through a dishonest one that
+// declares the same number. The host reports one figure for both, and the audio
+// comes out in two different places. That is the limit of what this project can
+// detect, stated as a test rather than as prose, and it is the reason a second
+// layer of padding here would be the wrong fix -- there is nothing to measure
+// against.
+//==============================================================================
+class DeclaredLatencyTests final : public juce::UnitTest
+{
+public:
+    DeclaredLatencyTests()
+        : juce::UnitTest ("Declared latency through a wired chain", "GraphTopology") {}
+
+    void runTest() override
+    {
+        constexpr int claimed = 512;
+
+        struct Outcome
+        {
+            int              declared = -1;   ///< the number the host would show
+            std::vector<int> arrivals;        ///< samples the audio really came out on
+        };
+
+        /** Wires one lane per processor from input to output, sends a single
+            impulse, and reports both the declared latency and every sample the
+            impulse actually reappeared on.
+        */
+        const auto renderLanes = [] (std::vector<std::unique_ptr<juce::AudioProcessor>> lanes)
+        {
+            constexpr int    blockSize  = 128;
+            constexpr double sampleRate = 48000.0;
+            constexpr int    numBlocks  = 12;      // 1536 samples, three times the claim
+
+            juce::AudioProcessorGraph graph;
+
+            // Before any node is added: AudioGraphIOProcessor sizes its buses
+            // from the parent graph, and a graph reporting no channels yields
+            // IO nodes with no ports and silently refuses every connection.
+            graph.setBusesLayout ({ { juce::AudioChannelSet::stereo() },
+                                    { juce::AudioChannelSet::stereo() } });
+
+            const auto in  = graph.addNode (std::make_unique<IOProc> (IOProc::audioInputNode))->nodeID;
+            const auto out = graph.addNode (std::make_unique<IOProc> (IOProc::audioOutputNode))->nodeID;
+
+            for (auto& processor : lanes)
+            {
+                const auto middle = graph.addNode (std::move (processor))->nodeID;
+
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    graph.addConnection ({ { in, ch }, { middle, ch } });
+                    graph.addConnection ({ { middle, ch }, { out, ch } });
+                }
+            }
+
+            graph.rebuild();
+            graph.prepareToPlay (sampleRate, blockSize);
+
+            Outcome outcome;
+            outcome.declared = graph.getLatencySamples();
+
+            juce::AudioBuffer<float> audio (2, blockSize);
+            juce::MidiBuffer midi;
+
+            for (int block = 0; block < numBlocks; ++block)
+            {
+                audio.clear();
+
+                if (block == 0)
+                    audio.setSample (0, 0, 1.0f);
+
+                graph.processBlock (audio, midi);
+
+                for (int i = 0; i < blockSize; ++i)
+                    if (audio.getSample (0, i) > 0.5f)
+                        outcome.arrivals.push_back (block * blockSize + i);
+            }
+
+            graph.releaseResources();
+            return outcome;
+        };
+
+        const auto describe = [] (const Outcome& outcome)
+        {
+            juce::StringArray at;
+
+            for (const int sample : outcome.arrivals)
+                at.add (juce::String (sample));
+
+            return " (declared " + juce::String (outcome.declared) + ", arrived at "
+                 + (at.isEmpty() ? juce::String ("nothing") : at.joinIntoString (", ")) + ")";
+        };
+
+        beginTest ("an honest plugin takes exactly the latency it declares");
+        {
+            // The control. Every alignment test in this suite rests on
+            // LatencyStub telling the truth, and nothing checked that it does.
+            std::vector<std::unique_ptr<juce::AudioProcessor>> lanes;
+            lanes.push_back (std::make_unique<lighthost::test::LatencyStub> (claimed));
+
+            const auto outcome = renderLanes (std::move (lanes));
+
+            expectEquals (outcome.declared, claimed,
+                          "the graph should report what the node declares" + describe (outcome));
+            expectEquals ((int) outcome.arrivals.size(), 1,
+                          "one impulse in, one impulse out" + describe (outcome));
+
+            if (outcome.arrivals.size() == 1)
+                expectEquals (outcome.arrivals[0], claimed,
+                              "the audio should arrive where the declaration says it will");
+        }
+
+        beginTest ("the graph trusts what a plugin declares and cannot check it");
+        {
+            // The same declared number, and the audio is not delayed at all.
+            // If this ever starts failing because the arrival has moved to 512,
+            // something has begun measuring latency rather than reading it, and
+            // GraphTopology.hpp's no-compensation decision needs revisiting.
+            std::vector<std::unique_ptr<juce::AudioProcessor>> lanes;
+            lanes.push_back (std::make_unique<lighthost::test::LyingLatencyStub> (claimed));
+
+            const auto outcome = renderLanes (std::move (lanes));
+
+            expectEquals (outcome.declared, claimed,
+                          "the graph reports the declaration, never a measurement"
+                              + describe (outcome));
+            expectEquals ((int) outcome.arrivals.size(), 1, describe (outcome));
+
+            if (outcome.arrivals.size() == 1)
+                expectEquals (outcome.arrivals[0], 0,
+                              "a plugin that reports latency it does not incur must "
+                              "come out undelayed, or it is not modelling the case");
+        }
+
+        beginTest ("a lying plugin puts its lane out of time and nothing reports it");
+        {
+            // Both lanes declare 512, so the graph pads neither, and the two
+            // copies land 512 samples apart. Audibly this is comb filtering
+            // rather than silence, which is why it survives a listening test.
+            // Every number the host can read still says the chain is aligned:
+            // one declared latency, no refused connection, no error anywhere.
+            std::vector<std::unique_ptr<juce::AudioProcessor>> lanes;
+            lanes.push_back (std::make_unique<lighthost::test::LatencyStub> (claimed));
+            lanes.push_back (std::make_unique<lighthost::test::LyingLatencyStub> (claimed));
+
+            const auto outcome = renderLanes (std::move (lanes));
+
+            expectEquals (outcome.declared, claimed,
+                          "two lanes declaring the same latency need no padding"
+                              + describe (outcome));
+            expectEquals ((int) outcome.arrivals.size(), 2,
+                          "aligned lanes would sum into one impulse of amplitude 2"
+                              + describe (outcome));
+
+            if (outcome.arrivals.size() == 2)
+            {
+                expectEquals (outcome.arrivals[0], 0);
+                expectEquals (outcome.arrivals[1], claimed,
+                              "the two lanes should be a full declared latency apart");
+            }
+        }
+    }
+};
+
+static DeclaredLatencyTests declaredLatencyTests;

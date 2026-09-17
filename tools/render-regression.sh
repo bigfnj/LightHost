@@ -102,8 +102,17 @@ trap 'rm -f "$tmp" "$out"' EXIT
 echo "rendering through '$chain' (paced, so this runs in real time)..."
 "$exe" --render "$input" "$out" --chain "$chain"
 
-if [[ ! -f "$out" ]]; then
-    echo "REGRESSION TOOL FAIL: the render produced no file" >&2
+# Non-empty, not merely present. `mv` created "$out" three lines above, so the
+# check this replaces -- `[[ ! -f "$out" ]]` -- could never fire: the file it
+# looked for was one the script had just made. A render that exited 0 without
+# writing anything therefore got its empty file hashed, and `capture` would
+# have recorded e3b0c442... (the sha256 of nothing) as the baseline, after
+# which every `check` passes by rendering nothing at all.
+#
+# That is the precise failure this whole script exists to prevent, sitting
+# inside the guard meant to prevent it.
+if [[ ! -s "$out" ]]; then
+    echo "REGRESSION TOOL FAIL: the render wrote no audio to $out" >&2
     exit 1
 fi
 
@@ -126,10 +135,21 @@ sha256_of()
 
 hash=$(sha256_of "$out")
 
+# What the hash was taken OF, so a later run can tell a real regression from a
+# different input. The baseline used to be a bare hash, which meant two people
+# running `check` with different WAVs saw a mismatch the file could not
+# explain, and a `capture` with the wrong input silently rebaselined the gate
+# to something nobody chose. The input is identified by its own hash rather
+# than its path, because the path says nothing about the bytes.
+input_hash=$(sha256_of "$input")
+provenance="input=$input_hash chain=$chain"
+
 case "$mode" in
     capture)
-        echo "$hash" > "$baseline"
+        printf '%s\n# %s\n# captured %s\n' \
+               "$hash" "$provenance" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$baseline"
         echo "baseline recorded: $hash"
+        echo "  $provenance"
         echo "(stored in tools/render-regression.sha256)"
         ;;
     check)
@@ -138,7 +158,22 @@ case "$mode" in
             exit 2
         fi
 
-        want=$(cat "$baseline")
+        # First non-comment line, so a baseline written before the provenance
+        # lines existed still reads correctly.
+        want=$(grep -vE '^[[:space:]]*(#|$)' "$baseline" | head -n 1)
+
+        # Refuse to compare against a baseline taken from a different input or
+        # chain. Reporting REGRESSION FAIL for that would be a lie: nothing
+        # regressed, the question was different.
+        recorded_provenance=$(sed -n 's/^# \(input=.*\)$/\1/p' "$baseline" | head -n 1)
+
+        if [[ -n "$recorded_provenance" && "$recorded_provenance" != "$provenance" ]]; then
+            echo "REGRESSION TOOL FAIL: this baseline was taken from a different render" >&2
+            echo "  baseline: $recorded_provenance" >&2
+            echo "  this run: $provenance" >&2
+            echo "  Re-capture, or pass the input and chain the baseline used." >&2
+            exit 2
+        fi
 
         if [[ "$hash" == "$want" ]]; then
             echo "REGRESSION OK: $hash"

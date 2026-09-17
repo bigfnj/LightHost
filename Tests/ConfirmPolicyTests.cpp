@@ -2,6 +2,8 @@
 
 #include <juce_core/juce_core.h>
 
+#include <optional>
+
 //==============================================================================
 // Where the destructive button goes in a confirmation dialog.
 //
@@ -116,13 +118,52 @@ public:
                           "declines rather than deletes");
         }
 
-        beginTest ("this build compiles for exactly one of the two rules");
+        beginTest ("the compiled-in rule matches the machine this is running on");
         {
-            #if JUCE_LINUX || JUCE_BSD
-            expect (thisPlatform() == Platform::linuxLike);
-            #else
-            expect (thisPlatform() == Platform::windowsLike);
-            #endif
+            // The expectation is stated against a RUNTIME fact, not against a
+            // second copy of the production condition. This used to read
+            //
+            //     #if JUCE_LINUX || JUCE_BSD
+            //     expect (thisPlatform() == Platform::linuxLike);
+            //
+            // which is ConfirmPolicy.hpp:57-61's own #if compared against a
+            // duplicate of itself: invert the production one and this inverts
+            // with it, both stay green, and the dialog ships with Delete on the
+            // Escape key. No input could have failed it.
+            //
+            // juce::SystemStats::getOperatingSystemType() answers at run time
+            // out of whichever juce_SystemStats_<platform>.cpp the build
+            // compiled, so editing our header cannot move it. It is not
+            // independent of JUCE_LINUX all the way down -- nothing in one
+            // process is -- but it is independent of the line under test,
+            // which is the line that can be edited.
+            //
+            // BSD reports Linux: juce_core.cpp:251-259 compiles the Linux
+            // SystemStats for it, and that returns SystemStats::Linux, which
+            // is the same side of this decision JUCE_BSD puts it on.
+            const auto os = juce::SystemStats::getOperatingSystemType();
+
+            // Listed, not defaulted. A platform nobody has worked out the
+            // dismissal rule for has to fail here rather than quietly inherit
+            // whichever branch the #else happens to be.
+            const auto expected = [os]() -> std::optional<Platform>
+            {
+                if ((os & juce::SystemStats::Windows) != 0) return Platform::windowsLike;
+                if ((os & juce::SystemStats::MacOSX)  != 0) return Platform::windowsLike;
+                if ((os & juce::SystemStats::Linux)   != 0) return Platform::linuxLike;
+                return {};
+            }();
+
+            expect (expected.has_value(),
+                    "running on " + juce::SystemStats::getOperatingSystemName()
+                        + ", which is none of the three platforms Light Host ships "
+                          "for, so nothing here knows which dismissal rule applies");
+
+            if (expected.has_value())
+                expect (thisPlatform() == *expected,
+                        "the compiled-in platform rule disagrees with the machine "
+                        "this is running on ("
+                            + juce::SystemStats::getOperatingSystemName() + ")");
 
             // And whichever it is, the live order is the safe one. This is the
             // assertion that used to require a person at the machine.

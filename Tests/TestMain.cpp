@@ -101,11 +101,79 @@ int main (int argc, char** argv)
 
     const juce::StringArray headless { "ConfirmPolicy", "DevicePolicy", "Gain",
                                        "GraphRender", "GraphTopology", "InstanceName",
-                                       "Metering", "NodeIds", "PluginChain", "PluginState",
+                                       "Metering", "NodeIds", "OfflineRender",
+                                       "PluginChain", "PluginScan", "PluginState",
                                        "PluginStateVault", "PluginWindow",
-                                       "SampleRate", "SettingsKeys", "Status" };
+                                       "SampleRate", "SelfTest", "SettingsKeys", "Status" };
 
     const juce::StringArray needsDisplay { "PluginWindowGui" };
+
+    juce::StringArray declared (headless);
+    declared.addArray (needsDisplay);
+
+    //==========================================================================
+    // Two checks on the two lists themselves, before a single test runs. Both
+    // are about this file being wrong rather than about any test failing, and
+    // both used to exit 0.
+
+    // A NAME THAT IS BLANK OR ONLY WHITESPACE.
+    //
+    // Checked here rather than after the run, because running it is the
+    // problem. UnitTest::getTestsInCategory returns getAllTests() for an empty
+    // string (juce_UnitTest.cpp:58-60), so a blanked entry does not run nothing
+    // -- it runs EVERYTHING, including PluginWindowGui, which needs a display
+    // and takes a headless Linux runner down (CMakeLists.txt says why it is a
+    // separate ctest entry). Measured: with headless = { "" } the suite ran the
+    // lot and exited 0, and the empty-category guard below stayed silent,
+    // because a run that executes every test is not short of results.
+    //
+    // Both lists are scanned, not just the one this mode uses: a blank in
+    // needsDisplay is the same defect and would otherwise only be caught on the
+    // platforms where unit-gui is registered at all.
+    juce::StringArray blankCategories;
+
+    for (int i = 0; i < declared.size(); ++i)
+        if (declared[i].trim().isEmpty())
+            blankCategories.add (juce::String (i < headless.size() ? "headless" : "needsDisplay")
+                                     + "[" + juce::String (i < headless.size()
+                                                               ? i : i - headless.size()) + "]");
+
+    // A CATEGORY NOBODY LISTED.
+    //
+    // Add a test class with a new category, forget to add it above, and it
+    // silently never runs while the suite exits 0. Nothing else notices: the
+    // empty-category guard fires for a listed name with no tests, which is the
+    // opposite direction.
+    //
+    // Run in BOTH modes, against the union of both lists. The registered tests
+    // are the same static objects either way, so the answer does not depend on
+    // the mode -- and unit-gui is not registered on Linux at all, so a check
+    // that only ran there would never run on two of the three platforms CI
+    // covers. Running it in the default mode means every platform's `unit`
+    // entry catches an orphan on the first push.
+    juce::StringArray orphanCategories;
+
+    for (const auto& category : juce::UnitTest::getAllCategories())
+        if (! declared.contains (category))
+            orphanCategories.add (category);
+
+    if (! blankCategories.isEmpty() || ! orphanCategories.isEmpty())
+    {
+        if (! blankCategories.isEmpty())
+            std::printf ("BLANK CATEGORY NAME: %s\n"
+                         "    An empty category runs every test in the binary, not "
+                         "none of them, so this cannot be run as written.\n",
+                         blankCategories.joinIntoString (", ").toRawUTF8());
+
+        if (! orphanCategories.isEmpty())
+            std::printf ("CATEGORY NOT LISTED IN TestMain.cpp: %s\n"
+                         "    A test registers it and neither list names it, so it "
+                         "never runs and this process would still exit 0.\n",
+                         orphanCategories.joinIntoString (", ").toRawUTF8());
+
+        juce::Logger::setCurrentLogger (nullptr);
+        return 1;
+    }
 
     juce::StringArray emptyCategories;
 
@@ -115,8 +183,10 @@ int main (int argc, char** argv)
 
         // Per category, not just overall. Categories are matched by string, so a
         // renamed or misspelled one runs nothing -- and the total-based check
-        // below only notices when EVERY category is empty, which means one
-        // misspelling among fifteen used to pass silently.
+        // below only notices when EVERY category is empty, which means a single
+        // misspelling in the list above used to pass silently. (This sentence
+        // used to say "one misspelling among fifteen"; the list has grown twice
+        // since, so the count is gone rather than left wrong.)
         if (runner.getNumResults() == 0)
             emptyCategories.add (category);
 

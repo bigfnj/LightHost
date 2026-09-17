@@ -157,6 +157,42 @@ public:
             expectWithinAbsoluteError (rendered.front(), 0.5f, 1.0e-3f);
         }
 
+        beginTest ("the order PreparedGain uses is the order production uses");
+        {
+            // PreparedGain sets the trim and then prepares, and every test
+            // above rests on that: prepareToPlay seeds the ramp from whatever
+            // gain is set AT THAT MOMENT, so the order is the whole of the
+            // no-fade-in guarantee.
+            //
+            // IconMenu::createLaneGainNodes used to do it the other way round
+            // -- graph.addNode prepares the node, and the trim was applied
+            // afterwards -- so production got the second half below while every
+            // test got the first, and the fade the test above denies happened
+            // on every chain load. The helper now matches production because
+            // production was changed to match it.
+            PreparedGain setThenPrepared (-6.020599913f);
+            const auto correct = renderConstant (setThenPrepared.processor, 1.0f, 1);
+
+            expectWithinAbsoluteError (correct.front(), 0.5f, 1.0e-3f,
+                                       "a trim set before prepareToPlay must be live on the "
+                                       "first sample");
+
+            Processor preparedThenSet;
+            preparedThenSet.prepareToPlay (kSampleRate, kBlockSize);
+            preparedThenSet.setGainDb (-6.020599913f);
+            const auto swept = renderConstant (preparedThenSet, 1.0f, 1);
+
+            // kRampSeconds is 20 ms, so a 128-sample block at 48 kHz covers an
+            // eighth of the ramp: the wrong order leaves the whole first block
+            // between 6 dB too loud and 5.4 dB too loud. Asserted so that if
+            // the fade ever stops happening, this stops claiming to describe
+            // it rather than passing vacuously.
+            expect (swept.front() > 0.99f,
+                    "the wrong order is supposed to start at unity, and did not");
+            expect (swept.back() > 0.9f,
+                    "a whole block of the wrong order should still be nowhere near the trim");
+        }
+
         beginTest ("unity is recognised, and near-unity is not");
         {
             expect (isUnity (0.0f));

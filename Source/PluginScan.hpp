@@ -91,6 +91,16 @@ namespace lighthost::scan
                 combined.addIfNotAlreadyThere (file);
         }
 
+        // addIfNotAlreadyThere compares whole paths, so it rejects a duplicate
+        // and accepts a CHILD of somewhere already listed. The scan is
+        // recursive, so such a child gets walked twice: once from its parent,
+        // once on its own. Harmless to the result and not free -- scanning
+        // loads each plugin.
+        //
+        // IconMenu::rememberSearchPath solves the same problem by hand with
+        // isFileInPath; this is JUCE's version of that check.
+        combined.removeRedundantPaths();
+
         return combined;
     }
 

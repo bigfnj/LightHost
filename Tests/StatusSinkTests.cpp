@@ -52,21 +52,44 @@ public:
                           "the total should count everything, not just what is remembered");
         }
 
-        beginTest ("a listener is told when something changes");
+        beginTest ("a listener is told about every report, evicting ones included");
         {
             // There is one notifier and one thing it means: a report arrived.
             // The tray tooltip and the Preferences status line both redraw from
             // mostRecent(), so every report has to reach them, including the
             // ones that push an older problem off the end.
+            //
+            // That last clause is why this fills the sink first. It used to
+            // send two reports against a bound of eight, so the eviction its
+            // own comment named was never reached: report() could have returned
+            // early, or skipped the notify, on the branch that erases and
+            // nothing here would have moved. The bound is read from the sink
+            // rather than written as 8, so raising it cannot leave this test
+            // quietly back under the limit.
             Sink sink;
             int notifications = 0;
             sink.onChange = [&notifications] { ++notifications; };
 
-            sink.report ("one");
-            expectEquals (notifications, 1);
+            constexpr auto bound = static_cast<int> (Sink::kMaxRemembered);
 
-            sink.report ("two");
-            expectEquals (notifications, 2);
+            for (int i = 0; i < bound; ++i)
+                sink.report ("problem " + juce::String (i));
+
+            expectEquals (notifications, bound, "a report before the bound went unannounced");
+            expectEquals ((int) sink.all().size(), bound);
+
+            // One more: the first report that has to erase before it appends.
+            sink.report ("the one that evicts");
+
+            expectEquals (notifications, bound + 1,
+                          "the report that evicted an older problem did not reach the listener");
+            expectEquals ((int) sink.all().size(), bound,
+                          "the bound did not hold once it was actually reached");
+            expectEquals (sink.mostRecent(), juce::String ("the one that evicts"));
+            expectEquals (sink.all().front().message, juce::String ("problem 1"),
+                          "the oldest problem should have been the one dropped");
+            expectEquals (sink.totalReported(), bound + 1,
+                          "the total must count the dropped report too");
         }
     }
 };

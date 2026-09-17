@@ -10,9 +10,9 @@ namespace lighthost::test
     /** A faithful plugin: reports N samples of latency AND actually delays by N.
 
         This is what a well-behaved plugin does, and it is the honest model to
-        test the host against. Reporting latency you do not incur, or incurring
-        latency you do not report, are both separate (and interesting) cases —
-        see LyingLatencyStub.
+        test the host against. Reporting latency you do not incur is the other
+        case, and it is the one the host cannot defend against -- see
+        LyingLatencyStub below.
     */
     class LatencyStub final : public juce::AudioProcessor
     {
@@ -188,6 +188,72 @@ namespace lighthost::test
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BypassParameterStub)
     };
 
+    /** A dishonest plugin: reports N samples of latency and delays by none.
+
+        The counterpart to LatencyStub, and the case that has no fix.
+        juce::AudioProcessorGraph pads every other path by what each node
+        DECLARES (juce_AudioProcessorGraph.cpp:1460) -- it never measures -- so
+        a node claiming 512 samples it does not take drags its own lane 512
+        samples EARLY relative to the others, and every number the host can see
+        still says the chain is aligned. Silent phase cancellation, from a
+        plugin doing the lying.
+
+        Light Host deliberately adds no compensation of its own; GraphTopology.hpp
+        records why, and it is the right call: a second layer of padding would
+        double-compensate every honest plugin in order to half-fix a dishonest
+        one. What this stub buys is that the limit is asserted rather than only
+        described. See "the graph trusts what a plugin declares" in
+        Tests/GraphTopologyTests.cpp, which renders an impulse through one of
+        these and one LatencyStub and shows the two arriving at different
+        samples while the host reports one number for both.
+    */
+    class LyingLatencyStub final : public juce::AudioProcessor
+    {
+    public:
+        explicit LyingLatencyStub (int latencyToClaim)
+            : AudioProcessor (BusesProperties()
+                                  .withInput  ("In",  juce::AudioChannelSet::stereo(), true)
+                                  .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
+              claimed (latencyToClaim)
+        {
+            setLatencySamples (claimed);
+        }
+
+        const juce::String getName() const override        { return "LyingLatencyStub"; }
+        bool acceptsMidi() const override                  { return false; }
+        bool producesMidi() const override                 { return false; }
+        double getTailLengthSeconds() const override       { return 0.0; }
+        int getNumPrograms() override                       { return 1; }
+        int getCurrentProgram() override                    { return 0; }
+        void setCurrentProgram (int) override               {}
+        const juce::String getProgramName (int) override    { return {}; }
+        void changeProgramName (int, const juce::String&) override {}
+        bool hasEditor() const override                     { return false; }
+        juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+        void getStateInformation (juce::MemoryBlock&) override {}
+        void setStateInformation (const void*, int) override  {}
+        void releaseResources() override                    {}
+
+        /** Re-asserted here for the same reason LatencyStub does it: a real
+            plugin recomputes its latency when the block size changes, and a
+            host that only reads the value set in the constructor would be
+            testing a case that does not occur.
+        */
+        void prepareToPlay (double, int) override           { setLatencySamples (claimed); }
+
+        using juce::AudioProcessor::processBlock;
+
+        /** The lie. The buffer is handed back exactly as it arrived, so the
+            audio is not delayed by even one sample.
+        */
+        void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+
+    private:
+        int claimed;
+
+        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LyingLatencyStub)
+    };
+
     /** Passes audio through with a chosen number of input and output channels.
 
         For wiring tests: a real chain contains mono plugins, and the host has to
@@ -239,7 +305,16 @@ namespace lighthost::test
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChannelStub)
     };
 
-    /** Passes audio straight through, no latency, no reporting. */
+    /** Passes audio straight through, no latency, no reporting.
+
+        Used by Tests/PluginWindowTests.cpp, which needs a processor in a graph
+        and does not care what it does to audio. It is NOT used by any render
+        test: GraphRenderTests.cpp builds its plain comparison lane out of
+        LatencyStub (addLane, addProbedLane and expectProbesTransparent all do),
+        and that file's comment saying otherwise is wrong. Named here because a
+        stub whose stated purpose is a lane it has never been in reads as
+        coverage that does not exist.
+    */
     class PassthroughStub final : public juce::AudioProcessor
     {
     public:

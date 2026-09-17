@@ -13,7 +13,9 @@ using namespace juce;
 
 namespace metrics = lighthost::ui::metrics;
 
-// Both declared in IconMenu.hpp, which this file already includes.
+// getAppProperties and getLogFile come from HostServices.hpp above. This file
+// used to declare both itself, which is how getLogFile ended up with a
+// declaration nothing checked against its definition.
 
 //==============================================================================
 // SectionLabel
@@ -364,17 +366,45 @@ public:
         g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f).withStyle ("Bold")));
         g.drawText ("SIGNAL VIEW", header.reduced (10, 0), juce::Justification::centredLeft);
 
-        if (taps.empty())
-        {
-            g.setColour (text.withAlpha (0.45f));
-            g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.5f)));
-            g.drawFittedText ("No plugins in the chain.", area.reduced (12, 10),
-                              juce::Justification::centredTop, 2);
-            return;
-        }
+        // There was a "No plugins in the chain." message here, behind
+        // `if (taps.empty())`. It had never been drawn: the only caller,
+        // refreshSignalView, always pushes an Input tap and an Output tap, so
+        // taps.size() is at least 2 whatever the chain holds. An empty chain
+        // correctly shows the two device rows and nothing between them.
+        //
+        // Deleted rather than repaired with `taps.size() <= 2`, because the
+        // message would then be wrong in the other direction: the view is not
+        // empty, it is showing the two things it can always show.
+
+        // Rows that do not fit are counted rather than drawn into a
+        // zero-height rectangle. removeFromTop returns an empty rectangle once
+        // area is exhausted and every draw becomes a silent no-op, so a chain
+        // longer than the window simply stopped being shown -- no scrollbar,
+        // no ellipsis, nothing. A meter you cannot see reads exactly like a
+        // meter showing silence, which for a diagnostic view is the same
+        // mis-attribution the labels were just fixed for.
+        //
+        // Counting is not a scrollbar. It is the smallest change that stops
+        // the view lying; SignalViewPanel would need a juce::Viewport to
+        // actually show them, which is recorded in BACKLOG.md.
+        size_t drawn = 0;
 
         for (size_t i = 0; i < taps.size(); ++i)
+        {
+            if (area.getHeight() < kRowH)
+                break;
+
             paintTap (g, area.removeFromTop (kRowH), i, text, bg);
+            ++drawn;
+        }
+
+        if (drawn < taps.size())
+        {
+            g.setColour (juce::Colour (lighthost::ui::LookAndFeel::kCaution));
+            g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f)));
+            g.drawText (juce::String (taps.size() - drawn) + " more not shown -- make the window taller",
+                        header.reduced (10, 0), juce::Justification::centredRight);
+        }
     }
 
 private:
@@ -986,12 +1016,15 @@ public:
             bypassed.resize (items.size(), false);
             bypassed[static_cast<size_t> (row)] = ! bypassed[static_cast<size_t> (row)];
 
+            // This repaints the whole list, because the callback installed by
+            // the content component ends in chainList.repaint(). The
+            // repaintRow below is therefore redundant today and is kept only
+            // so that the intent survives if that callback ever stops doing a
+            // full repaint. An earlier version of this comment claimed the
+            // row was the only thing repainted, which was not true of either
+            // version of the code.
             if (onChange) onChange();
 
-            // The row whose tick changed, and only that row -- the press path
-            // used to repaint the whole list here. Stated rather than left to
-            // clearPressed above, which happens to have queued the same
-            // rectangle for a different reason.
             repaintRow (row);
             return;
         }
@@ -1220,6 +1253,21 @@ public:
         addAndMakeVisible (inputDeviceCombo);
         addAndMakeVisible (inputChannelLabel);
 
+        // The ONLY evidence that a device name was chosen rather than settled
+        // on. rebuildDeviceCombos populates and selects with
+        // dontSendNotification, so nothing but a person picking from the list
+        // can get here -- which is exactly the distinction
+        // recordRequestedDevices depends on and cannot make for itself.
+        //
+        // Reading the combo's text at Apply is NOT that evidence, and assuming
+        // it was is how this went wrong the first time: after a fallback the
+        // combo displays the SUBSTITUTED device, because the missing one is
+        // not in the list at all. Apply is also the button for chain edits,
+        // sample rate and buffer size, so pressing it for any of those would
+        // have recorded the substitute as the request and silenced the
+        // substitution report for ever.
+        inputDeviceCombo.onChange  = [this] { deviceChoiceIsUserMade = true; };
+
         #if JUCE_WINDOWS
         // Processing audio from other applications needs a third-party virtual
         // input device, so say so instead of leaving the user staring at a silent
@@ -1336,6 +1384,10 @@ public:
         addAndMakeVisible (outputSectionLabel);
         addAndMakeVisible (outputDeviceCombo);
         addAndMakeVisible (outputChannelLabel);
+
+        // See the input combo above for why this flag is the only honest
+        // signal available.
+        outputDeviceCombo.onChange = [this] { deviceChoiceIsUserMade = true; };
         outputChannelLabel.setText ("", juce::dontSendNotification);  // set by rebuildDeviceCombos
         outputChannelLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (12.0f)));
         outputChannelLabel.setJustificationType (juce::Justification::centredRight);
@@ -1742,6 +1794,13 @@ private:
 
     // INPUT
     SectionLabel   inputSectionLabel   { "  INPUT" };
+    /** Set by either device combo's onChange, cleared once the choice has been
+        recorded. False means every device name on screen was put there by
+        rebuildDeviceCombos, which reflects what is OPEN -- after a fallback,
+        the substitute.
+    */
+    bool deviceChoiceIsUserMade = false;
+
     juce::ComboBox inputDeviceCombo;
     juce::Label    inputChannelLabel;
 
@@ -2002,6 +2061,9 @@ private:
         const auto typeName = deviceTypeCombo.getText();
         const auto inName   = inputDeviceCombo.getText();
         const auto outName  = outputDeviceCombo.getText();
+        // Snapshotted with the rest, for the same reason: reading it live
+        // inside the lambda would see whatever the combos did after the click.
+        const bool deviceChosen = deviceChoiceIsUserMade;
         const int  rateId   = sampleRateCombo.getSelectedId();
         const int  bufId    = bufferSizeCombo.getSelectedId();
         // The chain, the bypass flags and the lane assignments are one value and
@@ -2017,7 +2079,7 @@ private:
         // thread with device restarts.
         juce::Component::SafePointer<PreferencesContentComponent> safe (this);
         juce::MessageManager::callAsync (
-            [safe, typeName, inName, outName, rateId, bufId, chain, bypass, lanes]
+            [safe, typeName, inName, outName, deviceChosen, rateId, bufId, chain, bypass, lanes]
             {
                 if (safe == nullptr) return;
                 auto& dm = safe->deviceManager;
@@ -2055,9 +2117,31 @@ private:
                     const auto availableInputs  = currentType->getDeviceNames (true);
                     const auto availableOutputs = currentType->getDeviceNames (false);
 
-                    if (inName.isNotEmpty() && ! inName.startsWith ("(") && availableInputs.contains (inName))
+                    // A device is written only when the user picked one, or
+                    // when the combo already agrees with what is open.
+                    //
+                    // Without the first condition, Apply opens a device nobody
+                    // asked for. rebuildDeviceCombos starts at selection 1 and
+                    // only moves off it on a name match, so when no input
+                    // device is open the combo displays the FIRST one in the
+                    // list -- and that name is in availableInputs, so the old
+                    // guard passed it straight through. An output-only user
+                    // who opened Preferences to change the buffer size got a
+                    // microphone opened for them.
+                    const auto acceptable = [] (const juce::String& name,
+                                                const juce::StringArray& available)
+                    {
+                        return name.isNotEmpty()
+                            && ! name.startsWith ("(")     // a placeholder, not a device
+                            && available.contains (name);
+                    };
+
+                    if (acceptable (inName, availableInputs)
+                        && (deviceChosen || inName == setup.inputDeviceName))
                         setup.inputDeviceName = inName;
-                    if (outName.isNotEmpty() && ! outName.startsWith ("(") && availableOutputs.contains (outName))
+
+                    if (acceptable (outName, availableOutputs)
+                        && (deviceChosen || outName == setup.outputDeviceName))
                         setup.outputDeviceName = outName;
                 }
 
@@ -2091,21 +2175,36 @@ private:
                     juce::Logger::writeToLog ("Preferences: setAudioDeviceSetup threw unknown exception");
                 }
 
-                // Recorded AFTER the request goes in, and deliberately from
-                // the combo snapshots rather than from the setup that came
-                // back: setAudioDeviceSetup may have fallen back, and what
-                // belongs in the record is what was asked for. It is the only
-                // thing that can later say a substitution happened.
+                // ONLY when a person picked from a device list. Apply is also
+                // the button for chain edits, sample rate and buffer size, and
+                // the combo text is not evidence of a choice: after a fallback
+                // it shows the SUBSTITUTED device, because the one that went
+                // missing is not in the list at all.
                 //
-                // setup.inputDeviceName rather than inName, because the guards
-                // above drop a name the device type does not offer and a
-                // placeholder like "(no input devices)"; recording a name that
-                // was never requestable would report a substitution for ever.
-                if (safe != nullptr && safe->onDevicesChosenFn)
+                // Recording unconditionally, as the first version of this did,
+                // inverts the whole feature. Startup reports the substitution,
+                // the user opens Preferences to look at it, presses Apply for
+                // any reason, and the substitute is written down as the thing
+                // they asked for -- after which nothing can ever notice it
+                // again. deviceChoiceIsUserMade is set only by the combos'
+                // onChange, and rebuildDeviceCombos populates them with
+                // dontSendNotification, so it cannot be set by us.
+                //
+                // setup.inputDeviceName rather than the raw combo text,
+                // because the guards above drop a name the device type does
+                // not offer and placeholders like "(no input devices)".
+                if (deviceChosen && safe != nullptr && safe->onDevicesChosenFn)
+                {
                     safe->onDevicesChosenFn (setup.inputDeviceName, setup.outputDeviceName);
 
+                    // Cleared only after the record is written, so a failed
+                    // Apply does not quietly forget that a choice was made.
+                    safe->deviceChoiceIsUserMade = false;
+                }
+
                 // 3. Plugin chain + bypass states
-                if (safe->onApplyFn) safe->onApplyFn (chain, bypass, lanes);
+                if (safe != nullptr && safe->onApplyFn)
+                    safe->onApplyFn (chain, bypass, lanes);
 
                 // 4. Re-enable Apply now that all restarts are complete
                 if (safe != nullptr)
