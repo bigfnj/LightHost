@@ -4,6 +4,28 @@ Open items after the 2026-09-17 work, which cleared the nineteen that were here
 and added four audit passes of its own. They are written to be picked up cold:
 what is wrong, where, why it matters, and what the fix is.
 
+## Where things live, if you are new or returning
+
+| Question | File |
+|---|---|
+| What is still wrong, and what should I pick up? | this file |
+| Why was X *not* built? | [DECISIONS.md](DECISIONS.md) -- each entry records the trigger that would reverse it, so check before re-proposing |
+| What changed, and when? | [CHANGELOG.md](CHANGELOG.md) |
+| How do I ship it? | [RELEASING.md](RELEASING.md) |
+| What is it and how do I build it? | [README.md](README.md) |
+
+**Before trusting a green test run**, know what the gates are and what each one
+does not cover. `ctest` gives you unit, GUI and three smoke tests that launch the
+real application. `tools/render-regression.sh` is the only check that proves the
+host did not change a sample, and it needs a scanned plugin list -- `--scan`
+provides one headlessly. `tools/build-linux-docker.sh` builds and tests for
+Linux locally; the `clang-release` preset covers Clang. macOS is CI-only.
+`tools/ci-status.sh` reads a run's conclusion, which `gh run watch` does not.
+
+**The one habit worth keeping** from the 5.3.0 work: when you add or change a
+check, break the thing it guards and confirm it goes red before believing it.
+Five gates in this repo could not fail, and each had been green for months.
+
 Nothing here blocks a release. The highest-severity items are two ways to lose
 an unapplied edit in the Preferences window, both of which have been present
 since the window existed and neither of which loses anything already committed.
@@ -177,6 +199,21 @@ by a failing test.
 
 ## Process
 
+- **The README's front-page screenshot shows v4.0.3.** `docs/images/preferences.png`
+  predates the lane trims, the signal view and the status row, so the first thing
+  a visitor sees is three releases out of date. Regenerating it needs a person at
+  a display, which is why it is here and not fixed.
+- **Six `tools/` scripts are referenced by no document**:
+  `analyse-voice-headroom.py`, `compare-capture.py`, `audio-endpoints.ps1`,
+  `measure-idle-cpu.ps1`, `set-capture-level.ps1`, `show-capture-levels.ps1`.
+  Each carries a substantial header explaining itself, so they are legitimate
+  operator tooling rather than clutter; the gap is that nothing tells you they
+  exist. The other seven are cited from README, RELEASING or this file.
+- **`docs/mockups/level-meters.html`** is a design mockup that pins the accent
+  colour to `Source/LookAndFeel.hpp`. Nothing links it. Link it or drop it.
+- **`Resources/icon.png` is 1.1 MB**, an unoptimised 1024x1024 RGBA PNG used for
+  both `ICON_BIG` and `ICON_SMALL`. It is 2.5x the next largest non-vendored file
+  and would shrink substantially under `oxipng`.
 - **Do not quote an assertion count in a comment.** There were four, already
   disagreeing with each other before today: `CMakeLists.txt` and `BACKLOG.md`
   said 1120, `BACKLOG.md` also said 1131, `tools/build-linux-docker.sh` said

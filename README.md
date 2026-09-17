@@ -32,6 +32,7 @@ voice. Set it up once and forget it is running.
 - [Known limitations](#known-limitations)
 - [Building from source](#building-from-source)
 - [Tests](#tests)
+- [Project layout](#project-layout)
 - [Licence](#licence)
 
 ---
@@ -44,8 +45,10 @@ voice. Set it up once and forget it is running.
   transport, and a window you have to keep alive. This is a tray icon.
 - **Parallel processing without a mixer.** Up to four lanes, summed at the output,
   with automatic delay compensation so they stay sample-aligned.
-- **It stays out of the way.** No timers, no animation, no polling, no update
-  check, and no network access of any kind. Idle cost is nothing.
+- **It stays out of the way.** No update check and no network access of any
+  kind. Nothing polls while it sits in the tray: the only timers are a one-shot
+  that builds the tray menu and a 25 Hz meter refresh that runs while a meter is
+  on screen.
 
 ### What it is not
 
@@ -179,12 +182,13 @@ latency must produce the same latency when bypassed, so bypassing one does not
 shift its lane in time.
 
 **Preferences shows what it costs.** Under Device Settings, the `Latency` row
-gives the chain's declared latency, the device's own input and output latency,
-and the sum — the figure you actually experience. It updates when a plugin
-re-declares its latency, so switching a plugin's latency mode shows the cost at
-the moment you change it. Note that `Buffer Size` above it is the *device* block
-size and not the answer: a 10 ms buffer sitting under a 94 ms plugin chain is a
-number that misleads if it is the only one on screen.
+reads `X ms plugins + Y ms device = Z ms`. The device figure is its input and
+output latency added together, and the total is the one you actually experience.
+It updates when a plugin re-declares its latency, so switching a plugin's
+latency mode shows the cost at the moment you change it. Note that `Buffer Size`
+above it is the *device* block size and not the answer: a 10 ms buffer sitting
+under a 94 ms plugin chain is a number that misleads if it is the only one on
+screen.
 
 It is a readout, not a setting. Plugin latency is inherent to the plugins, and on
 a live monitoring path there is nothing for the host to compensate — the only
@@ -228,6 +232,10 @@ That last column is the useful one. It answers "which plugin is doing that?"
 directly — a compressor adding 7 dB of make-up gain shows up as `+7.0 dB` on its
 own row, which is otherwise a question that takes an offline render and a script
 to answer.
+
+Rows that do not fit the window are counted in the view's header rather than
+drawn, because a meter you cannot see reads exactly like one showing silence.
+Make the window taller to see them.
 
 ### What it costs while you are not looking
 
@@ -300,6 +308,8 @@ producing bit-identical output.
 | `--chain "A,B"` | Renders through these plugins instead of the saved chain |
 | `--fast` | Skips real-time pacing |
 
+`--param` and `--chain` are both repeatable, and the repeats append in order.
+
 `--chain` looks names up in the scanned plugin list rather than the saved chain,
 so a candidate can be measured against your current setup without being added to
 it first — comparing two plugins should not require reconfiguring the thing you
@@ -334,9 +344,11 @@ can tell you and the thing a scan used to throw away.
 not include `%COMMONPROGRAMFILES%\VST2`, which is where the ReaPlugs installer
 puts ReaEQ, so that whole folder is invisible to a bare `--scan`.
 
-A render writes nothing back: not settings, not plugin state, not node ids. It is
-safe to run against a live configuration, and it opens no audio devices, so it
-does not disturb a running instance.
+`--scan` is the only command line here that writes to your settings file, and
+the scanned list is all it writes. A render writes nothing back: not settings,
+not plugin state, not node ids. It is safe to run against a live configuration.
+Neither opens an audio device or shows a tray icon, so neither disturbs a
+running instance.
 
 ---
 
@@ -369,8 +381,9 @@ migration leaves your presets where they were rather than losing them.
 **Worth backing up.** `Light Host.state/` holds anything you have trained or
 tuned inside a plugin, and some of that is not quickly reproducible.
 
-> The tray menu has **Delete Plugin States** one item below **Quit**, with no
-> confirmation. It wipes every plugin's saved settings.
+> The tray menu has **Delete Plugin States**, above **Quit** and separated from
+> it. It erases the saved settings of every plugin in the chain, so it names
+> them and asks first.
 
 ---
 
@@ -420,7 +433,7 @@ device change (driver, device names, active-versus-total channels, sample rate,
 buffer size), plugin loads and failures, graph rewiring, Preferences activity,
 Apply operations, and every exception caught around plugin state, plugin-list
 mutation and device switching. Each run starts with a
-`==== Light Host vX.Y.Z starting at <time> ====` banner.
+`==== Light Host X.Y.Z starting at <time> ====` banner.
 
 If the host disappears without a message, the log is the first place to look.
 
@@ -523,6 +536,12 @@ arrives from CI, after the push. macOS has no local equivalent.
 `default` · `release` · `ninja-debug` · `ninja-release` · `ninja-relwithdebinfo` ·
 `clang-debug` · `clang-release` · `mingw-release`
 
+`clang-release` builds on Windows, which it did not before 5.3.0: the MSVC-only
+flags were guarded on `WIN32` rather than on `MSVC`, and clang++ reads `/utf-8`
+as a missing input file, so it died on the first translation unit. It needs LLVM
+on `PATH`, and it is the cheapest way to catch an MSVC-only construct before CI
+finds it.
+
 The built application lands in
 `build/<preset>/LightHost_artefacts/<config>/Light Host[.exe]`.
 
@@ -582,14 +601,28 @@ What they cover:
   that the lane, probe and IO bands cannot overlap; and that an out-of-range lane
   or probe index is clamped rather than wrapped into another band.
 - **Audio device substitution**: that an opened device which is not the one
-  requested is reported and names both, and — mostly — that it stays quiet when
-  it should, including a capitalisation-only rename and an input-only setup.
+  requested is reported and names both; that the recorded request wins over the
+  stored `DEVICESETUP` and a missing record falls back to it; and that it stays
+  quiet when it should, including a capitalisation-only rename, an input-only
+  setup, and a first run that has neither source to compare.
 - **Confirmation button order**: both platform rules from one build, because they
   disagree about which index a dismissed dialog reports and the destructive
   button must sit on neither.
 - **Plugin editor windows**: that an editor constructor which throws yields no
   window instead of taking the process down, and (in `unit-gui`) that asking
   twice for a plugin with no native editor reuses one window.
+- **The command-line parsers**: each answer the offline renderer takes off a
+  command line, including that a path the line does not carry is left alone
+  rather than cleared, and that nothing on it can switch pacing off by accident.
+- **Scan path precedence**: a format's own defaults first, a folder remembered
+  from *Edit Plugins* next, `--scan-path` last, and a folder that is not there
+  skipped rather than searched.
+- **The self-test's own checks**: that every startup and shutdown marker is
+  checked one at a time rather than as a set, and that the assertion a smoke
+  test is allowed to ignore is one named file and not a topic.
+- **Settings keys**: the literal strings, which are an on-disk contract written
+  by every released version, so the test exists to fail if someone improves a
+  name.
 - Plus the sample-rate correction policy and the status sink.
 
 ### Startup smoke test
@@ -624,6 +657,33 @@ ordering code runs cleanly, not that the race is fixed.
 On Linux this needs a display: JUCE does not degrade gracefully without one, so
 CMake registers the smoke tests only when `xvfb-run` is present.
 
+### The two checks CTest cannot run
+
+Neither is registered, because one needs a third-party plugin installed and the
+other needs the network. Both are run by hand before a release.
+
+```bash
+tools/render-regression.sh capture <input.wav>   # once per machine
+tools/render-regression.sh check   <input.wav>
+```
+
+Renders a fixed input through a deterministic ReaEQ chain and compares a sha256
+against a stored baseline. Almost nothing this project changes is supposed to
+alter a sample, and "inaudible" is far easier to get wrong than to verify. The
+baseline and the input stay local: the hash depends on which plugins are
+installed, and the input is a voice recording in a public repository. The render
+is paced, so a 20 second input takes 20 seconds. It needs a scanned plugin list,
+which is what `--scan` is for.
+
+```bash
+tools/ci-status.sh [ref]
+```
+
+Answers whether CI actually passed on a commit. It exists because
+`gh run watch --exit-status` returned 0 for two runs that had failed. Exit 0
+needs the run's `conclusion` to be exactly `success` and every job to agree; no
+run at all is a failure, because no evidence is not success.
+
 ---
 
 ## Project layout
@@ -634,8 +694,10 @@ CMake registers the smoke tests only when `xvfb-run` is present.
 ├── Tests/           Unit tests (juce::UnitTestRunner)
 ├── Resources/       Icons and binary resources
 ├── docs/images/     Screenshots used by this README
+├── tools/           Build, CI and audio regression scripts
 ├── Utilities/       Helper scripts
 ├── lib/             Vendored JUCE 9.0.2 + VST2 SDK
+├── .github/         CI and release workflows
 ├── CMakeLists.txt   Build definition (the only place the version lives)
 ├── CMakePresets.json
 ├── CHANGELOG.md     What changed, and why

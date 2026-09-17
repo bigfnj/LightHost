@@ -73,6 +73,9 @@ AI_UNDERSTANDING*
 .gemini/
 .serena/
 *.agent-notes.md
+# .cursorrules above is the legacy single-file form. Current Cursor writes a
+# .cursor/ directory (rules/*.mdc), which that pattern does not match.
+.cursor/
 
 # Diagnostic captures written by the scripts in tools/. The scripts are worth
 # keeping; the audio they produce is not.
@@ -83,3 +86,24 @@ tools/*.wav
 # go into a public repo, so the input lives outside the tree and the hash is
 # captured per-machine. tools/render-regression.sh writes it.
 tools/render-regression.sha256
+
+# Merge, patch and editor leftovers. Git writes *.orig and *.rej itself on a
+# failed merge or a rejected patch hunk, so these appear without anyone
+# choosing them, and they carry whole copies of conflicting source.
+*.orig
+*.rej
+*.bak
+*~
+
+# Secret and key material. None is used today: RELEASING.md records that no
+# platform is code signed. That is exactly why this is here in advance, because
+# the first time a certificate does arrive is the moment it can be committed by
+# accident, and a key pushed to a public repo is burned the instant it lands.
+*.pem
+*.pfx
+*.p12
+*.key
+*.keystore
+*.jks
+.env
+.env.*

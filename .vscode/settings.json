@@ -17,7 +17,6 @@
   "search.exclude": {
     "**/lib/**": true,
     "**/build/**": true,
-    "**/.vs/**": true,
-    "**/AI_UNDERSTANDING.md": true
+    "**/.vs/**": true
   }
 }
