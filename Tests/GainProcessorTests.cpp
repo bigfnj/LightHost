@@ -73,8 +73,27 @@ public:
 
             const auto rendered = renderConstant (processor, 0.5f, 2);
 
+            // One assertion over the largest departure, not 256 per-sample
+            // ones. The 256 could not fail, and that was measured rather than
+            // argued: with the unity skip in processBlock deleted,
+            // smoothed.applyGain multiplies the buffer by exactly 1.0f and all
+            // 256 samples still come back bit-identical, so no input told the
+            // skipped path and the multiplied path apart here.
+            //
+            // What survives is the arithmetic claim -- a unity trim must not
+            // scale the signal -- on the same 1.0e-6f threshold, so this fails
+            // on exactly the inputs the loop failed on: the maximum departure
+            // exceeds the tolerance precisely when some individual sample does.
+            // The skip ITSELF is guarded by "the buffer is skipped on the
+            // decibel rule, not a linear one" at the bottom of this file, which
+            // is the only test that can distinguish the two paths.
+            float largestDeparture = 0.0f;
+
             for (const auto sample : rendered)
-                expectWithinAbsoluteError (sample, 0.5f, 1.0e-6f);
+                largestDeparture = juce::jmax (largestDeparture, std::abs (sample - 0.5f));
+
+            expectWithinAbsoluteError (largestDeparture, 0.0f, 1.0e-6f,
+                                       "a unity trim scaled the signal");
         }
 
         beginTest ("minus six decibels halves the amplitude");
@@ -115,16 +134,30 @@ public:
             // bug in whichever plugin happened to be playing.
             PreparedGain gain (0.0f);
 
-            renderConstant (gain.processor, 1.0f, 1);          // settled at unity
-            gain.processor.setGainDb (kMinDb);                 // hard duck, mid-stream
-            const auto rendered = renderConstant (gain.processor, 1.0f, 1);
+            // BOTH blocks are kept and joined, because the boundary between
+            // them is where the change lands and so is the one neighbouring
+            // pair that can carry a click. This used to discard the first
+            // block's samples and walk only the second, which put that pair
+            // outside the measured range: the largest-step bound below started
+            // at the second sample after the change and never saw the first.
+            // All that bounded the boundary was rendered.front() > 0.5f, which
+            // tolerates a jump of 0.5 where the loop two lines further down
+            // insists on 0.01 -- fifty times looser, at exactly the sample a
+            // step would show up on.
+            auto rendered = renderConstant (gain.processor, 1.0f, 1);   // settles at unity
+            gain.processor.setGainDb (kMinDb);                          // hard duck, mid-stream
+
+            const auto firstAfterChange = rendered.size();
+            const auto secondBlock = renderConstant (gain.processor, 1.0f, 1);
+            rendered.insert (rendered.end(), secondBlock.begin(), secondBlock.end());
 
             // The first sample after the change must not have jumped the whole
             // way. A step would land at the new value immediately.
-            expect (rendered.front() > 0.5f,
+            expect (rendered[firstAfterChange] > 0.5f,
                     "the gain changed as a step rather than a ramp");
 
-            // The largest jump between neighbouring samples bounds the click.
+            // The largest jump between neighbouring samples bounds the click,
+            // and now spans the block boundary.
             float largestStep = 0.0f;
 
             for (size_t i = 1; i < rendered.size(); ++i)
@@ -198,6 +231,30 @@ public:
             expect (isUnity (0.0f));
             expect (! isUnity (0.5f));
             expect (! isUnity (-0.5f));
+
+            // Those three pin nothing. 0.5 dB is five hundred times the real
+            // tolerance, so widening isUnity from 0.001f to 0.4f passes all of
+            // them unchanged -- and a wider tolerance means processBlock skips
+            // the buffer on a trim the user can hear.
+            //
+            // The bottom of the band is already held: "the buffer is skipped on
+            // the decibel rule, not a linear one" below feeds 0.0005 dB and
+            // requires the skip to fire, so the tolerance cannot fall below
+            // that without failing there. What nothing watched was everything
+            // from 0.0005 up to 0.5. These four pin the threshold itself into
+            // (0.0009, 0.0011] on both signs, which makes the 0.001 dB that
+            // processBlock's comment promises to discard a checked number
+            // instead of a claim.
+            expect (isUnity (0.0009f),
+                    "the tolerance was tightened below the 0.001 dB the skip is documented "
+                    "to discard");
+            expect (isUnity (-0.0009f),
+                    "the tolerance is no longer symmetric about unity");
+            expect (! isUnity (0.0011f),
+                    "the tolerance was widened past 0.001 dB, so processBlock now skips the "
+                    "buffer on a trim it is supposed to apply");
+            expect (! isUnity (-0.0011f),
+                    "the tolerance is no longer symmetric about unity");
         }
 
         beginTest ("the buffer is skipped on the decibel rule, not a linear one");

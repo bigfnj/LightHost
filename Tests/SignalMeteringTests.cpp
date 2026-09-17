@@ -387,10 +387,31 @@ public:
 
             probe.processBlock (audio, midi);
 
+            // One assertion over the largest departure, not 256 per-sample
+            // ones. The 256 could not fail. Probe::processBlock is a single
+            // call to Meter::measure, whose parameter is a
+            // const juce::AudioBuffer<float>&, so transparency here is enforced
+            // by the callee's signature: no input exists that would make one of
+            // those 256 fail while the code compiles at all.
+            //
+            // The threshold is unchanged, so this passes and fails on exactly
+            // the same inputs as the loop it replaces -- the maximum of the
+            // per-sample departures exceeds 1.0e-6f precisely when some
+            // individual departure does. What it gains is a failure message
+            // that names how far the signal moved instead of repeating the
+            // first bad sample.
+            float largestDeparture = 0.0f;
+
             for (int ch = 0; ch < 2; ++ch)
                 for (int i = 0; i < kBlockSize; ++i)
-                    expectWithinAbsoluteError (audio.getSample (ch, i),
-                                               before.getSample (ch, i), 1.0e-6f);
+                    largestDeparture = juce::jmax (largestDeparture,
+                                                   std::abs (audio.getSample (ch, i)
+                                                                 - before.getSample (ch, i)));
+
+            expectWithinAbsoluteError (largestDeparture, 0.0f, 1.0e-6f,
+                                       "the probe moved the signal passing through it, so "
+                                       "opening the signal view changes what the user sounds "
+                                       "like");
         }
 
         beginTest ("the probe reports no latency, so it cannot disturb compensation");

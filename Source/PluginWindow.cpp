@@ -142,15 +142,22 @@ PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node::Ptr node,
         return nullptr;
     }
 
-    if (ui != nullptr)
-    {
-        if (auto* const plugin = dynamic_cast<AudioPluginInstance*> (processor))
-            ui->setName (plugin->getName());
+    // No null test on `ui` here, and none is missing. Every path reaching this
+    // point holds an editor: the branch above assigns one unconditionally when
+    // createEditorAndMakeActive declines, and operator new reports failure by
+    // throwing rather than by returning null -- a throw the two catch blocks
+    // turn into an early return. So the `if (ui != nullptr)` that used to wrap
+    // these three lines was always taken, and the `return nullptr` it needed
+    // underneath it was a statement no input could reach.
+    //
+    // Restructured rather than just deleting that return: with the `if` left in
+    // place and the dead return removed, MSVC reports C4715 (not all control
+    // paths return a value) and /WX makes it a build failure. Removing the
+    // guard is what lets the function end on the only result it can produce.
+    if (auto* const plugin = dynamic_cast<AudioPluginInstance*> (processor))
+        ui->setName (plugin->getName());
 
-        return new PluginWindow (ui, std::move (node), type);
-    }
-
-    return nullptr;
+    return new PluginWindow (ui, std::move (node), type);
 }
 
 //==============================================================================
