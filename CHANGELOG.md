@@ -10,8 +10,14 @@ Nothing yet.
 
 ## [5.4.0] — 2026-09-17
 
-A release about work the application was throwing away, and about five defects
-that had no entry anywhere -- found while fixing the ones that did.
+A release about work the application was throwing away: unapplied edits, saved
+presets, and a lane mute that came back at full volume on every launch.
+
+Almost none of it had a backlog entry. Five defects were found while fixing the
+ones that did, and three read-only audits run afterwards -- over the audio
+graph, the persisted state, and the tests and tooling -- found the rest,
+including four checks that could not fail and six documents that said things
+that were not true.
 
 It also carries the README correction that missed the 5.3.0 tag by one commit,
 so the archives finally contain documentation that is true.
