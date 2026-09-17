@@ -448,18 +448,55 @@ endif()
 # LIGHTHOST_WARNINGS_AS_ERRORS is defined above, with what it cost to turn on.
 option(LIGHTHOST_WERROR "Treat compiler warnings as errors in Light Host's own sources" ON)
 
-# Only .cpp files: the headers listed in target_sources are there so they show
-# up in an IDE, and a header is diagnosed as part of whichever .cpp includes it.
-set(LIGHTHOST_OWN_SOURCES
-    Source/HostStartup.cpp
-    Source/IconMenu.cpp
-    Source/PluginWindow.cpp
-    Source/PreferencesWindow.cpp
-)
+# Asked of the targets rather than listed again here or globbed, so a file added
+# to target_sources is covered without anyone remembering this block exists. A
+# glob would also have worked and was tried; it needs CONFIGURE_DEPENDS, which
+# makes every build re-stat the directory, to solve a problem that cannot arise
+# -- a new source has to be added to target_sources anyway, and that already
+# triggers a reconfigure.
+#
+# Only .cpp files. The headers in target_sources are listed so they appear in an
+# IDE; a header is diagnosed as part of whichever .cpp includes it. JUCE's own
+# module sources are filtered out by the lib/ exclusion, which is the entire
+# point of doing this per file.
+set(LIGHTHOST_OWN_SOURCES "")
 
-if(LIGHTHOST_BUILD_TESTS)
-    file(GLOB LIGHTHOST_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Tests/*.cpp")
-    list(APPEND LIGHTHOST_OWN_SOURCES ${LIGHTHOST_TEST_SOURCES})
+foreach(lighthost_target IN ITEMS LightHost LightHostTests)
+    if(NOT TARGET ${lighthost_target})
+        continue()
+    endif()
+
+    get_target_property(lighthost_target_sources ${lighthost_target} SOURCES)
+
+    foreach(lighthost_source IN LISTS lighthost_target_sources)
+        if(NOT lighthost_source MATCHES "\\.cpp$")
+            continue()
+        endif()
+
+        # Absolute, because a target's SOURCES mixes relative and generated
+        # absolute paths, and set_source_files_properties matches on the path as
+        # written. Listing the same file twice is harmless; both targets compile
+        # Source/PluginWindow.cpp.
+        if(NOT IS_ABSOLUTE "${lighthost_source}")
+            set(lighthost_source "${CMAKE_CURRENT_SOURCE_DIR}/${lighthost_source}")
+        endif()
+
+        if(lighthost_source MATCHES "/lib/")
+            continue()
+        endif()
+
+        list(APPEND LIGHTHOST_OWN_SOURCES "${lighthost_source}")
+    endforeach()
+endforeach()
+
+list(REMOVE_DUPLICATES LIGHTHOST_OWN_SOURCES)
+
+# A silently empty list would disable the gate while still printing nothing,
+# which is the failure mode this whole section exists to avoid.
+if(LIGHTHOST_WERROR AND NOT LIGHTHOST_OWN_SOURCES)
+    message(FATAL_ERROR
+        "LIGHTHOST_WERROR is ON but no source files were found to apply it to. "
+        "The target SOURCES query above has stopped working.")
 endif()
 
 if(LIGHTHOST_WERROR)
