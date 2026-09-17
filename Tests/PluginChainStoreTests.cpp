@@ -1,4 +1,5 @@
 #include "../Source/PluginChainStore.hpp"
+#include "../Source/SettingsKeys.hpp"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_core/juce_core.h>
@@ -441,15 +442,15 @@ public:
             juce::PropertySet settings;
             const auto plugin = describe ("Pro-Q");
 
-            settings.setValue ("pluginList", "<KNOWNPLUGINS/>");
-            settings.setValue ("pluginListActive", "<KNOWNPLUGINS/>");
+            settings.setValue (lighthost::keys::pluginList, "<KNOWNPLUGINS/>");
+            settings.setValue (lighthost::keys::pluginListActive, "<KNOWNPLUGINS/>");
             settings.setValue (legacyKey ("lane", plugin), 1);
 
             Store store (settings);
             store.migrateIfNeeded ({ plugin });
 
-            expect (settings.containsKey ("pluginList"));
-            expect (settings.containsKey ("pluginListActive"));
+            expect (settings.containsKey (lighthost::keys::pluginList));
+            expect (settings.containsKey (lighthost::keys::pluginListActive));
         }
     }
 };

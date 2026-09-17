@@ -7,6 +7,7 @@
 #include "Lanes.hpp"
 #include "NodeIds.hpp"
 #include "PluginStateVault.hpp"
+#include "SettingsKeys.hpp"
 #include "StatusSink.hpp"
 
 #include <juce_audio_utils/juce_audio_utils.h>

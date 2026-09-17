@@ -4,6 +4,7 @@
 #include "InstanceName.hpp"
 #include "LookAndFeel.hpp"
 #include "OfflineRender.hpp"
+#include "PluginScan.hpp"
 #include "SelfTest.hpp"
 
 #if ! (JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
@@ -19,6 +20,7 @@ public:
     {
         selfTest    = lighthost::selftest::isRequested (getCommandLineParameterArray());
         renderMode  = lighthost::render::isRequested (getCommandLineParameterArray());
+        scanMode    = lighthost::scan::isRequested (getCommandLineParameterArray());
 
         juce::PropertiesFile::Options options;
         options.applicationName     = getApplicationName();
@@ -73,6 +75,14 @@ public:
         if (renderMode)
         {
             runRender();
+            return;
+        }
+
+        // A scan is not an application run either: it opens no device, shows no
+        // tray icon, and its whole output is the plugin list it writes back.
+        if (scanMode)
+        {
+            runScan();
             return;
         }
 
@@ -176,6 +186,7 @@ private:
     juce::int64 lastLogSize = 0;   ///< so the self-test poll re-reads only on growth
     bool selfTest   = false;
     bool renderMode = false;
+    bool scanMode   = false;
     juce::File logFile;
     juce::StringArray selfTestFailures;
     juce::String instanceNameWarning;
@@ -215,6 +226,66 @@ private:
         loop entirely, leaving the timer, the change listeners and the async
         plugin-load marshalling untested.
     */
+    /** Scans for plugins, writes the list to the settings file, and quits.
+
+        Reports to stdout for the same reason runRender does: this is run from a
+        shell, and a result that only lands in a log file is a result nobody
+        reads.
+    */
+    void runScan()
+    {
+        auto* settings = appProperties->getUserSettings();
+
+        const auto extraPaths = lighthost::scan::parseExtraPaths (getCommandLineParameterArray());
+
+        for (const auto& dir : extraPaths)
+            if (! juce::File (dir).isDirectory())
+                std::printf ("  NOTE             : --scan-path \"%s\" is not a directory, ignoring\n",
+                             dir.toRawUTF8());
+
+        std::printf ("scanning (this loads each plugin, so it takes a while)...\n");
+        std::fflush (stdout);
+
+        const auto result = lighthost::scan::run (
+            *settings, extraPaths,
+            [] (const juce::String& file)
+            {
+                std::printf ("  %s\n", juce::File (file).getFileName().toRawUTF8());
+                std::fflush (stdout);
+            });
+
+        if (result.ok)
+        {
+            std::printf ("SCAN OK\n");
+            std::printf ("  formats          : %s\n",
+                         result.formatsScanned.joinIntoString (", ").toRawUTF8());
+            std::printf ("  plugins listed   : %d\n", result.listed);
+            std::printf ("  newly found      : %d\n", result.added);
+            std::printf ("  settings         : %s\n",
+                         settings->getFile().getFullPathName().toRawUTF8());
+        }
+        else
+        {
+            std::printf ("SCAN FAIL: %s\n", result.message.toRawUTF8());
+        }
+
+        // Reported whether or not the scan succeeded. A file that looked like a
+        // plugin and would not load is the single most useful thing this
+        // command can say, and it is what a scan used to throw away.
+        if (! result.failedFiles.isEmpty())
+        {
+            std::printf ("  failed to load   : %d\n", result.failedFiles.size());
+
+            for (const auto& file : result.failedFiles)
+                std::printf ("    %s\n", juce::File (file).getFileName().toRawUTF8());
+        }
+
+        std::fflush (stdout);
+        juce::Logger::writeToLog ("Scan: " + result.message);
+        setApplicationReturnValue (result.ok ? 0 : 1);
+        quit();
+    }
+
     /** Renders a file through the configured chain and quits.
 
         Reports to stdout as well as the log, because this is run from a shell and

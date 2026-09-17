@@ -471,8 +471,10 @@ namespace lighthost::chain
         */
         void purgeLegacyKeys()
         {
-            // "pluginList" and "pluginListActive" do not carry the dash, so the
-            // prefix cannot match the plugin lists themselves.
+            // keys::pluginList and keys::pluginListActive do not carry the
+            // dash, so the prefix cannot match the plugin lists themselves.
+            // Named rather than spelled out here, because a comment that
+            // restates a literal is one more copy to drift.
             const auto& all = settings.getAllProperties();
             std::vector<juce::String> doomed;
 

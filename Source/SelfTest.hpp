@@ -2,6 +2,7 @@
 
 #include "PluginChainStore.hpp"
 #include "PluginStateVault.hpp"
+#include "SettingsKeys.hpp"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_core/juce_core.h>
@@ -107,7 +108,7 @@ namespace lighthost::selftest
         list.addType (seedDescription());
 
         if (auto xml = list.createXml())
-            settings.setValue ("pluginListActive", xml.get());
+            settings.setValue (keys::pluginListActive, xml.get());
 
         settings.setValue (seedLegacyKey ("order"),  1234);
         settings.setValue (seedLegacyKey ("lane"),   2);

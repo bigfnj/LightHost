@@ -1,0 +1,46 @@
+# The Debian/Ubuntu packages a Linux build of Light Host needs, beyond a
+# compiler and CMake.
+#
+# WHY THIS FILE EXISTS
+#
+# This list lived only inside .github/workflows/ci.yml, which meant the only
+# machine that knew how to build for Linux was a GitHub runner, and the only way
+# to find out that the list was wrong was to push. That is how JUCE 9's new
+# dependency on libxi-dev got in: the workflow had run green for months, the JUCE
+# bump landed, and the break arrived after the commit rather than before it.
+#
+# Now tools/build-linux-docker.sh and the CI workflow read the same file, so a
+# dependency added for one is a dependency added for both, and a missing one
+# fails on the development machine first.
+#
+# Lines beginning with # and blank lines are stripped by both consumers.
+
+# Build tool JUCE's CMake support expects on Linux.
+ninja-build
+
+# A virtual X server. The application is a GUI app with a tray icon and cannot
+# start without a display, so the smoke tests run under xvfb-run.
+xvfb
+
+# Audio backends. JUCE_ALSA and JUCE_JACK.
+libasound2-dev
+libjack-jackd2-dev
+
+# Text rendering.
+libfreetype-dev
+libfontconfig1-dev
+
+# X11 and its extensions. juce_gui_basics needs all of these; libxi-dev is the
+# one JUCE 9 added and JUCE 8 did not.
+libx11-dev
+libxcomposite-dev
+libxcursor-dev
+libxext-dev
+libxinerama-dev
+libxrandr-dev
+libxrender-dev
+libxi-dev
+
+# OpenGL headers, which juce_gui_extra links against.
+libglu1-mesa-dev
+mesa-common-dev

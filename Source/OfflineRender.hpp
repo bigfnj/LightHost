@@ -7,6 +7,7 @@
 #include "PluginChainStore.hpp"
 #include "PluginState.hpp"
 #include "PluginStateVault.hpp"
+#include "SettingsKeys.hpp"
 
 #include <cmath>
 
@@ -153,7 +154,7 @@ struct Result
     if (chainOverride.isEmpty())
     {
         juce::KnownPluginList active;
-        if (auto xml = settings.getXmlValue ("pluginListActive"))
+        if (auto xml = settings.getXmlValue (keys::pluginListActive))
             active.recreateFromXml (*xml);
 
         const auto types = active.getTypes();
@@ -169,7 +170,7 @@ struct Result
         // added to the user's live setup first. Comparing two denoisers should
         // not require reconfiguring the thing you are measuring.
         juce::KnownPluginList known;
-        if (auto xml = settings.getXmlValue ("pluginList"))
+        if (auto xml = settings.getXmlValue (keys::pluginList))
             known.recreateFromXml (*xml);
 
         const auto types = known.getTypes();

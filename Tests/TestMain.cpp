@@ -103,7 +103,7 @@ int main (int argc, char** argv)
                                        "GraphRender", "GraphTopology", "InstanceName",
                                        "Metering", "NodeIds", "PluginChain", "PluginState",
                                        "PluginStateVault", "PluginWindow",
-                                       "SampleRate", "Status" };
+                                       "SampleRate", "SettingsKeys", "Status" };
 
     const juce::StringArray needsDisplay { "PluginWindowGui" };
 

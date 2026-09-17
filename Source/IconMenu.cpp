@@ -339,7 +339,7 @@ IconMenu::IconMenu()
     // could not open a device, which was previously discarded: the app then looked
     // like it was running while passing no audio at all.
     {
-        const auto savedAudioState = getAppProperties().getUserSettings()->getXmlValue ("audioDeviceState");
+        const auto savedAudioState = getAppProperties().getUserSettings()->getXmlValue (lighthost::keys::audioDeviceState);
         const auto error = deviceManager.initialise (2, 2, savedAudioState.get(), true);
 
         if (error.isNotEmpty())
@@ -361,13 +361,13 @@ IconMenu::IconMenu()
     logAudioConfig ("startup");
 
     // Known plugins
-    if (auto savedPluginList = getAppProperties().getUserSettings()->getXmlValue ("pluginList"))
+    if (auto savedPluginList = getAppProperties().getUserSettings()->getXmlValue (lighthost::keys::pluginList))
         knownPluginList.recreateFromXml (*savedPluginList);
 
     knownPluginList.addChangeListener (this);
 
     // Active plugins
-    if (auto savedPluginListActive = getAppProperties().getUserSettings()->getXmlValue ("pluginListActive"))
+    if (auto savedPluginListActive = getAppProperties().getUserSettings()->getXmlValue (lighthost::keys::pluginListActive))
         activePluginList.recreateFromXml (*savedPluginListActive);
 
     // Settings written by 4.0.3 and earlier are keyed on the plugin's name and
@@ -1251,7 +1251,7 @@ IconMenu::ChainSnapshot IconMenu::getTimeSortedList() const
 
 void IconMenu::reportDeviceSubstitutionIfAny (const juce::String& contextLabel)
 {
-    const auto stored = getAppProperties().getUserSettings()->getXmlValue ("audioDeviceState");
+    const auto stored = getAppProperties().getUserSettings()->getXmlValue (lighthost::keys::audioDeviceState);
     const auto setup  = deviceManager.getAudioDeviceSetup();
 
     const auto message = lighthost::device::describeSubstitution (
@@ -1288,7 +1288,7 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
     {
         if (auto xml = knownPluginList.createXml())
         {
-            settings->setValue ("pluginList", xml.get());
+            settings->setValue (lighthost::keys::pluginList, xml.get());
             flushSettings (*settings, "saving the scanned plugin list");
         }
     }
@@ -1296,7 +1296,7 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
     {
         if (auto xml = activePluginList.createXml())
         {
-            settings->setValue ("pluginListActive", xml.get());
+            settings->setValue (lighthost::keys::pluginListActive, xml.get());
             flushSettings (*settings, "saving the plugin chain");
         }
     }
@@ -1327,7 +1327,7 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
 
         if (auto xml = deviceManager.createStateXml())
         {
-            settings->setValue ("audioDeviceState", xml.get());
+            settings->setValue (lighthost::keys::audioDeviceState, xml.get());
             flushSettings (*settings, "saving the audio device settings");
         }
     }
@@ -1924,7 +1924,7 @@ void IconMenu::showPreferences()
                 if (audioState != nullptr)
                 {
                     auto* settings = getAppProperties().getUserSettings();
-                    settings->setValue ("audioDeviceState", audioState.get());
+                    settings->setValue (lighthost::keys::audioDeviceState, audioState.get());
                     im->flushSettings (*settings, "closing Preferences");
                 }
 

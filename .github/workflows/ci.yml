@@ -49,25 +49,15 @@ jobs:
         uses: lukka/get-cmake@v4.4.2
 
       - name: Install JUCE Linux dependencies
+        # Read from tools/linux-build-deps.txt rather than listed here, so that
+        # this job and tools/build-linux-docker.sh cannot disagree about what a
+        # Linux build needs. They disagreeing is how libxi-dev went missing: the
+        # list existed only in this file, so the only machine that could find
+        # out it was wrong was a runner, after a push.
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build \
-            xvfb \
-            libasound2-dev \
-            libjack-jackd2-dev \
-            libfreetype-dev \
-            libfontconfig1-dev \
-            libx11-dev \
-            libxcomposite-dev \
-            libxcursor-dev \
-            libxext-dev \
-            libxinerama-dev \
-            libxrandr-dev \
-            libxrender-dev \
-            libxi-dev \
-            libglu1-mesa-dev \
-            mesa-common-dev
+          grep -vE '^[[:space:]]*(#|$)' tools/linux-build-deps.txt \
+            | xargs sudo apt-get install -y --no-install-recommends
 
       - name: Configure (Ninja Release preset)
         # Pin the make program to the stable apt path so the generator can never

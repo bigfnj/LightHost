@@ -90,6 +90,10 @@ target_sources(LightHost PRIVATE
     Source/LookAndFeel.hpp
     Source/Lanes.hpp
     Source/NodeIds.hpp
+    Source/ConfirmPolicy.hpp
+    Source/DevicePolicy.hpp
+    Source/PluginScan.hpp
+    Source/SettingsKeys.hpp
     Source/OfflineRender.hpp
     Source/PluginStateVault.hpp
     Source/DeviceTap.hpp
@@ -222,6 +226,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/PluginStateVaultTests.cpp
         Tests/PluginWindowTests.cpp
         Tests/SampleRatePolicyTests.cpp
+        Tests/SettingsKeysTests.cpp
         Tests/SignalMeteringTests.cpp
         Tests/StatusSinkTests.cpp
         Tests/StubProcessors.hpp

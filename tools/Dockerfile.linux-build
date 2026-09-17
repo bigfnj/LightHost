@@ -1,0 +1,34 @@
+# A Linux build environment for Light Host, matching the CI runner closely
+# enough to be believed.
+#
+# Build context is the repository root, so that the dependency list can be
+# shared with .github/workflows/ci.yml rather than restated here:
+#
+#   docker build -f tools/Dockerfile.linux-build -t lighthost-linux-build .
+#
+# tools/build-linux-docker.sh does that for you, and only rebuilds the image
+# when the dependency list changes.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# The toolchain. CI gets its CMake and Ninja from lukka/get-cmake and its GCC
+# from the runner image; here they come from apt, which is the one deliberate
+# divergence. It does not weaken the gate: what this container exists to catch
+# is GCC refusing code MSVC accepted, and that is the same GCC either way.
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# The JUCE dependencies, from the single list CI also reads. Copied as its own
+# layer so that editing the list is the only thing that invalidates the cache.
+COPY tools/linux-build-deps.txt /tmp/linux-build-deps.txt
+RUN apt-get update -qq \
+ && grep -vE '^[[:space:]]*(#|$)' /tmp/linux-build-deps.txt \
+      | xargs apt-get install -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
