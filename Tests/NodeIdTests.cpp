@@ -144,10 +144,17 @@ public:
             expectEquals (uid (ids::laneGain (9999)),
                           uid (ids::laneGain (lighthost::kMaxLane)));
 
-            for (int lane : { -5, -1, 0, 1, 9999 })
-                expect (ids::laneGain (lane).uid >= ids::laneGain (0).uid
-                            && ids::laneGain (lane).uid <= ids::laneGain (lighthost::kMaxLane).uid,
-                        "a clamped lane escaped the reserved lane band");
+            // -5 is the only input a band-check loop over { -5, -1, 0, 1, 9999 }
+            // used to add, so it is asserted exactly instead. Of the other
+            // four: -1 and 9999 are pinned above, by equality, which is
+            // strictly stronger than "somewhere in the band"; 0 compared
+            // laneGain (0) against itself twice and could not fail whatever the
+            // clamp did; and 1 is pinned exactly by "consecutive ids are
+            // consecutive" below, whose loop starts at lane 1 and requires
+            // laneGain (1) == laneGain (0) + 1. Five assertions bounding four
+            // already-pinned values reads like coverage and is not.
+            expectEquals (uid (ids::laneGain (-5)), uid (ids::laneGain (0)),
+                          "a small negative lane was wrapped rather than clamped");
         }
 
         beginTest ("an out-of-range probe index is clamped, not wrapped");
