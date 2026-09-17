@@ -602,9 +602,9 @@ public:
             // Same check as the unprobed one above, through the same helper,
             // and that is the fix. This used to assert each index was inside
             // [0, kMaxChannels), which appendEdge guarantees by construction
-            // for EVERY possible Layout -- 36 assertions, three per cent of the
-            // suite, that no input could fail. In particular it could not see a
-            // stereo edge into the one-channel probe that sits after plugin 10.
+            // for EVERY possible Layout -- 36 assertions that no input could
+            // fail. In particular it could not see a stereo edge into the
+            // one-channel probe that sits after plugin 10.
             expectEveryChannelExists (withProbes (withLaneGains (
                 layoutOf ({ plugin (10, 0, 2, 1),
                             plugin (11, 0, 1, 2),

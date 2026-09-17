@@ -406,6 +406,27 @@ IconMenu::~IconMenu()
 {
     juce::Logger::writeToLog ("IconMenu: shutting down");
 
+    // Cut the status sink's callback before anything below can report.
+    //
+    // The callback dereferences preferencesWindow, and ~IconMenu is the one path
+    // on which that pointer can be non-null while the window is being destroyed.
+    // The close path is safe and looks like the hazard: preferencesWindow.reset()
+    // assigns null BEFORE deleting, so the callback sees nullptr. ~unique_ptr does
+    // not, and this destructor never resets the member -- so the window is still
+    // reachable through it for the whole of its own teardown.
+    //
+    // Reachable, not theoretical: quit from the tray with Preferences open, a
+    // lane trim moved but not written, and a settings file that cannot be
+    // written. ~PreferencesContentComponent calls commitLaneTrim ->
+    // persistLaneGainDb -> flushSettings, the write fails, status.report fires
+    // this callback, and setStatusMessage calls resized() on a panel that is
+    // half destroyed.
+    //
+    // Clearing it costs the last few shutdown reports their UI, which is the
+    // right trade: they still reach the log, and there is no window left to
+    // read them in.
+    status.onChange = nullptr;
+
     // Detach the audio callback FIRST — deviceManager outlives player and graph
     // in member-destruction order (declared before them, destroyed after them).
     // Without this, deviceManager's real-time thread keeps firing
@@ -1692,22 +1713,10 @@ void IconMenu::handleDeletePlugin (int index)
     // a delete left an orphan lane key for the next plugin to inherit.
     store.stageErase (pluginToDelete);
 
-    // The state file and the in-memory copy go with the settings keys, exactly
-    // as applyPluginChain does it for a departing plugin. This path did only
-    // the stageErase above, which cost two things:
-    //
-    // The .lhs file was orphaned permanently. Nothing enumerates the vault
-    // directory, so no sweep could ever collect it, and a real plugin state
-    // here measured four megabytes.
-    //
-    // Worse, lastWrittenState kept the bytes too, so re-adding the same plugin
-    // later RESTORED the preset the user had deleted -- while deleting the
-    // same plugin from the Preferences list did not. Two ways to remove a
-    // plugin, two different meanings, and the difference only showed up on
-    // the next add.
+    // Read here, used after the list mutation below. The state file and the
+    // in-memory copy this names are the only irreversible things this function
+    // does; see the erases themselves for why they cannot happen yet.
     const auto deletedIdentity = ChainStore::identityOf (pluginToDelete);
-    (void) stateVault().erase (deletedIdentity);
-    lastWrittenState.erase (deletedIdentity);
 
     // Remove from the list first, so nothing destructive happens until it has
     // succeeded.
@@ -1745,6 +1754,31 @@ void IconMenu::handleDeletePlugin (int index)
         refreshPreferencesIfOpen();
         return;
     }
+
+    // The state file and the in-memory copy go with the settings keys, exactly
+    // as applyPluginChain does it for a departing plugin. This path did only
+    // the stageErase above, which cost two things:
+    //
+    // The .lhs file was orphaned permanently. Nothing enumerates the vault
+    // directory, so no sweep could ever collect it, and a real plugin state
+    // here measured four megabytes.
+    //
+    // Worse, lastWrittenState kept the bytes too, so re-adding the same plugin
+    // later RESTORED the preset the user had deleted -- while deleting the
+    // same plugin from the Preferences list did not. Two ways to remove a
+    // plugin, two different meanings, and the difference only showed up on
+    // the next add.
+    //
+    // HERE, after the list mutation, rather than before the try above, which is
+    // where they were. Erasing the state first and then throwing out of
+    // removeType left the catch rolling the settings keys BACK over a state
+    // file that was already gone: the plugin returned to the chain with its
+    // saved preset silently replaced by factory defaults, which is worse than
+    // either outcome the rollback is choosing between. These two are the only
+    // irreversible steps in this function, so they go last, once nothing that
+    // can fail is left.
+    (void) stateVault().erase (deletedIdentity);
+    lastWrittenState.erase (deletedIdentity);
 
     if (nodeIdVal != 0)
     {
@@ -2344,11 +2378,7 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     {
         store.stageErase (plugin.description);
 
-        // The state file goes with the settings keys, or the directory
-        // accumulates orphans for plugins that are no longer in the chain.
         const auto departingIdentity = ChainStore::identityOf (plugin.description);
-        (void) vault.erase (departingIdentity);
-        lastWrittenState.erase (departingIdentity);
 
         try
         {
@@ -2364,6 +2394,19 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
             abandon ("activePluginList.removeType", plugin.description.name);
             return;
         }
+
+        // AFTER the guarded mutation, not before it. abandon() rolls the
+        // settings back, and deleting the state file is the one step in this
+        // loop it cannot undo -- so doing it first meant a throw left the
+        // preset gone with the settings restored, describing a plugin whose
+        // saved state no longer exists. handleDeletePlugin had the identical
+        // inversion and was fixed in the same pass.
+        //
+        // The state file still goes with the settings keys once the mutation
+        // has succeeded, or the directory accumulates orphans for plugins that
+        // are no longer in the chain.
+        (void) vault.erase (departingIdentity);
+        lastWrittenState.erase (departingIdentity);
     }
 
     // Set when addType reported a replacement rather than an add. See the
@@ -2426,10 +2469,6 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
             // can only happen with a non-empty `arriving`, which ends this
             // function in loadActivePlugins, and that clears the graph.
             store.stageErase (plugin);
-
-            const auto droppedIdentity = ChainStore::identityOf (plugin);
-            (void) vault.erase (droppedIdentity);
-            lastWrittenState.erase (droppedIdentity);
         }
 
         // addType returns early on a replacement and does NOT broadcast
@@ -2437,7 +2476,41 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         // so an apply whose only mutation was a replacement would change the
         // list in memory and never write it. Asking for the broadcast keeps the
         // persist on its usual async path rather than adding a second writer.
-        activePluginList.sendChangeMessage();
+        //
+        // Guarded like the removeType and addType calls above, and for the same
+        // reason: this is the third mutation site in this function and it was
+        // the one left bare. A throw here leaves the list changed in memory with
+        // a full set of staged settings uncommitted, which is precisely the
+        // half-applied state the transaction exists to prevent. Nothing here is
+        // expected to throw -- sendChangeMessage is an AsyncUpdater trigger and
+        // allocates -- so this is what a std::bad_alloc would do, stated in the
+        // same shape as its two neighbours rather than left as the odd one out.
+        try
+        {
+            activePluginList.sendChangeMessage();
+        }
+        catch (const std::exception& e)
+        {
+            abandon ("activePluginList.sendChangeMessage", juce::String (e.what()));
+            return;
+        }
+        catch (...)
+        {
+            abandon ("activePluginList.sendChangeMessage", "unknown exception");
+            return;
+        }
+
+        // AFTER the broadcast above, for the same reason the departing loop
+        // erases after its removeType: abandon() rolls the settings back and
+        // cannot put a deleted state file back. Erasing first meant a throw
+        // from the broadcast left every dropped plugin's preset gone while the
+        // settings that referenced it were restored.
+        for (const auto& plugin : dropped)
+        {
+            const auto droppedIdentity = ChainStore::identityOf (plugin);
+            (void) vault.erase (droppedIdentity);
+            lastWrittenState.erase (droppedIdentity);
+        }
 
         if (! dropped.empty())
         {

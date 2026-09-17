@@ -27,6 +27,7 @@ else, the link is the documentation and this table is only the signpost.
 | Script | What it does |
 |---|---|
 | [`render-regression.sh`](render-regression.sh) | Renders a fixed input through a deterministic chain and compares a sha256 against a stored baseline. See [README](../README.md#the-two-checks-ctest-cannot-run) |
+| `render-regression.sha256` | The baseline hash `render-regression.sh` writes and reads. Gitignored and per-machine, so it is absent from a fresh clone until you run `capture` -- the digest depends on which plugin build is installed, so one committed value would be wrong for everybody else |
 
 ## Measuring a real microphone chain
 

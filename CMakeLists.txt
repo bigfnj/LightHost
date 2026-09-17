@@ -101,6 +101,7 @@ target_sources(LightHost PRIVATE
     Source/SignalMetering.hpp
     Source/SelfTest.hpp
     Source/UiMetrics.hpp
+    Source/AudioChainList.hpp
     Source/IconMenu.cpp
     Source/PluginWindow.cpp
     Source/PreferencesWindow.cpp
@@ -285,8 +286,11 @@ if(LIGHTHOST_BUILD_TESTS)
     )
 
     target_sources(LightHostTests PRIVATE
+        Source/AudioChainList.hpp
         Source/PluginWindow.cpp
         Tests/TestMain.cpp
+        Tests/AudioChainListTests.cpp
+        Tests/ChainReconcileTests.cpp
         Tests/ConfirmPolicyTests.cpp
         Tests/DevicePolicyTests.cpp
         Tests/GainProcessorTests.cpp

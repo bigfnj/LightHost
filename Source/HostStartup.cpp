@@ -23,6 +23,12 @@ public:
         renderMode  = lighthost::render::isRequested (getCommandLineParameterArray());
         scanMode    = lighthost::scan::isRequested (getCommandLineParameterArray());
 
+        // Single dash, matching -self-test and -multi-instance rather than the
+        // double-dash render and scan flags. The split is not cosmetic: the
+        // double-dash ones are MODES that take over the process and exit, and
+        // this is an ordinary run.
+        openPreferencesOnStart = getCommandLineParameterArray().contains ("-preferences");
+
         juce::PropertiesFile::Options options;
         options.applicationName     = getApplicationName();
         options.filenameSuffix      = "settings";
@@ -100,6 +106,24 @@ public:
         #if JUCE_MAC
             juce::Process::setDockIconVisible (false);
         #endif
+
+        // Open Preferences on startup, for the two cases where the tray icon is
+        // not a usable way in.
+        //
+        // The first is a user whose icon Windows has hidden in the notification
+        // overflow: the application has no other surface, so without this there
+        // is nothing to click. The second is capturing the screenshots in
+        // README.md, which have to be retaken every time the panel changes and
+        // were three releases out of date because doing it by hand needs a
+        // person, a display and a chain already set up.
+        //
+        // Deliberately not a mode like --render or --scan: this is an ordinary
+        // run that happens to start with the window showing, so the tray icon,
+        // the audio device and the chain all behave exactly as usual. That is
+        // the point -- a screenshot taken from a special mode would not be a
+        // screenshot of the application.
+        if (openPreferencesOnStart)
+            iconMenu->showPreferencesWindow();
 
         if (selfTest)
             scheduleSelfTestCheck();
@@ -199,6 +223,7 @@ private:
     bool selfTest   = false;
     bool renderMode = false;
     bool scanMode   = false;
+    bool openPreferencesOnStart = false;
     juce::File logFile;
     juce::StringArray selfTestFailures;
     juce::String instanceNameWarning;

@@ -76,6 +76,17 @@ choices are all restored next launch.
 > **Quit from the tray menu**, not by killing the process. That is what writes
 > your plugin settings to disk.
 
+> **Cannot find the tray icon?** Windows hides icons it decides are inactive,
+> and Light Host has no other window to fall back on. Start it with
+> `-preferences` and it opens the panel itself:
+>
+> ```
+> "Light Host" -preferences
+> ```
+>
+> That is an ordinary run with the window already showing, not a special mode:
+> the tray icon, the audio device and your chain all behave exactly as usual.
+
 ### The first run shows a warning
 
 Release binaries are not code-signed, so Windows SmartScreen will say it stopped
