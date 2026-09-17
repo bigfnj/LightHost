@@ -1,8 +1,7 @@
 # Backlog
 
-Open items after the 2026-09-17 work, which cleared the nineteen that were here
-and added four audit passes of its own. They are written to be picked up cold:
-what is wrong, where, why it matters, and what the fix is.
+Open items after 5.4.0. They are written to be picked up cold: what is wrong,
+where, why it matters, and what the fix is.
 
 ## Where things live, if you are new or returning
 
@@ -26,180 +25,115 @@ Linux locally; the `clang-release` preset covers Clang. macOS is CI-only.
 check, break the thing it guards and confirm it goes red before believing it.
 Five gates in this repo could not fail, and each had been green for months.
 
-Nothing here blocks a release. The highest-severity items are two ways to lose
-an unapplied edit in the Preferences window, both of which have been present
-since the window existed and neither of which loses anything already committed.
+Nothing here blocks a release. What remains is two testability gaps, one
+decision that needs writing down rather than fixing, and a handful of items
+that are a judgement call about assets and scope rather than defects.
 
-Three of the items cleared today were introduced the same day, by the work that
-was meant to fix the thing next to them. That is the argument for auditing a
-change rather than only testing it, and it is why the sections below separate
-what was traced from what was only reasoned about.
+The pattern from the last three passes held again: of the work done for 5.4.0,
+**five of the defects fixed had no backlog entry at all** -- they were found
+while fixing the ones that did. Auditing a change, not only the thing it
+changed, is what keeps finding them.
 
 ---
 
 ## Bugs
 
-### Staged chain edits are discarded without saying so
+### A throw from the chain-list XML write: decide, do not fix
 
-`Source/PreferencesWindow.cpp`, `setChain`, against `IconMenu::refreshPreferencesIfOpen`
+`Source/IconMenu.cpp`, the three `activePluginList` mutation sites and
+`changeListenerCallback`
 
-`setChain` overwrites `chainList.items`, `bypassed` and `lanes` wholesale from
-the committed chain. It is reached from `refreshPreferencesIfOpen`, which fires
-on a plugin re-declaring its latency, on every tray bypass, move and delete, and
-on the Apply-abandon path.
+This has been carried as a defect for three releases and it is not one. The
+entry offered two fixes and demanded one of them; the code has since argued
+back, in `changeListenerCallback`, and the argument is better than the entry.
 
-So: open Preferences, add three plugins with "+ Add Plugin", then open a plugin's
-editor and switch it to linear phase. The latency change triggers an async update,
-the panel is refreshed from the committed chain, and all three staged additions
-vanish with no message and nothing in the log.
+What is true: `removeType` / `addType` / `sendChangeMessage` are each wrapped in
+a guard that rolls the settings back. The listener that writes the XML runs
+later on the message thread, outside all three, and a throw from *that* write is
+documented as unrecoverable and left to terminate -- deliberately, because
+swallowing it would leave a settings file describing a chain that is not
+running, and the next launch would restore the wrong one.
 
-Nothing committed is lost, which is why this is not higher. What is lost is work
-the user has done and not yet applied, and the refresh that destroys it exists
-for a good reason, so it cannot simply be removed.
+The entry's objection was "a guard that covers half a transaction is worse than
+one that covers none of it". That is the part that does not survive: these are
+two different failures, not two halves of one. The mutation throwing is
+recoverable and is recovered from; the persist throwing is not and says so.
+5.4.0 brought the third site into the same shape as the other two, so the
+asymmetry the entry complained about is gone in the other direction.
 
-**Fix:** reconcile rather than overwrite -- keep staged additions and removals
-that do not conflict with the incoming committed chain, and say so in the status
-row when something had to be dropped. Alternatively make the window dirty-aware
-and prompt. Either is a design decision, not a patch.
-
-### The async row menus act on whatever is now at that index
-
-`Source/PreferencesWindow.cpp`, the right-click delete and lane menus
-
-Both capture `row` by value and re-validate only the upper bound when the menu
-closes. If the list is replaced while the menu is open -- the same triggers as
-the item above -- "Delete" removes a different plugin than the one that was
-right-clicked, and the lane menu assigns a lane to a different plugin. The bounds
-checks hold, so there is no crash, only the wrong plugin edited silently.
-
-**Fix:** capture the `PluginDescription` rather than the index, and resolve it
-back to a row when the menu closes. If it is no longer present, do nothing.
-
-### A throw from the chain-list XML write is still uncaught
-
-`Source/IconMenu.cpp`, both `activePluginList` mutation sites
-
-Both wrap `removeType` / `addType` in a `try`/`catch` with a settings rollback,
-and the change listener that writes the XML runs later on the message thread via
-an async update, so a throw from the write itself escapes with no rollback.
-5.2.0 documented the gap; 5.3.0 took the "let it terminate" half of the choice in
-the listener and left the asymmetry.
-
-In practice neither can realistically throw, which is why this has been low for
-two releases running.
-
-**Fix:** move the persist inside the guarded scope, or state in the listener that
-a throw there is unrecoverable and let it terminate -- and then delete the
-rollback, because a guard that covers half a transaction is worse than one that
-covers none of it.
+**Action: move this to [DECISIONS.md](DECISIONS.md) as a decision with its
+reversing trigger** -- which would be a persist that can fail recoverably, i.e.
+if the write ever moves somewhere a retry makes sense. Nothing to do in the
+code.
 
 ---
 
 ## Suspected, not traced
 
-### `status.onChange` can dereference the Preferences window during its destruction
-
-`Source/IconMenu.cpp`, the `status.onChange` wiring
-
-The handler tests `preferencesWindow != nullptr`, and `std::unique_ptr` does not
-null its pointer before running the deleter, so that test passes throughout
-teardown. Reachable path: the content component's destructor commits a dirty lane
-trim, the settings write fails, `status.report` fires `onChange`, and the handler
-calls into a panel that is inside its own destructor body.
-
-It survives today because `preferencesWindow` is IconMenu's last-declared member,
-so the panel's own members are still alive. That is a coincidence of declaration
-order which nothing states and no test pins.
-
-**Fix:** reset the pointer before destroying, or clear `status.onChange` in the
-window's destructor. Needs a failing settings write during window close to
-reproduce.
-
 ### A plugin could drive a self-sustaining rewire loop
 
 `Source/IconMenu.cpp`, `reconnectGraph` against `audioProcessorChanged`
 
-A plugin that re-announces its latency in response to a bypass write would drive
-`reconnectGraph` to `setBypassed` to `audioProcessorChanged` to
+A plugin that re-announces its latency in response to something `reconnectGraph`
+does would drive `reconnectGraph` to `audioProcessorChanged` to
 `triggerAsyncUpdate` and round again, one turn per message-loop iteration. The
-`AsyncUpdater` coalesces, so it would rebuild forever rather than blow the stack.
+`AsyncUpdater` coalesces, so it would rebuild forever rather than blow the
+stack, and `handleAsyncUpdate` logs on every turn, so a live loop would at least
+be visible in `LightHost.log` as a repeating line.
 
-5.3.0 guards `setBypassed` on the value actually changing, which closes the
-obvious route. Not reproduced -- it needs a plugin that behaves this way.
+5.3.0 guarded `setBypassed` on the value actually changing, which closes the
+obvious route -- a bypass write can no longer trigger a latency announcement
+that triggers another bypass write. What is not closed is a plugin that
+re-declares on `prepareToPlay`.
 
-### Drag-reorder guards its erase and not its insert
-
-`Source/PreferencesWindow.cpp`, the row drag path
-
-`bypassed.erase` and `lanes.erase` are bounds-checked; the matching `insert` calls
-are not. Every mutation site keeps the three vectors in lockstep today, so it is
-unreachable. The asymmetry is the trap, not a live defect.
-
----
-
-## Dead and test-only code
-
-- **`chain::Store::read` and `Store::stage (const Slot&)`**, and therefore
-  `Slot::state`, have no production caller -- every shipped path uses the
-  per-field readers and stagers. Unlike `Meter::isWatched` and
-  `StatusSink::totalReported` they carry no "for tests" annotation, so they read
-  as live API.
-- **`PluginWindow.cpp`, the trailing `return nullptr`** after the `ui != nullptr`
-  branch is unreachable.
+Not reproduced. It needs a plugin that behaves this way, and none of the sixteen
+installed here does.
 
 ---
 
-## Tests that pass for the wrong reason
+## Testability
 
-These are the ones that do not earn their place; the count is not the point, and
-two of them inflate it badly. Run the binary for the current figure -- see the
-note about quoting assertion counts, further down, which this line used to
-contradict two items above itself.
+Two gaps, both in `PreferencesContentComponent`, and both for the same reason.
 
-- **256 assertions that a probe did not alter the buffer**
-  (`Tests/SignalMeteringTests.cpp`). `Meter::measure` takes a const reference, so
-  the property is enforced by the type system. One max-deviation assertion over
-  the block would say the same thing in one line -- the pattern to copy is
-  `largestDeparture` in `Tests/GainProcessorTests.cpp`, which is where it
-  already exists. There is nothing of that shape in `SignalMeteringTests.cpp`
-  today, so this is a rewrite, not a deletion.
-- **256 assertions on the lane-trim ramp** (`Tests/GainProcessorTests.cpp`) that
-  would NOT fail if the unity skip were deleted, because the settled gain is
-  exactly 1.0 and multiplying by it changes nothing.
-- **`isUnity` is under-tested at its upper boundary** -- 0.0 and ±0.5 against a
-  0.001 tolerance, so widening the tolerance to 0.4 still passes. The LOWER side
-  is pinned, by "the buffer is skipped on the decibel rule, not a linear one" a
-  few tests down: 0.0005 dB must be inside the tolerance, because
-  `decibelsToGain (0.0005f)` is 1.0000576 and a linear re-derivation of the rule
-  would multiply the buffer there. So the gap is one-sided.
-- **The ramp-continuity test cannot see a block boundary.** Not because the loop
-  starts at `i = 1` -- that is correct within one block -- but because the
-  settling block before the gain change has its return value DISCARDED. The last
-  sample of that block is never compared with the first sample of the one that
-  is kept, which is the only place the discontinuity it exists to catch could
-  appear.
-- **A two-element tie-break test is redundant, not inert.** It would FAIL with
-  the tie-break removed, not pass: both standard libraries use a stable
-  insertion sort at that size, so `{1,second},{1,first}` and
-  `{1,first},{1,second}` would come back in opposite orders and the test asserts
-  they agree. The reason to consider retiring it is that the three-element
-  version beside it covers the same property, which is a weaker reason than "it
-  cannot fail" and may not be reason enough.
-- **`NodeIdTests`** asserts bounds that the exact-value assertions a few lines up
-  already pin.
+- **The committed-chain callback** (`committedChainNamesFn`) has no assertions.
+  Its null-callback fallback and the rule that an empty *result* is not a
+  fallback case are both unasserted.
+- **The device-choice recording** (`deviceChoiceIsUserMade`) has none either.
+  The whole point of the 5.3.0 device fix -- that only a combo `onChange` sets
+  the flag, and that it clears only after the record is written -- rests on
+  reading the code.
 
-### And one gap that matters more than any of them
+**Why they are still open when the other two closed.** The parallel-vector
+invariant and the checkbox press/release contract were in
+`AudioChainListComponent`, which 5.4.0 lifted into its own header precisely
+because it was constructible. These two are in `PreferencesContentComponent`,
+which is not: it is defined inside a `.cpp` that the test target does not
+compile, its constructor dereferences `juce::JUCEApplication::getInstance()`
+(null in a console test), it calls `getAppProperties()` which is defined in
+`HostStartup.cpp`, and it takes an `AudioDeviceManager&` while the test target
+deliberately does not link `juce_audio_devices`.
 
-**There is no `Tests/PreferencesWindowTests.cpp`.** The committed-chain callback,
-the device-choice recording, the parallel-vector invariant and the press/release
-checkbox contract have no assertions anywhere. Three of the four confirmed bugs
-fixed in 5.3.0 were in that file, and all three were found by reading rather than
-by a failing test.
+Four blockers, and the cheapest is not "extract it too" -- it is a much larger
+class with real dependencies. The honest options are to extract the two
+*policies* (what counts as a deliberate device choice; how a row is labelled)
+as free functions the way `reconcileStagedChain` was, or to accept that these
+stay read-verified. Recorded so nobody re-proposes extracting the whole class.
 
 ---
 
 ## Hardening
 
+- **`tools/audio-endpoints.ps1` throws instead of reporting.** Found by running
+  it on an RDP session, where a role legitimately has no default endpoint:
+
+      Exception calling "Report": "Element not found. (0x80070490)"
+
+  The guard beside it is written correctly and **cannot fire**.
+  `GetDefaultAudioEndpoint` is declared returning `int` but **without
+  `[PreserveSig]`**, so the CLR's COM marshaller turns a failing HRESULT into an
+  exception before `if (... == 0 && d != null)` ever runs. Same shape as the
+  five gates fixed in 5.3.0: a check that looks right and is unreachable. Fix is
+  the attribute, on that method and on `EnumAudioEndpoints` beside it.
 - **`--scan` combined with `-self-test`** writes the plugin list into the
   throwaway self-test folder. Harmless, and one guard would make it an error.
 - **The signal view has no scrollbar.** 5.3.0 stopped it silently truncating and
@@ -213,10 +147,24 @@ by a failing test.
 
 ## Process
 
-- **The README's front-page screenshot shows v4.0.3.** `docs/images/preferences.png`
-  predates the lane trims, the signal view and the status row, so the first thing
-  a visitor sees is three releases out of date. Regenerating it needs a person at
-  a display, which is why it is here and not fixed.
+- **The README's front-page screenshot shows v4.0.3.**
+  `docs/images/preferences.png` predates the lane trims, the signal view and the
+  status row, so the first thing a visitor sees is three releases out of date.
+
+  5.4.0 removed the hard part: `-preferences` brings the window up from a
+  command line, so no tray hunting and no GUI automation is needed.
+
+      "Light Host" -preferences
+
+  What is still needed is a **console session with real audio hardware**.
+  Attempted over RDP on 2026-09-17 and abandoned twice. Windows exposes only
+  "Remote Audio" and no input to an RDP session, so the device rows would
+  misrepresent the application; and `SetForegroundWindow` fails silently when
+  the calling process lacks foreground rights, so the capture photographed
+  whatever window was painted at those coordinates instead. That second failure
+  is the one to remember: it nearly committed an unrelated application's screen
+  content into a public repository, and the only thing that caught it was
+  looking at the image before using it. **Check any automated capture by eye.**
 - **Do not quote an assertion count in a comment.** There were four, already
   disagreeing with each other before today: `CMakeLists.txt` and `BACKLOG.md`
   said 1120, `BACKLOG.md` also said 1131, `tools/build-linux-docker.sh` said
@@ -278,6 +226,49 @@ Automated where possible, so they are not a list someone has to remember.
   only platform whose first evidence still arrives after the commit. Its Clang is
   close enough to the local one that they rarely disagree, and rarely is not
   never.
+
+---
+
+## How 5.4.0's eleven were cleared
+
+On 2026-09-17, the same day 5.3.0 shipped. Six dispositions again, and the
+count that matters is the last row: **five defects were fixed that no entry
+described**, found while fixing the ones that did.
+
+| How | Count | Where it went |
+|---|---|---|
+| Fixed | 6 | [CHANGELOG.md](CHANGELOG.md), `## [5.4.0]` |
+| Dissolved by a design change | 1 | the drag-reorder guard -- three parallel vectors became one, so the asymmetry is unrepresentable |
+| Was never a defect | 1 | the two-element tie-break test; sort stability makes it fire, so the premise was backwards |
+| Partly closed, remainder restated | 1 | the missing Preferences tests: two of four gaps closed, two moved to Testability above with the reason |
+| Restated as a decision | 1 | the uncaught XML write, above |
+| Still open | 1 | `--scan` with `-self-test` |
+| **Found and fixed with no entry** | **5** | below |
+
+### The five with no entry
+
+Three of them are the same fault in three places: `handleDeletePlugin` and both
+loops in `applyPluginChain` deleted a plugin's **preset file before** a guarded
+mutation that can roll the settings back. A throw left the preset gone with the
+settings restored, pointing at a plugin whose saved state no longer existed.
+
+The fourth: `reconcileStagedChain` shipped keeping staged additions and
+discarding staged deletions. Asymmetric for no reason a user could discover, and
+the deleted row came back at the *end* of the list rather than where it was.
+
+The fifth: `pressAt` computed its own row index instead of using `rowAt`.
+Integer division truncates toward zero, so a press ten pixels above the list
+gave row 0 and the bounds check accepted it -- arming a drag on the first
+plugin. `rowAt`, used by the hover path, guarded `y < 0` correctly, so the two
+hit tests disagreed about the same point.
+
+### One test that had to be written twice
+
+The negative-y test first asserted that the checkbox did not toggle. It passed
+against the deliberately broken build, because the bad point lies *outside* the
+checkbox rectangle and falls through to the drag branch. The observable is the
+reorder, not the toggle. Worth recording: a mutation that does not fire is
+usually the test being wrong, not the bug being absent.
 
 ---
 

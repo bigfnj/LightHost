@@ -8,6 +8,136 @@ Nothing yet.
 
 ---
 
+## [5.4.0] — 2026-09-17
+
+A release about work the application was throwing away, and about five defects
+that had no entry anywhere -- found while fixing the ones that did.
+
+It also carries the README correction that missed the 5.3.0 tag by one commit,
+so the archives finally contain documentation that is true.
+
+### Fixed — the Preferences chain list discarded edits you had not applied yet
+
+The list is staged: nothing reaches the graph until Apply. But the panel is also
+refreshed from the committed chain, and that refresh fires from nine places --
+every tray bypass, move and delete, both ends of an apply, the two rollback
+paths, and a plugin merely re-declaring its latency.
+
+That last one is the trap, because it happens when you switch a plugin to linear
+phase in its own editor. Stage three plugin additions, flip a plugin to linear
+phase, and all three vanished. No message, nothing in the log.
+
+The refresh now folds the two chains together instead of overwriting: your edits
+win for rows the committed chain still knows about, the committed chain wins for
+everything else, and the panel says so only when it had to decide something for
+you. Keeping your work intact is silent, because announcing it would put a
+message on screen every time any of those nine sites fired.
+
+It needs to know what your edits were made *against*, not just what they are --
+otherwise a row missing from the committed chain is ambiguous between "you just
+added this" and "someone deleted it while the window was open", and those want
+opposite answers.
+
+**Additions and deletions behave the same way.** The first version kept
+additions and quietly undid deletions, on the theory that undoing a deletion
+costs nothing because the plugin is still running. It costs two things: the row
+comes back at the *end* of the list rather than where it was, and pressing Apply
+then commits a chain you never asked for.
+
+### Fixed — the row menus could act on the wrong plugin
+
+Right-click Delete and the lane menu both remembered a row *number* and only
+re-checked that it was still in range. If the list was replaced while the menu
+was open -- the same nine triggers -- Delete removed a different plugin than the
+one you right-clicked, and the lane menu moved a different plugin to a different
+lane. No crash, no message. They now remember which plugin you picked and do
+nothing if it has gone.
+
+### Fixed — a click above the list dragged the first plugin
+
+Integer division truncates toward zero, so ten pixels above the list divided out
+to row 0, and the bounds check accepted it. The hover path had guarded this
+correctly all along, so the two hit tests disagreed about the same point.
+Pressing in the gap and releasing lower down reordered a plugin you never
+grabbed.
+
+### Fixed — a failed chain edit could delete a preset it then claimed to restore
+
+Three places deleted a plugin's saved state *before* the operation that can roll
+the settings back. A failure left the preset gone and the settings restored,
+describing a plugin whose state no longer existed. All three now erase only
+after the edit has succeeded.
+
+### Fixed — quitting with Preferences open could touch a half-destroyed window
+
+Reachable by quitting from the tray with the panel open, a lane trim moved, and
+a settings file that cannot be written. The failure report fired into a window
+that was mid-teardown. The window-close path was always safe, for a subtle
+reason: `unique_ptr::reset()` nulls before it deletes. `~unique_ptr()` does not,
+which is why the only route in was the application shutting down.
+
+### Changed — the chain list is its own file, and its rows are one thing
+
+`AudioChainListComponent` moved to `Source/AudioChainList.hpp`. Not tidying: it
+was the one class in that file a test could construct, and everything the
+backlog listed as untested lived in it. Its neighbour needs an audio device
+manager, an application instance and the settings file in its constructor, so a
+test cannot build one -- the row behaviour was unreachable purely because of
+where the class was parked.
+
+Its three parallel vectors -- plugin, bypass, lane -- became one vector of rows.
+A helper existed to keep the three the same length, and four of the eight places
+that changed them did not call it, each maintaining the invariant by hand. One
+vector makes the mismatch impossible to express rather than something to
+remember.
+
+### Added — `-preferences`
+
+Opens the Preferences window at startup. For anyone whose tray icon Windows has
+hidden in the overflow, since the application has no other way in; and for
+taking the README screenshots, which need retaking whenever the panel changes.
+
+### Changed — 510 assertions that could not fail are gone
+
+Two loops of 256 assertions each checked properties no input could break: one
+was enforced by a `const` reference in the callee, and the other still passed
+with the code it guarded deleted. Both are now single max-deviation assertions
+that fail on a single altered sample.
+
+Four more were tightened rather than removed -- the `isUnity` boundary, the ramp
+continuity test, a bounds loop that duplicated exact assertions above it, and a
+tie-break test that turned out to be **redundant rather than vacuous**: the
+claim that it would pass with the tie-break removed was wrong, because sort
+stability is what makes it fire.
+
+The headline number went down and the coverage went up. 99 new assertions cover
+the chain list and the reconcile, every one mutation-tested.
+
+### Fixed — a crashing plugin no longer loses a whole scan
+
+`--scan` wrote the plugin list once, after every format. A plugin that hard-
+crashes the scan -- which is why the dead man's pedal exists -- therefore lost
+everything found in that run, so N crashing plugins cost N+1 full rescans. It
+now writes after each format. A failed write aborts the rest, because the cause
+is the settings file rather than the format, and carrying on would spend minutes
+loading third-party code for a result that cannot be kept.
+
+### Fixed — "the highest rate the device offers" was "the last one listed"
+
+`getAvailableSampleRates` returns a set, and a set has no order. The test beside
+it could never have caught this: its rate list was ascending, so both
+implementations agreed.
+
+### Fixed — documentation and assets
+
+`tools/README.md` is new: fourteen scripts, none of which was referenced by any
+document, and one of which had no header comment at all. `docs/mockups/` is
+linked from the README, with all four of its source-pinned colours annotated
+rather than one. `Resources/icon.png` lost 8.2% losslessly, verified
+pixel-identical.
+
+---
+
 ## [5.3.0] — 2026-09-17
 
 **5.2.0 was written up and never tagged**, so this release carries both. The

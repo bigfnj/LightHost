@@ -528,3 +528,59 @@ tell them apart.
 Constraint 4 does not go away in either case. Any implementation has to handle
 clock drift, and an implementation that does not is worse than no implementation
 at all.
+
+---
+
+## Rolling back a chain-list mutation, but not the XML write — settled 2026-09-17
+
+### What was asked
+
+`BACKLOG.md` carried this as a defect for three releases. Its wording demanded a
+choice: either move the settings persist inside the try/catch that guards the
+`activePluginList` mutation, or state in the change listener that a throw there
+is unrecoverable **and then delete the rollback** -- on the grounds that "a
+guard that covers half a transaction is worse than one that covers none of it".
+
+### Why the rollback stays
+
+**They are two different failures, not two halves of one.** The entry's premise
+is the part that does not survive being looked at.
+
+`removeType`, `addType` and `sendChangeMessage` can each throw. That is
+recoverable: the settings have only been *staged*, nothing is on disk, and
+`store.rollback()` puts the staged edit back exactly as it was. The guard
+covers that failure completely.
+
+The XML write happens later, on the message thread, in
+`changeListenerCallback`, because `sendChangeMessage` is an async update. A
+throw *there* is not recoverable and is deliberately left to terminate the
+process. Catching it without a rollback would be worse: the in-memory list has
+already changed, so swallowing the failure leaves a settings file describing a
+chain that is not the one running, and the next launch restores that wrong
+chain with nothing to say so. A crash leaves the previous settings file intact
+and correct.
+
+Deleting the rollback to satisfy the entry would therefore remove a working
+guard over a recoverable failure, in order to be consistent with a failure that
+is deliberately fatal.
+
+### Why the persist was not moved either
+
+`applyPluginChain` mutates the list once per arriving and departing plugin, so
+an inline write turns one save per apply into one per plugin -- and the listener
+would still run afterwards and write again. That changes *when* settings reach
+disk, to close a gap in a comment. Wrong trade.
+
+### What 5.4.0 did instead
+
+Brought the third mutation site into the same shape as the other two. The
+`sendChangeMessage()` in the `anyAddReplaced` reconciliation was the one left
+bare; it now rolls back like its neighbours. So the asymmetry the entry
+complained about is gone, in the opposite direction to the one it asked for.
+
+### What would change the answer
+
+A persist that can fail *recoverably* -- if the write ever moves somewhere a
+retry makes sense, or if JUCE gains a way to know the write failed without
+having already mutated the in-memory list. Then guarding it would buy
+something, and the shapes would want to match again.
