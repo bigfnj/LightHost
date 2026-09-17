@@ -6,9 +6,9 @@ GitHub Release carrying four assets: the three platform archives and a
 `SHA256SUMS` file covering them. Each platform runs `ctest` before it packages
 anything, so a failing test stops the release rather than shipping into it.
 
-It has run end to end three times: 5.0.0 on 2026-08-27, 5.0.2 on 2026-09-08 and
-5.1.0 on 2026-09-16. It has also failed once, and how it failed is the first
-section below.
+It has run end to end four times: 5.0.0 on 2026-08-27, 5.0.2 on 2026-09-08,
+5.1.0 on 2026-09-16 and 5.3.0 on 2026-09-17. It has also failed once, and how it
+failed is the first section below.
 
 Final tags are pushed directly. There is no release-candidate step, because a
 candidate would not change what is verified: every check that matters here is

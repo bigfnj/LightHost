@@ -100,6 +100,7 @@ target_sources(LightHost PRIVATE
     Source/DeviceTap.hpp
     Source/SignalMetering.hpp
     Source/SelfTest.hpp
+    Source/StartupFlags.hpp
     Source/UiMetrics.hpp
     Source/AudioChainList.hpp
     Source/IconMenu.cpp
@@ -307,6 +308,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/SampleRatePolicyTests.cpp
         Tests/SelfTestChecksTests.cpp
         Tests/SettingsKeysTests.cpp
+        Tests/StartupFlagsTests.cpp
         Tests/SignalMeteringTests.cpp
         Tests/StatusSinkTests.cpp
         Tests/StubProcessors.hpp
@@ -372,10 +374,28 @@ if(LIGHTHOST_BUILD_TESTS)
     set(LIGHTHOST_SMOKE_LAUNCHER "")
     set(LIGHTHOST_SMOKE_AVAILABLE TRUE)
 
+    # A degraded run has to SAY it is degraded, and on CI it has to fail instead.
+    #
+    # Without this, losing xvfb-run on Linux configured green, registered none of
+    # the three smoke tests, and ctest then reported "100% tests passed" having
+    # run one test instead of four. ci.yml already names that exact failure and
+    # guarded only one of its causes, the empty package list; any other reason
+    # xvfb-run is not on CMake's path left the hole open and silent. A WARNING
+    # nobody reads in 300 lines of configure output is not a control.
+    option(LIGHTHOST_REQUIRE_SMOKE_TESTS
+           "Fail configure if the smoke tests cannot be registered. Set ON in CI." OFF)
+
     if(UNIX AND NOT APPLE)
         find_program(XVFB_RUN xvfb-run)
         if(XVFB_RUN)
             set(LIGHTHOST_SMOKE_LAUNCHER ${XVFB_RUN} -a "--server-args=-screen 0 1280x1024x24")
+        elseif(LIGHTHOST_REQUIRE_SMOKE_TESTS)
+            message(FATAL_ERROR
+                "xvfb-run not found and LIGHTHOST_REQUIRE_SMOKE_TESTS is ON.\n"
+                "  The three smoke tests would not be registered, and ctest would "
+                "report success having run the unit tests alone.\n"
+                "  Install xvfb, or configure without -DLIGHTHOST_REQUIRE_SMOKE_TESTS=ON "
+                "if you are deliberately building a reduced local set.")
         else()
             set(LIGHTHOST_SMOKE_AVAILABLE FALSE)
             message(WARNING

@@ -11,8 +11,13 @@ import wave
 
 import numpy as np
 
+# These define the phases; nothing here detects them. Keep them in step with
+# quiet_end and speak_from in voice-headroom.sh, which is where the operator is
+# told what to do -- until 5.4.0 that script said only "quiet first, then
+# speech" and named no time at all, so a take that began speaking early gave
+# plausible figures and no error.
 QUIET_END = 6.0     # seconds; the performer was asked to stay silent until here
-SPEAK_FROM = 6.5    # a little margin, so the first word is not clipped into the quiet half
+SPEAK_FROM = 6.5    # margin, so the first word is not counted into the quiet half
 
 
 def load(name):

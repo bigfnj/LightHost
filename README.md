@@ -611,6 +611,14 @@ What they cover:
   telling apart two plugins inside one shell file, staged writes invisible until
   commit and undone by rollback, an erase leaving no field behind, ordering ties
   broken deterministically, and the one-shot migration from the old key format.
+- **Staged-chain reconcile**: what becomes of an edit you have not applied when
+  the committed chain changes underneath it. Nothing staged and the committed
+  chain is taken verbatim; with an edit pending, a staged addition survives, a
+  staged deletion is not resurrected, a plugin added or removed elsewhere is
+  honoured, and staged bypass, lane and order win. Duplicate identities are
+  matched positionally rather than all onto the first, a deletion and an arrival
+  are told apart at the tail, and the "chain changed elsewhere" message is gated
+  on the list having moved by itself, not on an edit merely being pending.
 - **Plugin state**: a good blob round-trips, an empty one reports "nothing saved"
   rather than failure, a plugin that throws out of `setStateInformation` reports
   failure without letting the exception escape, and the resulting rule — never
@@ -638,6 +646,15 @@ What they cover:
 - **Plugin editor windows**: that an editor constructor which throws yields no
   window instead of taking the process down, and (in `unit-gui`) that asking
   twice for a plugin with no native editor reuses one window.
+- **The chain list**: that bypass and lane travel with their plugin through a
+  reorder, a delete and an add, the invariant one row vector replaced three
+  parallel ones to get; that an identity already staged is refused and fires no
+  change; that both asynchronous row menus resolve by identity the row they were
+  opened on, so a chain changing while a menu is open cannot redirect a delete
+  or a lane onto another plugin; the drag-insertion arithmetic at both ends and
+  past them; and the press contract — armed on press, fired on release,
+  cancelled when dragged off — including the gap above the first row that used
+  to arm a drag on row 0. Headless, so it is in `unit`, not `unit-gui`.
 - **The command-line parsers**: each answer the offline renderer takes off a
   command line, including that a path the line does not carry is left alone
   rather than cleared, and that nothing on it can switch pacing off by accident.

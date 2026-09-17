@@ -38,7 +38,81 @@ changed, is what keeps finding them.
 
 ## Bugs
 
-### A throw from the chain-list XML write: decide, do not fix
+### A `.lhs` truncated mid-stream is handed to the plugin as a partial preset
+
+`Source/PluginStateVault.hpp`, `read`
+
+`gzip.readIntoMemoryBlock (result)` discards its return, and
+`MemoryOutputStream::writeFromInputStream` appends whatever the decompressor
+produced before the source ran out. So a file cut mid-stream decompresses to a
+partial blob, `restorePluginState` passes it to `setStateInformation`, and the
+plugin comes up configured from half a preset rather than reset to factory
+defaults. The doc on `read` asserted the opposite until 5.4.0; it now says this.
+
+**Why it is not fixed here.** Detecting it needs a length or a checksum in the
+header, which is a format change with a migration for every `.lhs` already on
+disk. The gzip trailer cannot stand in: `GZIPDecompressorInputStream::
+isExhausted()` folds error, clean end and EOF into one bool, and the helper's
+own `finished` flag is private, so there is no way to ask "did this stream end
+properly" through the public API.
+
+**What 5.4.0 did instead** was fix the producer. `Vault::write` now flushes and
+checks `FileOutputStream::getStatus()` before the rename, so Light Host stops
+*making* truncated files -- the gzip tail used to be written by
+`GZIPCompressorHelper::finish`, which discards every `doNextBlock` return, and
+`overwriteTargetFileWithTemporary` then renamed the truncated result over the
+good one and reported success. What remains is external corruption.
+
+Two tests pin the current behaviour honestly, including the partial read. When
+the format gains an integrity field, `a file truncated mid-stream yields a
+PARTIAL state (known gap)` should start failing; change it to expect 0 then.
+
+### `committedBaseline` records a chain the apply may not have committed
+
+`Source/PreferencesWindow.cpp:1793-1794`, reached via
+`Source/IconMenu.cpp` `applyPluginChain`
+
+`onApplyFn` is `void`, so `commitAllSettings` cannot see that `applyPluginChain`
+took its `abandon` path -- which rolls the settings back, rewires, refreshes the
+panel and returns, leaving the committed chain at whatever the list mutations
+reached rather than at `stagedRows`. The refresh during that apply sets
+`committedBaseline` correctly from `incoming`; the unconditional write two lines
+later then overwrites it with the chain that was *not* committed.
+
+`staged == baseline` from then on, so the next refresh takes the `isNoOpEdit`
+fast path and replaces the rows with `incoming` verbatim, with both counters at
+zero so nothing is said. That is the bug commit `7fe1812` exists to fix, reached
+through the one door it did not check.
+
+The fix is either making `onApplyFn` report success, or skipping the write when
+`setChain` already fired during the apply. Not done here because the reachable
+trigger is `std::bad_alloc` and the change is to the apply path's contract,
+which is not a thing to alter in the same release that rewrote the merge.
+
+The member comment saying three write sites are sufficient and "a fourth would
+have to justify itself" is wrong on the first half, and is left in place with
+this entry as its correction.
+
+### The vault erase reorder is correct per iteration, not per transaction
+
+`Source/IconMenu.cpp`, the `departing` loop in `applyPluginChain`
+
+5.4.0 moved each `forgetPluginState` after the guarded mutation it belongs to,
+which is right within one iteration. Across a transaction it is not: with two
+departing plugins, a throw while handling the second still leaves the first
+one's `.lhs` deleted, because `abandon` calls `store.rollback()` and rollback
+only clears `pendingWrites` and `pendingRemovals`. It cannot put a deleted file
+back, and it does not undo `activePluginList.removeType`.
+
+Same trigger as the entry above, `std::bad_alloc`, and the same reason for
+leaving it: a real fix means staging the erases and committing them with the
+settings, which is a transaction redesign.
+
+Related and smaller: `abandon` logs "chain edit abandoned, settings untouched".
+`pluginListActive` is a settings value and the change listener rewrites it, so
+that log line and the comment in `changeListenerCallback` disagree.
+
+### A throw from the chain-list XML write: settled, see DECISIONS.md
 
 `Source/IconMenu.cpp`, the three `activePluginList` mutation sites and
 `changeListenerCallback`
@@ -61,10 +135,14 @@ recoverable and is recovered from; the persist throwing is not and says so.
 5.4.0 brought the third site into the same shape as the other two, so the
 asymmetry the entry complained about is gone in the other direction.
 
-**Action: move this to [DECISIONS.md](DECISIONS.md) as a decision with its
-reversing trigger** -- which would be a persist that can fail recoverably, i.e.
-if the write ever moves somewhere a retry makes sense. Nothing to do in the
-code.
+**Done.** It is now in [DECISIONS.md](DECISIONS.md), with its reversing trigger:
+a persist that can fail recoverably, i.e. if the write ever moves somewhere a
+retry makes sense. Nothing to do in the code.
+
+This entry is kept only as a signpost, and the reasoning above is left because
+it is the argument the decision rests on. It was previously counted as cleared
+in the table at the foot of this file *and* still carried here as an open bug
+with an action attached, which is how an item ends up being worked twice.
 
 ---
 
@@ -88,6 +166,44 @@ re-declares on `prepareToPlay`.
 
 Not reproduced. It needs a plugin that behaves this way, and none of the sixteen
 installed here does.
+
+### Every plugin add publishes a render sequence, and only this site does
+
+`Source/IconMenu.cpp`, the `graph.addNode` in `loadActivePlugins`
+
+That call takes the default `UpdateKind`, which is `sync`. Every other graph
+mutation in the file passes `UpdateKind::none` and says why, including
+`syncProbeNodes`, which complains about exactly this in detail. So a chain of
+eight plugins builds and publishes eight render sequences during load instead of
+one at `onAllPluginsLoaded`.
+
+Audibly harmless -- the new node is unconnected and the wiring is unchanged, so
+every intermediate sequence sounds like the last one. **Not measured**, so this
+is a suspicion about startup time and nothing more. It is listed because it is
+the one mutation site with no comment saying the choice was deliberate.
+
+### `cancelPendingUpdate()` runs before the thing most likely to re-arm it
+
+`Source/IconMenu.cpp`, the destructor
+
+The cancel is commented "a plugin may have reported a latency change moments
+ago". Twenty-odd lines later comes `PluginWindow::closeAllCurrentlyOpenWindows()`,
+which `loadActivePlugins` separately identifies as the main source of late
+latency reports. So the guard runs before its most likely trigger.
+
+No failure could be constructed: `~AsyncUpdater` cancels again, so a re-arm
+between the two is collected anyway. The guard is in the wrong place for the
+reason it gives, which is worth knowing if that destructor is ever reordered.
+
+### The node id counter has no ceiling
+
+`Source/PluginChainStore.hpp`, `allocateNodeId`
+
+Ids are handed out from 1 upward and never reused; `Source/NodeIds.hpp` reserves
+`1'000'000` for the lane trims. Nothing stops the counter reaching it. A million
+plugin adds in one settings file is not a realistic session, so this is an
+unbounded counter rather than a bug, but the reservation is only safe by
+arithmetic nobody checks.
 
 ---
 
@@ -119,6 +235,25 @@ class with real dependencies. The honest options are to extract the two
 as free functions the way `reconcileStagedChain` was, or to accept that these
 stay read-verified. Recorded so nobody re-proposes extracting the whole class.
 
+### Three checks added in 5.4.0 that the suite cannot exercise
+
+Listed rather than left implied, because a check nobody can fire is a check
+nobody should trust without saying so.
+
+- **`Vault::write`'s `out.getStatus()` test.** Correct by construction, and
+  reachable only on a real I/O failure: a full disk, a device pulled mid-write.
+  The suite cannot produce one, because `write` constructs its own
+  `FileOutputStream` and there is no seam to inject a failing stream through.
+  Making it testable means taking the stream as a parameter or behind a factory,
+  which is a bigger change than the fix was.
+- **`deletePluginStates`'s failure count and its honest message.** Needs an
+  `IconMenu`, real settings, and a `.lhs` held open by another process. The
+  message is now derived from a count rather than printed unconditionally, so
+  the *shape* is right, but no test proves the count reaches the user.
+- **The `getCommittedChainNames` cap at `nodeids::maxProbes`.** Needs a 33-plugin
+  chain to distinguish capped from uncapped, and the signal view pairs names to
+  meters one to one, so it also needs the panel.
+
 ---
 
 ## Hardening
@@ -142,6 +277,28 @@ stay read-verified. Recorded so nobody re-proposes extracting the whole class.
   holds two worked examples: `chainViewport`, a plain `juce::Viewport` wrapping
   the chain list, and `PreferencesPanelViewport`, a subclass that resizes its
   viewed component to the visible width. Either pattern transfers.
+- **`tools/render-regression.sh` pipes `grep` into `head -n 1` under
+  `pipefail`.** If `grep` were killed by SIGPIPE after `head` exited, `pipefail`
+  would yield 141 and `set -e` would abort the script -- a tooling failure
+  reported as a regression. Not reachable with the current three-line baseline
+  file, where `grep` finishes before `head` closes. Worth knowing if that file
+  ever grows.
+- **`chooseChainTestOutput` destroys its `FileChooser` from inside that
+  chooser's own callback**, by reassigning `chainTestChooser`. It survives
+  because `FileChooser::finished` copies the callback out and touches nothing
+  after invoking it, and because the callback reads `fc.getResult()` before the
+  reassignment. Correct today, and resting on the internals of a vendored class
+  that a JUCE bump could change.
+- **`AudioChainListComponent::setRows` does not reset `hotRow`/`hotControl`.**
+  It resets the drag and pressed state but not the hover. Cosmetic only: `isHot`
+  is consulted for `i < rows.size()`, so a stale value never matches, and
+  `repaintRow` on an off-list index is a no-op.
+- **`SignalViewPanel::setTaps` clears its watches without stopping the timer**
+  when the panel is not showing. Self-heals on the next tick via the `isShowing`
+  check, so it costs one wasted callback.
+- **`updateChainListHeight` early-returns when the viewport has no width**,
+  leaving the list at its previous height. Only reachable before the first
+  layout.
 
 ---
 
@@ -165,6 +322,12 @@ stay read-verified. Recorded so nobody re-proposes extracting the whole class.
   is the one to remember: it nearly committed an unrelated application's screen
   content into a public repository, and the only thing that caught it was
   looking at the image before using it. **Check any automated capture by eye.**
+- **`RELEASING.md` uses `v5.2.0` as its worked tagging example**, and v5.2.0 is
+  the one version in the v5 line that was deliberately never tagged despite
+  having a CHANGELOG section. So the example version doubles as the
+  counter-example, and a reader checking the doc against `git tag` finds the
+  example missing. Harmless; pick a version that exists next time the file is
+  touched.
 - **Do not quote an assertion count in a comment.** There were four, already
   disagreeing with each other before today: `CMakeLists.txt` and `BACKLOG.md`
   said 1120, `BACKLOG.md` also said 1131, `tools/build-linux-docker.sh` said
@@ -226,6 +389,71 @@ Automated where possible, so they are not a list someone has to remember.
   only platform whose first evidence still arrives after the commit. Its Clang is
   close enough to the local one that they rarely disagree, and rarely is not
   never.
+
+---
+
+## What the 5.4.0 audit round found
+
+Three read-only audits over disjoint areas -- audio and graph, UI and persisted
+state, tests and tooling and docs -- run against `3a2660a` after the release
+commit was green and before the tag. None of what follows had an entry here.
+Everything marked fixed is in `## [5.4.0]` of [CHANGELOG.md](CHANGELOG.md);
+everything marked open is written up above.
+
+Eleven guards were mutation-tested: break the thing each protects, confirm the
+right test fails, restore. All eleven fired. The harness asserts the built
+artefact's timestamp advanced before believing any verdict, because a mutation
+that silently was not rebuilt reads exactly like a guard that works.
+
+| Found | Disposition |
+|---|---|
+| A muted lane trim was bypassed on every startup, so audio passed at unity while plugins loaded | Fixed -- passthrough now runs through lane 0's trim |
+| An empty `getStateInformation` made `Vault::write` DELETE the preset and return true | Fixed -- empty is refused; erasing stays a separate verb |
+| A truncated write returned true, because the gzip tail is flushed from a destructor nobody checks | Fixed -- `flush()` then `getStatus()` before the rename |
+| Three `[[nodiscard]]` erases discarded, and "Deleted saved plugin states" could not fail | Fixed -- one helper, a failure count, an honest message |
+| The add menu could stage one identity twice, and two comments said it could not | Fixed -- `addRow` de-duplicates; the comments now match |
+| `addRow` was the only mutator that skipped `onChange` | Fixed |
+| The peak meter decayed per block, so its rate was right only at 480 samples and 48 kHz | Fixed -- `Meter::setTimebase`, measured at four rate/size pairs |
+| Three collapsed assertions swallowed NaN, because `jmax(a, NaN)` returns `a` | Fixed -- NaN-propagating accumulator |
+| A test written with `juce::UnitTest("name")` never ran and nothing noticed | Fixed -- the guard walks `getAllTests()`, not `getAllCategories()` |
+| Losing `xvfb-run` let Linux CI report success having run one test of four | Fixed -- `LIGHTHOST_REQUIRE_SMOKE_TESTS`, on in both workflows |
+| `ci-status.sh` reported a `gh` failure as a CI verdict, on the one call it left unguarded | Fixed |
+| `update-juce.sh` hardcoded `JUCE 9`, so a major bump rewrote nothing and exited 0 | Fixed -- any major, and rewriting nothing is now fatal |
+| `build-linux-docker.sh` computed a `--user` argument and passed it to neither `docker run` | Fixed |
+| `-preferences` accepted one spelling of two, and was the only flag with no test | Fixed -- `Source/StartupFlags.hpp` |
+| `getCommittedChainNames` was unbounded while `getProbeMeter` caps at 32 | Fixed -- capped, so a 33rd row cannot draw permanent silence |
+| `OfflineRender`'s `graphChannels` could only ever be 2, and read as though it handled mono | Fixed -- render hash unchanged |
+| The realtime "takes no locks" claim rested on unasserted lock-freedom | Fixed -- three `static_assert`s |
+| A truncated `.lhs` still yields a partial preset on read | **Open** -- needs a format change; above |
+| `committedBaseline` can record a chain the apply did not commit | **Open** -- `bad_alloc` only; above |
+| The vault-erase reorder is per iteration, not per transaction | **Open** -- `bad_alloc` only; above |
+| Plugin adds publish a render sequence each; the id counter has no ceiling; the destructor's cancel is placed oddly | **Open, unmeasured** -- above |
+
+### Six documents said things that were not true
+
+Worth separating, because every one of them was written in the same pass that
+built the thing it described, and five of the six shipped in the v5.4.0 release
+body or the archives.
+
+- `CHANGELOG.md` said `tools/README.md` indexed fourteen scripts "none of which
+  was referenced by any document". Twelve were; the true claim is the narrower
+  one the index itself makes. **Corrected.**
+- `CHANGELOG.md` counted four tests as tightened. Three were; the fourth was
+  investigated and deliberately left alone, which this file already recorded
+  correctly. The two documents contradicted each other. **Corrected.**
+- This file counted the XML-write item as cleared in the table below *and*
+  carried it above as an open bug with an action attached. **Corrected.**
+- `RELEASING.md` said the release process had run three times. Four.
+  **Corrected.**
+- `tools/README.md` said four `.ps1` files compile C# at run time. Three do.
+  **Corrected.**
+- `README.md`'s test-coverage list omitted the chain list and the reconcile
+  entirely -- the largest test addition of the release. **Corrected.**
+
+Two code comments also described mutations that do not produce the effect
+claimed, and one justified a defensive branch by a historic bug that could not
+have happened. All three were checked by running the mutation rather than by
+re-reading the code, and rewritten to what was measured.
 
 ---
 

@@ -110,10 +110,16 @@ namespace lighthost::scan
         exits promptly after a scan can otherwise do all the work and persist
         none of it.
 
-        Returns false when the list did not reach disk. `createXml` returning
-        null is counted as a failed write rather than as a write that was
-        skipped: the old code took the `if (xml)` branch and reported `ok`
-        either way, which is a success the run had not earned.
+        Returns false when the list did not reach disk.
+
+        The null check on `createXml` is defensive and unreachable: JUCE's
+        implementation is `auto e = std::make_unique<XmlElement> (...)` with no
+        path that yields null (juce_KnownPluginList.cpp:371-386). It is kept
+        because the alternative is dereferencing a unique_ptr on trust across a
+        vendored-library boundary, and a JUCE bump is exactly the sort of thing
+        that could change it. This comment used to justify it as fixing a bug in
+        "the old code", which is not supportable: there was no input that could
+        take that branch, so the behaviour it describes could not have happened.
     */
     [[nodiscard]] inline bool writeList (juce::PropertiesFile& settings,
                                          const juce::KnownPluginList& list)

@@ -3,6 +3,9 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
 
+#include <cmath>
+#include <limits>
+
 //==============================================================================
 // The level meters, and the probe that carries one.
 //
@@ -32,6 +35,25 @@ namespace
     constexpr int    kBlockSize  = 128;
     constexpr double kSampleRate = 48000.0;
 
+    /** Running max of a departure, accumulated so a NaN cannot hide inside it.
+
+        The per-sample assertion loop this collapsed replacement came from was
+        equivalent for every finite value and strictly weaker for one thing:
+        juce::jmax is `a < b ? b : a`, and `anything < NaN` is false, so jmax
+        returns the accumulator untouched and drops the NaN. The collapsed
+        assertion then passed on a buffer the old loop would have failed, where
+        it evaluated `NaN <= tolerance` and got false. Infinity still propagates
+        through jmax, so the hole was NaN alone -- and a probe that is supposed
+        to be perfectly transparent is precisely where a NaN must not slip past.
+    */
+    [[nodiscard]] float accumulateDeparture (float largest, float departure) noexcept
+    {
+        if (std::isnan (largest) || std::isnan (departure))
+            return std::numeric_limits<float>::quiet_NaN();
+
+        return juce::jmax (largest, departure);
+    }
+
     /** Feeds one block of a constant value to a meter. */
     void feedConstant (Meter& meter, float value, int numChannels = 2, int numSamples = kBlockSize)
     {
@@ -47,11 +69,11 @@ namespace
         a peak meter must catch a single sample, and an RMS meter must not
         report one as a level.
     */
-    void feedSingleSpike (Meter& meter, float value)
+    void feedSingleSpike (Meter& meter, float value, int numSamples = kBlockSize)
     {
-        juce::AudioBuffer<float> audio (2, kBlockSize);
+        juce::AudioBuffer<float> audio (2, numSamples);
         audio.clear();
-        audio.setSample (0, kBlockSize / 2, value);
+        audio.setSample (0, numSamples / 2, value);
         meter.measure (audio);
     }
 }
@@ -225,6 +247,80 @@ public:
                                        "so the UI and the meter no longer fall together");
         }
 
+        beginTest ("the decay tracks the running rate and block size, not the reference pair");
+        {
+            // The axis that used to have one point on it, and that point was
+            // the pair the literal was chosen at -- so the only pair where the
+            // answer could not be wrong. Buffer size is a setting the user
+            // picks in Preferences, and until setTimebase existed the decay was
+            // a fixed per-block factor: right at 480/48k, and at nothing else.
+            //
+            // Asserted as a RATE in dB per second, because that is the quantity
+            // that has to match the UI half -- meterscale::fallDbPerTick falls
+            // at a true kPeakFallDbPerSecond whatever the buffer size, and the
+            // drawn bar takes the slower of the two.
+            const auto ratePerSecondFor = [] (double sampleRate, int blockSize)
+            {
+                Meter meter;
+                meter.setTimebase (sampleRate, blockSize);
+
+                const double blocksPerSecond = sampleRate / blockSize;
+                const double dbPerBlock =
+                    20.0 * std::log10 (static_cast<double> (meter.getDecayPerBlock()));
+
+                return dbPerBlock * blocksPerSecond;
+            };
+
+            const double expected = -static_cast<double> (
+                lighthost::metering::kPeakFallDbPerSecond);
+
+            // Four pairs, spanning both axes independently: the reference, a
+            // small buffer, a large one, and a different sample rate at a
+            // large buffer. Measured at the old fixed literal these gave
+            // -45, -169, -19 and -19 dB/s; they now all have to give -45.
+            expectWithinAbsoluteError (ratePerSecondFor (48000.0, 480), expected, 0.01,
+                                       "the reference pair");
+            expectWithinAbsoluteError (ratePerSecondFor (48000.0, 128), expected, 0.01,
+                                       "a small buffer used to fall roughly four times too fast");
+            expectWithinAbsoluteError (ratePerSecondFor (48000.0, 1024), expected, 0.01,
+                                       "a large buffer used to stick, holding a level that had gone");
+            expectWithinAbsoluteError (ratePerSecondFor (44100.0, 1024), expected, 0.01,
+                                       "a different sample rate at the same buffer size");
+        }
+
+        beginTest ("a nonsense timebase keeps the reference factor rather than breaking");
+        {
+            // A meter that never decays, or decays to NaN, is worse than one
+            // that decays at the wrong rate.
+            Meter meter;
+
+            meter.setTimebase (0.0, 480);
+            expectWithinAbsoluteError (meter.getDecayPerBlock(),
+                                       lighthost::metering::kPeakDecayPerBlock, 1.0e-6f,
+                                       "a zero sample rate should fall back to the reference");
+
+            meter.setTimebase (48000.0, 0);
+            expectWithinAbsoluteError (meter.getDecayPerBlock(),
+                                       lighthost::metering::kPeakDecayPerBlock, 1.0e-6f,
+                                       "a zero block size should fall back to the reference");
+
+            meter.setTimebase (-48000.0, -480);
+            expectWithinAbsoluteError (meter.getDecayPerBlock(),
+                                       lighthost::metering::kPeakDecayPerBlock, 1.0e-6f,
+                                       "negatives should fall back to the reference");
+        }
+
+        beginTest ("an unconfigured meter still decays at the reference rate");
+        {
+            // Nothing is required to call setTimebase, so the default has to be
+            // the old behaviour rather than zero (never decays) or one (decays
+            // instantly).
+            Meter meter;
+
+            expectWithinAbsoluteError (meter.getDecayPerBlock(),
+                                       lighthost::metering::kPeakDecayPerBlock, 1.0e-6f);
+        }
+
         beginTest ("a held peak really does fall at that rate");
         {
             // The arithmetic above says the two constants agree. This says the
@@ -246,6 +342,36 @@ public:
                                        0.15f,
                                        "one reference second of silence did not fall by the "
                                        "rate the UI draws it falling at");
+        }
+
+        beginTest ("a held peak falls at that rate at a NON-reference block size too");
+        {
+            // The behavioural half of setTimebase, and the one the arithmetic
+            // test above cannot reach: it checks getDecayPerBlock, so publish()
+            // could go on multiplying by the fixed literal and still pass it.
+            // This measures the level that comes back out.
+            //
+            // 128 samples at 48 kHz: 375 blocks in a second, where the fixed
+            // literal gave about 169 dB/s instead of 45.
+            constexpr int  blockSize  = 128;
+            constexpr double rate     = 48000.0;
+            constexpr int  blocksInOneSecond = static_cast<int> (rate) / blockSize;
+
+            Meter meter;
+            meter.setTimebase (rate, blockSize);
+
+            feedSingleSpike (meter, 1.0f, blockSize);
+            expectWithinAbsoluteError (meter.read().peakDb, 0.0f, 0.05f);
+
+            for (int i = 0; i < blocksInOneSecond; ++i)
+                feedConstant (meter, 0.0f, 2, blockSize);
+
+            expectWithinAbsoluteError (meter.read().peakDb,
+                                       -lighthost::metering::kPeakFallDbPerSecond,
+                                       0.15f,
+                                       "a second of silence at 128 samples did not fall by "
+                                       "kPeakFallDbPerSecond, so publish() is not using the "
+                                       "configured timebase");
         }
 
         beginTest ("RMS stops being reported once nothing is watching");
@@ -404,9 +530,9 @@ public:
 
             for (int ch = 0; ch < 2; ++ch)
                 for (int i = 0; i < kBlockSize; ++i)
-                    largestDeparture = juce::jmax (largestDeparture,
-                                                   std::abs (audio.getSample (ch, i)
-                                                                 - before.getSample (ch, i)));
+                    largestDeparture = accumulateDeparture (largestDeparture,
+                                                            std::abs (audio.getSample (ch, i)
+                                                                          - before.getSample (ch, i)));
 
             expectWithinAbsoluteError (largestDeparture, 0.0f, 1.0e-6f,
                                        "the probe moved the signal passing through it, so "

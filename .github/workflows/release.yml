@@ -82,7 +82,13 @@ jobs:
 
       - name: Configure
         # Pin the make program to the stable apt path, matching ci.yml.
-        run: cmake --preset ninja-release -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja
+        # REQUIRE_SMOKE_TESTS for the same reason ci.yml sets it: a reduced test
+        # set must not be able to pass quietly, least of all on the run that
+        # publishes archives.
+        run: >-
+          cmake --preset ninja-release
+          -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja
+          -DLIGHTHOST_REQUIRE_SMOKE_TESTS=ON
 
       - name: Build
         run: cmake --build build/ninja-release -j$(nproc)

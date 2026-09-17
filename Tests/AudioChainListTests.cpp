@@ -161,9 +161,52 @@ public:
             AudioChainListComponent list;
             list.setRows ({ { describe ("A"), true, 3 } });
 
-            list.addRow ({ describe ("B"), false, 0 });
+            expect (list.addRow ({ describe ("B"), false, 0 }));
 
             expectEquals (describeRows (list.getRows()), juce::String ("A/byp/L3 B/on/L0"));
+        }
+
+        beginTest ("adding an identity already staged is refused");
+        {
+            // FAILS IF: addRow stops de-duplicating and trusts the add menu's
+            // greying instead.
+            //
+            // The greying is a snapshot taken when the menu is built, and
+            // showMenuAsync runs no nested loop, so the chain can change while
+            // the menu is open -- a latency report or a finished load reaches
+            // setChain and merges in a row the snapshot never saw. Picking that
+            // still-enabled item staged one identity twice, and every
+            // identity-resolved operation then hit the FIRST copy: Delete on the
+            // second removed the first, Lane set the first one's lane.
+            AudioChainListComponent list;
+            list.setRows ({ { describe ("A"), false, 0 },
+                            { describe ("B"), true,  2 } });
+
+            expect (! list.addRow ({ describe ("B"), false, 1 }),
+                    "a duplicate identity should be refused");
+
+            expectEquals (describeRows (list.getRows()),
+                          juce::String ("A/on/L0 B/byp/L2"),
+                          "the refused add must not disturb the row already there");
+        }
+
+        beginTest ("a refused add fires no change, an accepted one does");
+        {
+            // FAILS IF: addRow goes back to skipping onChange. It was the only
+            // mutator that did, and it got away with it because the add-plugin
+            // callback duplicated onChange's body by hand -- so a handler added
+            // to onChange later would silently not fire on add.
+            AudioChainListComponent list;
+            int changes = 0;
+            list.onChange = [&changes] { ++changes; };
+
+            list.setRows ({ { describe ("A"), false, 0 } });
+
+            expect (list.addRow ({ describe ("B"), false, 0 }));
+            expectEquals (changes, 1, "an accepted add did not report the change");
+
+            expect (! list.addRow ({ describe ("B"), false, 0 }));
+            expectEquals (changes, 1, "a refused add reported a change that did not happen");
         }
 
         beginTest ("a checkbox toggle changes one row and only its bypass");

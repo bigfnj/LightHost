@@ -155,8 +155,9 @@ namespace lighthost::topology
 
         Nodes are grouped into lanes, each lane is chained in order from the input
         node to the output node, and the lanes therefore sum at the output node.
-        With no usable node in any lane the input is wired straight to the output,
-        so audio keeps flowing when every plugin is missing or unusable.
+        With no usable node in any lane the input is wired to the output through
+        lane 0's trim, so audio keeps flowing when every plugin is missing or
+        unusable and a muted lane 0 still mutes it.
 
         The result is deterministic: the same layout always produces the same
         connections in the same order, which is what lets the caller diff it
@@ -174,6 +175,37 @@ namespace lighthost::topology
 
         if (lanes.empty())
         {
+            // Through lane 0's trim, not at unity. A trim is saved and restored,
+            // so a lane pulled to kMinDb -- a true mute -- before a quit is still
+            // muted on the next launch. But every launch spends its plugin-load
+            // window right here, with no node yet in any lane, and so does an
+            // empty chain and a chain whose plugins all failed. Running that
+            // window at unity threw away the one control the user reached for to
+            // stop sound coming out, which on a microphone chain with speakers
+            // nearby is a feedback squeal lasting as long as the plugins take to
+            // load.
+            //
+            // Lane 0 because a trim belongs to a lane and no lane exists here:
+            // the choice is arbitrary, but it is predictable, it is the lane a
+            // single-lane setup already uses, and the alternative of reading the
+            // stored chain's lanes cannot help the genuinely empty case anyway.
+            // At unity the trim costs nothing measurable -- Processor::processBlock
+            // returns without touching the buffer once the ramp has settled there.
+            const auto gainNodeId = layout.laneGainNodeIds[0];
+
+            if (gainNodeId.uid != 0)
+            {
+                appendEdge (connections,
+                            layout.inputNodeId, layout.inputNodeChannels,
+                            gainNodeId, layout.laneGainChannels);
+                appendEdge (connections,
+                            gainNodeId, layout.laneGainChannels,
+                            layout.outputNodeId, layout.outputNodeChannels);
+                return connections;
+            }
+
+            // No trim node: wire straight out, so a trim that could not be added
+            // costs the trim and not the audio.
             appendEdge (connections,
                         layout.inputNodeId, layout.inputNodeChannels,
                         layout.outputNodeId, layout.outputNodeChannels);

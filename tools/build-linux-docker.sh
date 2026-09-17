@@ -63,6 +63,12 @@ esac
 # come out owned by root and refuse a later unprivileged rm -rf. Skipped on
 # Windows, where the ids are meaningless to the daemon and the bind mount is
 # already owned by the user.
+#
+# This array was computed here and then passed to nothing: both docker run
+# calls below omitted it, so the comment described behaviour the script did not
+# have and build/linux-docker still came out root-owned on Linux and macOS.
+# Expanded unquoted-empty on Windows, which needs bash 4.4 or newer to survive
+# `set -u`; Git Bash and every supported distro ship 5.x.
 docker_user=()
 
 case "$(uname -s)" in
@@ -84,6 +90,7 @@ docker build --quiet \
 
 run() {
     docker run --rm \
+        "${docker_user[@]}" \
         -v "$hostpath:/work" \
         -w /work \
         "$image" \
@@ -91,7 +98,7 @@ run() {
 }
 
 if [[ "$mode" == "--shell" ]]; then
-    exec docker run --rm -it -v "$hostpath:/work" -w /work "$image" bash
+    exec docker run --rm -it "${docker_user[@]}" -v "$hostpath:/work" -w /work "$image" bash
 fi
 
 echo "==> configure"

@@ -110,7 +110,8 @@ int main (int argc, char** argv)
                                        "Metering", "NodeIds", "OfflineRender",
                                        "PluginChain", "PluginScan", "PluginState",
                                        "PluginStateVault", "PluginWindow",
-                                       "SampleRate", "SelfTest", "SettingsKeys", "Status" };
+                                       "SampleRate", "SelfTest", "SettingsKeys",
+                                       "StartupFlags", "Status" };
 
     const juce::StringArray needsDisplay { "PluginWindowGui" };
 
@@ -126,7 +127,7 @@ int main (int argc, char** argv)
     //
     // Checked here rather than after the run, because running it is the
     // problem. UnitTest::getTestsInCategory returns getAllTests() for an empty
-    // string (juce_UnitTest.cpp:58-60), so a blanked entry does not run nothing
+    // string (juce_UnitTest.cpp:57-58), so a blanked entry does not run nothing
     // -- it runs EVERYTHING, including PluginWindowGui, which needs a display
     // and takes a headless Linux runner down (CMakeLists.txt says why it is a
     // separate ctest entry). Measured: with headless = { "" } the suite ran the
@@ -157,13 +158,41 @@ int main (int argc, char** argv)
     // that only ran there would never run on two of the three platforms CI
     // covers. Running it in the default mode means every platform's `unit`
     // entry catches an orphan on the first push.
+    // Walked over getAllTests(), NOT getAllCategories(), which is what this used
+    // to do and which left the same hole one door along.
+    // UnitTest::getAllCategories skips any test whose category is empty
+    // (juce_UnitTest.cpp:83-92), and the base constructor defaults the category
+    // to an empty String (juce_UnitTest.h:88). So a test written as
+    // `juce::UnitTest ("My test")` -- the one-argument form, which compiles --
+    // appeared in no category, was named by neither list, was run by no
+    // runTestsInCategory call, tripped neither guard, and the process exited 0.
+    // That is the identical "registers and silently never runs" failure the
+    // orphan check exists to catch, arriving through a constructor overload.
     juce::StringArray orphanCategories;
+    juce::StringArray uncategorisedTests;
 
-    for (const auto& category : juce::UnitTest::getAllCategories())
+    for (const auto* test : juce::UnitTest::getAllTests())
+    {
+        if (test == nullptr)
+            continue;
+
+        const auto category = test->getCategory();
+
+        if (category.isEmpty())
+        {
+            uncategorisedTests.addIfNotAlreadyThere (test->getName().isNotEmpty()
+                                                         ? test->getName()
+                                                         : juce::String ("<unnamed>"));
+            continue;
+        }
+
         if (! declared.contains (category))
-            orphanCategories.add (category);
+            orphanCategories.addIfNotAlreadyThere (category);
+    }
 
-    if (! blankCategories.isEmpty() || ! orphanCategories.isEmpty())
+    if (! blankCategories.isEmpty()
+        || ! orphanCategories.isEmpty()
+        || ! uncategorisedTests.isEmpty())
     {
         if (! blankCategories.isEmpty())
             std::printf ("BLANK CATEGORY NAME: %s\n"
@@ -176,6 +205,15 @@ int main (int argc, char** argv)
                          "    A test registers it and neither list names it, so it "
                          "never runs and this process would still exit 0.\n",
                          orphanCategories.joinIntoString (", ").toRawUTF8());
+
+        if (! uncategorisedTests.isEmpty())
+            std::printf ("TEST REGISTERED WITH NO CATEGORY: %s\n"
+                         "    juce::UnitTest's category argument defaults to empty, so "
+                         "the one-argument constructor compiles and\n"
+                         "    produces a test that no category names and no "
+                         "runTestsInCategory call reaches. Give it a category\n"
+                         "    and add that category to a list above.\n",
+                         uncategorisedTests.joinIntoString (", ").toRawUTF8());
 
         juce::Logger::setCurrentLogger (nullptr);
         return 1;

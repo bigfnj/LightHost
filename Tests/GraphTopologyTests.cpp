@@ -449,13 +449,38 @@ public:
             expect (! touches (connections, laneGain (0)));
         }
 
-        beginTest ("an empty chain does not route through a trim");
+        beginTest ("an empty chain routes through lane 0's trim");
         {
+            // Every launch passes through here while the plugins load, so this
+            // is the path a muted lane 0 has to survive. Wiring it at unity let
+            // a mute the user set before quitting come back at full level for
+            // as long as loading took.
             const auto connections = buildConnections (withLaneGains (layoutOf ({})));
+
+            expect (has (connections, kInput, 0, laneGain (0), 0));
+            expect (has (connections, laneGain (0), 0, kOutput, 0));
+            expect (! has (connections, kInput, 0, kOutput, 0),
+                    "the input still reaches the output without passing the trim");
+        }
+
+        beginTest ("an empty chain with no trim node is still wired straight out");
+        {
+            // The robustness half: a trim that could not be added costs the trim,
+            // not the audio.
+            const auto connections = buildConnections (layoutOf ({}));
 
             expectEquals ((int) connections.size(), 2);
             expect (has (connections, kInput, 0, kOutput, 0));
             expect (! touches (connections, laneGain (0)));
+        }
+
+        beginTest ("an empty chain does not route through lanes 1 to 3");
+        {
+            const auto connections = buildConnections (withLaneGains (layoutOf ({})));
+
+            for (int lane = 1; lane < lighthost::kNumLanes; ++lane)
+                expect (! touches (connections, laneGain (lane)),
+                        "lane " + juce::String (lane) + " should not be in the passthrough");
         }
 
         beginTest ("the same layout always produces the same connections, with no duplicates");
@@ -804,6 +829,7 @@ public:
 
         beginTest ("removing every plugin falls back to a direct connection");
         {
+            // No trims on this graph, so the fallback is the bare wire.
             LiveGraph g;
             g.add (0);
             g.apply();
@@ -816,6 +842,26 @@ public:
             expectEquals ((int) live.size(), 2);
             expect (live.count ({ { g.layout.inputNodeId, 0 }, { g.layout.outputNodeId, 0 } }) == 1);
             expect (live.count ({ { g.layout.inputNodeId, 1 }, { g.layout.outputNodeId, 1 } }) == 1);
+        }
+
+        beginTest ("removing every plugin falls back through lane 0's trim");
+        {
+            // With trims present the fallback keeps them, which is what stops a
+            // muted lane 0 unmuting itself the moment the last plugin is deleted.
+            LiveGraph g;
+            g.addLaneGains();
+            g.add (0);
+            g.apply();
+
+            g.layout.nodes.clear();
+            const auto diff = g.apply();
+            const auto live = g.live();
+
+            expect (diff.refused.empty());
+            expect (live.count ({ { g.layout.inputNodeId, 0 }, { laneGain (0), 0 } }) == 1);
+            expect (live.count ({ { laneGain (0), 0 }, { g.layout.outputNodeId, 0 } }) == 1);
+            expect (live.count ({ { g.layout.inputNodeId, 0 }, { g.layout.outputNodeId, 0 } }) == 0,
+                    "a direct edge survived beside the trim");
         }
     }
 };

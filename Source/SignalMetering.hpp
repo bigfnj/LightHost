@@ -59,6 +59,23 @@
 //==============================================================================
 namespace lighthost::metering
 {
+    // The realtime rules above rest on these, so they are asserted rather than
+    // assumed. A std::atomic that is not lock-free compiles to a mutex, which
+    // would make "takes no locks" false on the audio thread with nothing
+    // reporting it -- and the failure would be an audible dropout under load,
+    // not a diagnostic. True on every platform this ships to; checked so that
+    // stays a fact rather than a convention.
+    static_assert (std::atomic<float>::is_always_lock_free,
+                   "Meter publishes levels from the audio thread through "
+                   "std::atomic<float>. If that is not lock-free here, metering "
+                   "takes a lock on the audio thread.");
+    static_assert (std::atomic<bool>::is_always_lock_free,
+                   "Meter latches clipping from the audio thread through "
+                   "std::atomic<bool>.");
+    static_assert (std::atomic<int>::is_always_lock_free,
+                   "Meter counts watchers through std::atomic<int>, decremented "
+                   "from the message thread while the audio thread reads it.");
+
     /** Treated as full scale. Slightly below 1.0 so a converter that lands one
         LSB short of the rail still reads as clipped, which is what it is.
     */
@@ -269,12 +286,52 @@ namespace lighthost::metering
             rmsMeasured.store (false, std::memory_order_relaxed);
         }
 
+        /** Points the peak decay at the block size and rate actually in use.
+
+            Until 5.4.0 the decay was the fixed literal kPeakDecayPerBlock, which
+            is 45 dB/s at 480 samples and 48 kHz and at NO other pair. The UI half
+            falls by kPeakFallDbPerSecond/refreshHz per tick, which is a true
+            45 dB/s at any buffer size, so the two agreed only at the reference --
+            and buffer size is a setting the user picks in Preferences. Measured
+            at the fixed literal: 128 samples at 48 kHz fell at about 169 dB/s,
+            and 1024 at 44.1 kHz at about 19 dB/s. What the user sees is the
+            slower of the two, so on a large buffer the peak bar sticks above a
+            level that has already gone -- verbatim the symptom the shared
+            constant was introduced to prevent, and the one that made 5.1.0 move
+            the ballistics in here.
+
+            Call from prepareToPlay or audioDeviceAboutToStart, where JUCE has
+            the graph stopped. `decayPerBlock` is a plain float for that reason,
+            the same argument GainProcessor makes for rampTargetDb: the audio
+            thread is not running when this is written.
+
+            A non-positive rate or block size keeps the reference literal rather
+            than producing a nonsense factor, because a meter that decays wrongly
+            is better than one that never decays or decays to NaN.
+        */
+        void setTimebase (double sampleRate, int blockSize) noexcept
+        {
+            if (sampleRate <= 0.0 || blockSize <= 0)
+            {
+                decayPerBlock = kPeakDecayPerBlock;
+                return;
+            }
+
+            const auto secondsPerBlock = static_cast<double> (blockSize) / sampleRate;
+            const auto fallDb          = kPeakFallDbPerSecond * secondsPerBlock;
+
+            decayPerBlock = static_cast<float> (std::pow (10.0, -fallDb / 20.0));
+        }
+
+        /** The factor in use, so a test can check the rate rather than trust it. */
+        [[nodiscard]] float getDecayPerBlock() const noexcept { return decayPerBlock; }
+
     private:
         void publish (float peak, float channelMeanSquare, bool measuredRms) noexcept
         {
             // Decay held here rather than in the UI, so every reader sees the
             // same ballistics and none can take the peak away from another.
-            const auto decayed = heldPeak.load (std::memory_order_relaxed) * kPeakDecayPerBlock;
+            const auto decayed = heldPeak.load (std::memory_order_relaxed) * decayPerBlock;
             heldPeak.store (juce::jmax (peak, decayed), std::memory_order_relaxed);
 
             if (measuredRms)
@@ -308,6 +365,16 @@ namespace lighthost::metering
             if (peak >= kClipThreshold)
                 clipLatched.store (true, std::memory_order_relaxed);
         }
+
+        /** Peak decay per block, for the rate and block size actually running.
+
+            Not an atomic, deliberately. It is written only by setTimebase,
+            which its own doc restricts to prepareToPlay and
+            audioDeviceAboutToStart -- both called by JUCE with the graph
+            stopped, so no audio thread is reading it at the time. Same rule
+            GainProcessor::rampTargetDb follows.
+        */
+        float decayPerBlock = kPeakDecayPerBlock;
 
         std::atomic<float> heldPeak           { 0.0f };
         std::atomic<float> smoothedMeanSquare { 0.0f };
@@ -359,7 +426,16 @@ namespace lighthost::metering
         void getStateInformation (juce::MemoryBlock&) override {}
         void setStateInformation (const void*, int) override  {}
 
-        void prepareToPlay (double, int) override            { meter.reset(); }
+        /** Both arguments are used now, and both were discarded before. The
+            peak decay is per block, so it is not a rate until it knows how long
+            a block is -- see Meter::setTimebase for what the fixed literal cost
+            at every buffer size other than the reference one.
+        */
+        void prepareToPlay (double sampleRate, int samplesPerBlock) override
+        {
+            meter.setTimebase (sampleRate, samplesPerBlock);
+            meter.reset();
+        }
         void releaseResources() override                     {}
 
         using juce::AudioProcessor::processBlock;

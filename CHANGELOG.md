@@ -97,6 +97,117 @@ Opens the Preferences window at startup. For anyone whose tray icon Windows has
 hidden in the overflow, since the application has no other way in; and for
 taking the README screenshots, which need retaking whenever the panel changes.
 
+Both spellings work. It first shipped matching `-preferences` only, so
+`--preferences` — the natural guess, since `--render` and `--scan` use two
+dashes — started the application with no window and said nothing.
+
+### Fixed — a muted lane came back at full volume on every launch
+
+Pull a lane's trim to the bottom and it is a true mute. Quit, reopen, and for as
+long as the plugins took to load your microphone went straight to your output at
+**unity**, ignoring that setting entirely. On a chain with speakers near the
+microphone that is a feedback squeal, and it happened every single launch.
+
+The cause is a shortcut. With no plugin node live, the graph wires input
+straight to output so audio keeps flowing — and that direct wire skipped the
+lane trims, which by then had already been created and loaded from settings.
+The same window opens whenever the chain is empty and whenever every plugin
+fails to load.
+
+The passthrough now runs through lane 0's trim. Lane 0 because a trim belongs to
+a lane and no lane exists during that window, so the choice is arbitrary but
+predictable, and it is the lane a single-lane setup already uses. At unity the
+trim costs nothing measurable: the processor returns without touching the buffer
+once its ramp has settled there.
+
+### Fixed — three ways the preset vault could lose a preset and report success
+
+All three are the same shape: a write or a delete that did not happen, reported
+as one that did.
+
+**An empty state erased the file.** `Vault::write` treated a zero-length block
+as "clear this preset" and returned **true**. A plugin can hand back nothing
+transiently — a VST2 `getChunk` that failed, a plugin in a bad state — and
+`savePluginStates` forwards whatever it gets on every chain edit. So a bypass
+toggle could delete a good preset, record the delete as a successful save, and
+drop the pre-5.0.0 fallback copy as well. Both copies gone, nothing logged. The
+restore half already treated empty as "nothing stored" and refused to overwrite;
+the two halves now agree, and clearing is `erase`'s job alone.
+
+**A truncated write returned true.** The gzip tail is written by
+`GZIPCompressorHelper::finish`, which discards every return value, and
+`FileOutputStream`'s own flush happened in its destructor — after the last point
+anything could look. `overwriteTargetFileWithTemporary` then renamed the
+truncated file over the good one, which needs no free space on the same volume,
+so a full disk hit exactly this path. The stream is now flushed and its status
+checked before the rename.
+
+**Three `[[nodiscard]]` erase results were discarded**, and the in-memory
+fingerprint was dropped whether or not the file went. A `.lhs` that will not
+delete — an antivirus or backup agent holding it open — was then orphaned
+permanently, because nothing enumerates the vault directory. Worse, re-adding
+the plugin restored the preset the user had just deleted. The delete-all path
+also announced "Deleted saved plugin states" unconditionally: a run in which
+every single delete failed logged identically to one where all of them
+succeeded, behind the one dialog in the application that takes trouble to warn
+you first. It now counts the failures and says so.
+
+### Fixed — the peak meter fell at the right speed only at one buffer size
+
+The held peak decayed by a fixed factor **per block**, and a per-block factor is
+not a rate until you say how long a block is. It was chosen at 480 samples and
+48 kHz, and it was correct there and nowhere else. The UI half falls at a true
+45 dB/s whatever the buffer size, so the two agreed only at that one pair — and
+buffer size is a setting you pick in Preferences.
+
+Measured at the old fixed factor: 128 samples at 48 kHz fell at about 169 dB/s,
+and 1024 at 44.1 kHz at about 19 dB/s against an intended 45. The drawn bar
+takes the slower of the two, so on a large buffer it stuck above a level that
+had already gone — verbatim the symptom the shared constant was introduced to
+prevent. The decay is now derived from the rate and block size actually running,
+and the tests check it at four pairs instead of at the reference one.
+
+### Fixed — the add menu could stage the same plugin twice
+
+The menu greys out identities already in the list, but that is a snapshot taken
+when the menu is built, and `showMenuAsync` runs no nested loop — so the chain
+can change while the menu is open. Picking a still-enabled item then staged one
+identity twice, and every identity-resolved operation hit the first copy:
+Delete on the second removed the first, and Lane set the first one's lane. On
+Apply the two collapsed into one silently, with the status line reporting that
+zero plugins had been dropped. The list now refuses a duplicate.
+
+### Fixed — checks that could not fail, and comments that were not true
+
+A third audit pass, over the areas the first two did not cover.
+
+Four checks could not fail on the input they existed for. Losing `xvfb-run` let
+Linux CI configure green, register none of the three smoke tests, and report
+"100% tests passed" having run one test of four. `ci-status.sh` reported a `gh`
+failure as a verdict on the run, on the one of its three calls left unguarded.
+`update-juce.sh` hardcoded `JUCE 9`, so a bump to JUCE 10 would rewrite nothing,
+exit 0, and ship attribution naming the old version. And a test registered with
+`juce::UnitTest("name")` — the one-argument constructor, which compiles — landed
+in no category, was run by nothing, and exited 0; the guard meant to catch that
+walked `getAllCategories()`, which skips exactly those tests.
+
+Three collapsed max-deviation assertions swallowed NaN, because `juce::jmax` is
+`a < b ? b : a` and `anything < NaN` is false. Equivalent to the per-sample
+loops they replaced for every finite value, and strictly weaker for the one
+value an uninitialised buffer produces.
+
+`build-linux-docker.sh` computed a `--user` argument and passed it to neither
+`docker run`, so the comment promising non-root build output described behaviour
+the script did not have. `OfflineRender`'s `graphChannels` could only ever be 2
+and read as though it handled mono. `getCommittedChainNames` was unbounded while
+`getProbeMeter` caps at 32, so a 33rd plugin got a labelled signal-view row that
+would draw silence for ever. The realtime "takes no locks" promise rested on
+lock-freedom nothing asserted; it now has three `static_assert`s.
+
+Six documents said things that were not true, five of which shipped in the
+5.3.0 archives or this release body. They are listed in
+[BACKLOG.md](BACKLOG.md) with what each actually said.
+
 ### Changed — 510 assertions that could not fail are gone
 
 Two loops of 256 assertions each checked properties no input could break: one
@@ -104,11 +215,13 @@ was enforced by a `const` reference in the callee, and the other still passed
 with the code it guarded deleted. Both are now single max-deviation assertions
 that fail on a single altered sample.
 
-Four more were tightened rather than removed -- the `isUnity` boundary, the ramp
-continuity test, a bounds loop that duplicated exact assertions above it, and a
-tie-break test that turned out to be **redundant rather than vacuous**: the
-claim that it would pass with the tie-break removed was wrong, because sort
-stability is what makes it fire.
+Three more were tightened rather than removed: the `isUnity` boundary, the ramp
+continuity test, and a bounds loop that duplicated exact assertions above it.
+
+A fourth was investigated and deliberately left alone. The tie-break test turned
+out to be **redundant rather than vacuous** -- the claim that it would pass with
+the tie-break removed was wrong, because sort stability is what makes it fire --
+so there was nothing to tighten. It is counted here as examined, not changed.
 
 The headline number went down and the coverage went up. 99 new assertions cover
 the chain list and the reconcile, every one mutation-tested.
@@ -130,8 +243,12 @@ implementations agreed.
 
 ### Fixed — documentation and assets
 
-`tools/README.md` is new: fourteen scripts, none of which was referenced by any
-document, and one of which had no header comment at all. `docs/mockups/` is
+`tools/README.md` is new. It indexes fourteen files, eight of which no living
+document pointed at -- the rest appeared only in CHANGELOG or BACKLOG history
+lines, which record that a script once existed rather than telling anyone how to
+use it. Four are linked from the README and one from DECISIONS, and those links
+are the documentation; the index is the signpost. One script had no header
+comment at all. `docs/mockups/` is
 linked from the README, with all four of its source-pinned colours annotated
 rather than one. `Resources/icon.png` lost 8.2% losslessly, verified
 pixel-identical.

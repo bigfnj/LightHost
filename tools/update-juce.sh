@@ -78,10 +78,29 @@ echo
 echo "updating the files that quote the JUCE version to $juce_version:"
 
 for quoting_file in "$ROOT/third_party" "$ROOT/README.md"; do
-  if [[ -f "$quoting_file" ]] \
-     && sed -i -E "s/JUCE 9\.[0-9]+\.[0-9]+/JUCE $juce_version/g" "$quoting_file"; then
-    echo "  $(basename "$quoting_file"): $(grep -c "JUCE $juce_version" "$quoting_file") mention(s)"
+  [[ -f "$quoting_file" ]] || continue
+
+  # Any major version, not a hardcoded 9. The pattern was `JUCE 9\.[0-9]+\.[0-9]+`,
+  # so a bump to JUCE 10 would have matched nothing while sed -i still exited 0 --
+  # the block written to stop a stale version shipping could not fail on the one
+  # kind of bump that causes it. The bare `JUCE 9` on the licence line is a
+  # different statement and is deliberately left alone by the x.y.z pattern.
+  sed -i -E "s/JUCE [0-9]+\.[0-9]+\.[0-9]+/JUCE $juce_version/g" "$quoting_file"
+
+  # Counted after the rewrite, in its own assignment rather than inside an echo
+  # argument list, where a non-zero grep was swallowed. `third_party` is copied
+  # into all three published archives and once carried a stale version for a
+  # whole release cycle, so "rewrote nothing" has to be loud.
+  mentions=$(grep -c "JUCE $juce_version" "$quoting_file" || true)
+
+  if (( mentions == 0 )); then
+    echo "  $(basename "$quoting_file"): no JUCE $juce_version mention after the rewrite" >&2
+    echo "  the file has stopped quoting the version in the expected form." >&2
+    echo "  Fix it by hand, or this bump ships attribution naming the old version." >&2
+    exit 1
   fi
+
+  echo "  $(basename "$quoting_file"): $mentions mention(s)"
 done
 
 # System-audio loopback capture: re-checked on every bump, because the answer can

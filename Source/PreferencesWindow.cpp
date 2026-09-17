@@ -2134,9 +2134,17 @@ private:
                 // One row rather than a push into each of three vectors and a
                 // resize to put them back in step. The trio it used to keep in
                 // lockstep by hand no longer exists.
-                safe->chainList.addRow ({ captured[result - 1], false, 0 });
-                safe->updateChainListHeight();
-                safe->chainList.repaint();
+                //
+                // addRow now de-duplicates and fires onChange itself, so the
+                // updateChainListHeight/repaint pair that used to sit here --
+                // an open copy of onChange's body -- has gone with it. It
+                // refuses a plugin the greying above thought was unreachable:
+                // the greying is a snapshot, and the chain can change while the
+                // menu is open.
+                const auto& chosen = captured[result - 1];
+
+                if (! safe->chainList.addRow ({ chosen, false, 0 }))
+                    safe->setApplyFeedback (chosen.name + " is already in the chain");
             });
     }
 

@@ -568,7 +568,12 @@ void IconMenu::loadActivePlugins()
     // output instead, so a failure here costs the trim and not the audio.
     createLaneGainNodes();
 
-    // Wire input → output immediately so audio passes through while plugins load.
+    // Wire the passthrough immediately so audio flows while plugins load. It
+    // runs through lane 0's trim, not at unity: createLaneGainNodes above has
+    // already seeded every trim from settings, so a lane muted before the last
+    // quit is muted for this window too. Ordering matters -- the trims have to
+    // exist before this call, or the layout has no id to route through and the
+    // window runs at full level.
     reconnectGraph();
 
     const auto sortedSnapshot = getTimeSortedList();
@@ -901,11 +906,21 @@ std::vector<juce::String> IconMenu::getCommittedChainNames()
     // happening to agree.
     const auto sorted = getTimeSortedList();
 
-    std::vector<juce::String> names;
-    names.reserve (static_cast<size_t> (sorted->size()));
+    // Capped at the same limit getProbeMeter enforces, so the two stay the same
+    // length. refreshSignalView pairs them one to one; uncapped, chain position
+    // 33 and up got a labelled row whose meter is null, which the update loop
+    // skips and the painter therefore draws at kFloorDb for ever. A permanent
+    // silent row is a worse answer than no row: IconMenu.hpp says a position
+    // past the cap "just stops being probed", and a row reading silence says
+    // the plugin is passing nothing.
+    const auto limit = juce::jmin (static_cast<size_t> (sorted->size()),
+                                   static_cast<size_t> (lighthost::nodeids::maxProbes));
 
-    for (const auto& pd : *sorted)
-        names.push_back (pd.name);
+    std::vector<juce::String> names;
+    names.reserve (limit);
+
+    for (size_t i = 0; i < limit; ++i)
+        names.push_back ((*sorted)[i].name);
 
     return names;
 }
@@ -962,6 +977,16 @@ lighthost::state::Vault IconMenu::stateVault() const
     const auto settingsFile = getAppProperties().getUserSettings()->getFile();
 
     return lighthost::state::Vault::beside (settingsFile);
+}
+
+bool IconMenu::forgetPluginState (const lighthost::state::Vault& vault,
+                                  const juce::String& identity)
+{
+    if (! vault.erase (identity))
+        return false;
+
+    lastWrittenState.erase (identity);
+    return true;
 }
 
 //==============================================================================
@@ -1777,8 +1802,9 @@ void IconMenu::handleDeletePlugin (int index)
     // either outcome the rollback is choosing between. These two are the only
     // irreversible steps in this function, so they go last, once nothing that
     // can fail is left.
-    (void) stateVault().erase (deletedIdentity);
-    lastWrittenState.erase (deletedIdentity);
+    if (! forgetPluginState (stateVault(), deletedIdentity))
+        status.report ("Removed " + pluginToDelete.name + " from the chain, but could not"
+                       " delete its saved settings. Re-adding it will bring them back.");
 
     if (nodeIdVal != 0)
     {
@@ -1954,13 +1980,23 @@ void IconMenu::confirmDeletePluginStates()
             if (result != deleteIndex || safe == nullptr)
                 return;
 
-            safe->deletePluginStates();
+            const auto failed = safe->deletePluginStates();
             safe->loadActivePlugins();
-            safe->reportStatus ("Deleted saved plugin states");
+
+            // Says what happened, which the old unconditional "Deleted saved
+            // plugin states" could not: it was true of a run in which every
+            // single delete failed.
+            if (failed == 0)
+                safe->reportStatus ("Deleted saved plugin states");
+            else
+                safe->reportStatus ("Could not delete " + juce::String (failed)
+                                    + (failed == 1 ? " plugin's saved state."
+                                                   : " plugins' saved states.")
+                                    + " Something else is holding the files open.");
         });
 }
 
-void IconMenu::deletePluginStates()
+int IconMenu::deletePluginStates()
 {
     const auto listSnapshot = getTimeSortedList();
     const auto& list = *listSnapshot;
@@ -1970,15 +2006,24 @@ void IconMenu::deletePluginStates()
 
     const auto vault = stateVault();
 
+    int failed = 0;
+
     for (const auto& plugin : list)
     {
+        const auto identity = ChainStore::identityOf (plugin);
+
         store.stageState (plugin, {});   // clears any un-migrated legacy blob
-        (void) vault.erase (ChainStore::identityOf (plugin));
-        lastWrittenState.erase (ChainStore::identityOf (plugin));
+
+        if (forgetPluginState (vault, identity))
+            continue;
+
+        ++failed;
+        juce::Logger::writeToLog ("Could not delete saved state for " + plugin.name);
     }
 
     store.commit();
     flushSettings (*settings, "clearing saved plugin states");
+    return failed;
 }
 
 void IconMenu::savePluginStates()
@@ -2015,6 +2060,17 @@ void IconMenu::savePluginStates()
         {
             MemoryBlock savedStateBinary;
             node->getProcessor()->getStateInformation (savedStateBinary);
+
+            // Nothing to save is not the same as "save nothing", and it is not
+            // an error either. Plenty of plugins have no state at all and hand
+            // back an empty block every time, so reporting this would put a
+            // failure in front of the user on every chain edit. The plugins that
+            // DO have state can also return empty transiently, and the rule that
+            // covers both is the same one statesNotRestored follows above: leave
+            // what is on disk alone. Vault::write refuses an empty block now, so
+            // this only decides whether the user hears about it.
+            if (savedStateBinary.getSize() == 0)
+                continue;
 
             const auto identity    = ChainStore::identityOf (plugin);
             const auto print       = lighthost::state::Vault::fingerprint (savedStateBinary);
@@ -2405,8 +2461,10 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         // The state file still goes with the settings keys once the mutation
         // has succeeded, or the directory accumulates orphans for plugins that
         // are no longer in the chain.
-        (void) vault.erase (departingIdentity);
-        lastWrittenState.erase (departingIdentity);
+        if (! forgetPluginState (vault, departingIdentity))
+            juce::Logger::writeToLog ("Could not delete saved state for "
+                                      + plugin.description.name
+                                      + "; re-adding it will restore the old preset");
     }
 
     // Set when addType reported a replacement rather than an add. See the
@@ -2508,8 +2566,10 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         for (const auto& plugin : dropped)
         {
             const auto droppedIdentity = ChainStore::identityOf (plugin);
-            (void) vault.erase (droppedIdentity);
-            lastWrittenState.erase (droppedIdentity);
+
+            if (! forgetPluginState (vault, droppedIdentity))
+                juce::Logger::writeToLog ("Could not delete saved state for " + plugin.name
+                                          + "; re-adding it will restore the old preset");
         }
 
         if (! dropped.empty())

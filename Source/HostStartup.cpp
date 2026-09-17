@@ -7,6 +7,7 @@
 #include "OfflineRender.hpp"
 #include "PluginScan.hpp"
 #include "SelfTest.hpp"
+#include "StartupFlags.hpp"
 
 #if ! (JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
  #error "If you're building the audio plugin host, you probably want to enable VST3 and/or AU support"
@@ -23,11 +24,14 @@ public:
         renderMode  = lighthost::render::isRequested (getCommandLineParameterArray());
         scanMode    = lighthost::scan::isRequested (getCommandLineParameterArray());
 
-        // Single dash, matching -self-test and -multi-instance rather than the
-        // double-dash render and scan flags. The split is not cosmetic: the
-        // double-dash ones are MODES that take over the process and exit, and
-        // this is an ordinary run.
-        openPreferencesOnStart = getCommandLineParameterArray().contains ("-preferences");
+        // Through a function the tests can reach, like the three above it. This
+        // was the one flag parsed inline, and what that cost was not the parse
+        // but the spelling: it matched "-preferences" alone, so --preferences
+        // started the app with no window and no complaint. Both forms now work,
+        // and StartupFlags.hpp says why the single dash is still the documented
+        // one.
+        openPreferencesOnStart =
+            lighthost::startup::openPreferencesRequested (getCommandLineParameterArray());
 
         juce::PropertiesFile::Options options;
         options.applicationName     = getApplicationName();

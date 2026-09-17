@@ -4,6 +4,7 @@
 #include <juce_core/juce_core.h>
 
 #include <cmath>
+#include <limits>
 #include <vector>
 
 //==============================================================================
@@ -13,6 +14,25 @@ namespace
 {
     constexpr int    kBlockSize  = 128;
     constexpr double kSampleRate = 48000.0;
+
+    /** Running max of a departure, accumulated so a NaN cannot hide inside it.
+
+        The per-sample assertion loops these collapsed replacements came from
+        were equivalent for every finite value and strictly weaker for one
+        thing: juce::jmax is `a < b ? b : a`, and `anything < NaN` is false, so
+        jmax returns the accumulator untouched and drops the NaN. The collapsed
+        assertion then passed on a buffer the old loop would have failed, where
+        it evaluated `NaN <= tolerance` and got false. Infinity still propagates
+        through jmax, so the hole was NaN alone -- which is exactly what an
+        uninitialised buffer read or a 0/0 in the gain path produces.
+    */
+    [[nodiscard]] float accumulateDeparture (float largest, float departure) noexcept
+    {
+        if (std::isnan (largest) || std::isnan (departure))
+            return std::numeric_limits<float>::quiet_NaN();
+
+        return juce::jmax (largest, departure);
+    }
 
     /** Renders a constant signal and returns every output sample of channel 0. */
     std::vector<float> renderConstant (lighthost::gain::Processor& processor,
@@ -90,7 +110,7 @@ public:
             float largestDeparture = 0.0f;
 
             for (const auto sample : rendered)
-                largestDeparture = juce::jmax (largestDeparture, std::abs (sample - 0.5f));
+                largestDeparture = accumulateDeparture (largestDeparture, std::abs (sample - 0.5f));
 
             expectWithinAbsoluteError (largestDeparture, 0.0f, 1.0e-6f,
                                        "a unity trim scaled the signal");
@@ -272,7 +292,7 @@ public:
             float largestDeparture = 0.0f;
 
             for (const auto sample : rendered)
-                largestDeparture = juce::jmax (largestDeparture, std::abs (sample - 0.5f));
+                largestDeparture = accumulateDeparture (largestDeparture, std::abs (sample - 0.5f));
 
             expectEquals (largestDeparture, 0.0f,
                           "the buffer was multiplied rather than skipped, so processBlock "

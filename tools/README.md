@@ -47,7 +47,10 @@ run in CI.
 
 ## Dependencies
 
-`voice-headroom.sh` needs `ffmpeg`. The two Python scripts need `numpy`.
-The four `.ps1` files are Windows-only and compile a small block of C# at run
-time to reach the WASAPI endpoint interfaces, which PowerShell does not expose;
-none of them needs an elevated shell.
+`voice-headroom.sh` needs `ffmpeg`. The two Python scripts need `numpy`. All
+four `.ps1` files are Windows-only. Three of them -- `audio-endpoints.ps1`,
+`show-capture-levels.ps1` and `set-capture-level.ps1` -- compile a small block
+of C# at run time to reach the WASAPI endpoint interfaces, which PowerShell
+does not expose; `measure-idle-cpu.ps1` needs none, because a process's
+`TotalProcessorTime` is already a PowerShell property. None of them needs an
+elevated shell.

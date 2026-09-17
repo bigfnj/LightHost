@@ -173,13 +173,46 @@ namespace lighthost::ui
             repaint();
         }
 
-        /** Appends one plugin. The add menu greys identities already in the list,
-            so this is not a place that has to de-duplicate.
+        /** Appends one plugin, unless its identity is already staged.
+
+            Returns false when it was already there and nothing was added.
+
+            De-duplicated HERE rather than trusting the add menu's greying, which
+            is what this used to say was sufficient. showAddPluginMenu snapshots
+            the staged identities once, when it builds the menu, and greys those
+            items -- but showMenuAsync returns immediately and runs no nested
+            loop, so ordinary message dispatch carries on while the menu is open.
+            A plugin re-declaring its latency, or a load finishing, reaches
+            setChain, the merge brings in a row the snapshot never saw, and
+            picking that still-enabled item staged the identity twice.
+
+            A duplicate is not cosmetic. indexOfIdentity resolves to the FIRST
+            match, so Delete on the second copy removed the first and the Lane
+            menu set the first one's lane. On Apply the two collapsed into one
+            with nothing said, because the identity is still in the final chain
+            so `dropped` came back empty and the status line reported that zero
+            plugins had been dropped.
+
+            The one place that may hold two rows with one identity is the
+            reconcile, which matches by ordinal precisely so two genuine copies
+            do not collapse. That is a different question from whether the UI
+            can stage one twice, and it cannot.
         */
-        void addRow (ChainRow row)
+        bool addRow (ChainRow row)
         {
+            if (indexOfIdentity (chain::Store::identityOf (row.description)) >= 0)
+                return false;
+
             rows.push_back (std::move (row));
+
+            // The only mutator that used to skip this. It was harmless solely
+            // because the add menu's callback duplicated onChange's body by
+            // hand, so any handler added later would silently not fire on add.
+            if (onChange != nullptr)
+                onChange();
+
             repaint();
+            return true;
         }
 
         [[nodiscard]] int getPreferredHeight() const noexcept
@@ -590,11 +623,14 @@ namespace lighthost::ui
 
         /** Where `identity` sits now, or -1 when it has gone.
 
-            First match. A tie cannot arise through the UI, because
-            showAddPluginMenu greys an identity already in the list, so the same
-            plugin cannot be staged twice -- and if one ever did arrive from
-            elsewhere, editing the first is a defensible answer where editing a
-            stale index is not.
+            First match, and addRow is what keeps that unambiguous: it refuses an
+            identity already staged. This comment used to credit the add menu's
+            greying instead, which is a snapshot taken when the menu is built and
+            so cannot hold while the menu is open -- see addRow for how a
+            duplicate got in and what it then broke.
+
+            If one ever did arrive from elsewhere, editing the first is a
+            defensible answer where editing a stale index is not.
         */
         [[nodiscard]] int indexOfIdentity (const juce::String& identity) const
         {

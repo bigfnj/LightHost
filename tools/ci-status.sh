@@ -95,11 +95,11 @@ echo "run $run_id for $short ($ref), workflow $workflow"
 # not succeed". A network blip while polling would therefore have reported a
 # CI failure that never happened. Exit 2 is "gh could not answer", as the
 # header promises.
-query_run()
+query_run_jq()
 {
-    local field=$1 value
+    local field=$1 expression=$2 value
 
-    if ! value=$(gh run view "$run_id" --json "$field" --jq ".$field // \"\"" 2>&1); then
+    if ! value=$(gh run view "$run_id" --json "$field" --jq "$expression" 2>&1); then
         echo "CI FAIL: gh could not read $field for run $run_id" >&2
         echo "  $value" >&2
         echo "  This is a tooling failure, not a verdict on the run." >&2
@@ -107,6 +107,11 @@ query_run()
     fi
 
     printf '%s' "$value"
+}
+
+query_run()
+{
+    query_run_jq "$1" ".$1 // \"\""
 }
 
 waited=0
@@ -136,6 +141,23 @@ conclusion=$(query_run conclusion)
 failed_jobs=0
 total_jobs=0
 
+# Through query_run_jq, not a bare process substitution, which is how this read
+# used to be written. A process substitution discards gh's exit status: a
+# network blip produced no output, the loop never ran, total_jobs stayed 0, and
+# the check below announced
+#
+#     CI FAIL: run <id> reports success with no jobs in it
+#
+# and exited 1 -- the code this script reserves for "the run finished and did
+# not succeed". That is a tooling failure reported as a verdict on the run,
+# which is the exact conflation the comment above query_run_jq forbids, and
+# this was the one of the three gh calls left unguarded.
+#
+# A herestring rather than a pipe so the loop runs in THIS shell and its
+# counters survive it. An empty jobs list feeds one blank line, which the
+# job_name guard already skips, so total_jobs stays 0 and the real check fires.
+jobs_raw=$(query_run_jq jobs '.jobs[] | "\(.conclusion // "")|\(.name)"')
+
 while IFS='|' read -r job_conclusion job_name; do
     [[ -z "$job_name" ]] && continue
 
@@ -146,8 +168,7 @@ while IFS='|' read -r job_conclusion job_name; do
     if [[ "$job_conclusion" != "success" ]]; then
         failed_jobs=$(( failed_jobs + 1 ))
     fi
-done < <(gh run view "$run_id" --json jobs \
-             --jq '.jobs[] | "\(.conclusion // "")|\(.name)"')
+done <<< "$jobs_raw"
 
 if [[ "$conclusion" != "success" ]]; then
     echo "CI FAIL: conclusion is ${conclusion:-<empty>} (run $run_id)" >&2

@@ -54,6 +54,21 @@ namespace lighthost::metering
 
         void audioDeviceAboutToStart (juce::AudioIODevice* device) override
         {
+            // The device knows its rate and buffer size, so the peak decay is
+            // pointed at them rather than left on the reference literal. Without
+            // this the device meters fell at 45 dB/s only at 480 samples and
+            // 48 kHz, and buffer size is a setting the user picks -- see
+            // Meter::setTimebase. Before the wrapped callback, so the meters are
+            // configured and cleared prior to any audio arriving.
+            if (device != nullptr)
+            {
+                const auto rate = device->getCurrentSampleRate();
+                const auto size = device->getCurrentBufferSizeSamples();
+
+                inputMeter.setTimebase (rate, size);
+                outputMeter.setTimebase (rate, size);
+            }
+
             inputMeter.reset();
             outputMeter.reset();
             wrapped.audioDeviceAboutToStart (device);

@@ -111,8 +111,16 @@ public:
             //
             // FAILS IF: the isNoOpEdit(staged, baseline) early return in
             // reconcileStagedChain is removed, so an unedited list goes through
-            // the merge. The merge appends arrivals at the end, so C would land
-            // after B instead of replacing it, and addedIncomingRows would be 1.
+            // the merge. Measured, not reasoned: three of the four assertions
+            // below go red -- the source check, because the surviving B is then
+            // taken from `staged` rather than from `incoming`, and both counters,
+            // which come back at 1 instead of 0.
+            //
+            // The chain STRING is unaffected, and this comment used to claim it
+            // was ("C would land after B instead of replacing it"). Both routes
+            // produce B,C, so that assertion passes under the mutation and
+            // describes nothing. The fast path is worth keeping for the counters
+            // and the provenance, not for the order.
             const std::vector<ChainEntry> baseline { entry ("A"), entry ("B") };
             const auto staged = baseline;
             const std::vector<ChainEntry> incoming { entry ("B"), entry ("C") };
@@ -250,9 +258,11 @@ public:
             // menus resolve by identity rather than by index.
             //
             // FAILS IF: claimIncoming stops marking a row consumed. Both staged
-            // rows would then match incoming[0], incoming[1] would be left
-            // unclaimed, and the chain would come back with four rows and
-            // addedIncomingRows at 1.
+            // rows then match incoming[0], neither incoming row is consumed, and
+            // the tail loop appends both: the chain comes back as
+            // "X/on/L5 X/on/L7 X/on/L0 X/on/L0" with addedIncomingRows at 2.
+            // Measured under the mutation. This used to say 1, which is the
+            // count for one unclaimed row, not two.
             const std::vector<ChainEntry> baseline { entry ("X", false, 0), entry ("X", false, 0) };
             const std::vector<ChainEntry> staged   { entry ("X", false, 5), entry ("X", false, 7) };
             const std::vector<ChainEntry> incoming { entry ("X", false, 0), entry ("X", false, 0) };

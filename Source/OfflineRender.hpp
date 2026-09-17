@@ -413,7 +413,14 @@ struct Result
     const auto tail = result.declaredLatency + blockSize;
     const auto framesToRender = totalFrames + tail;
 
-    const int graphChannels = juce::jmax (inputChannels, 2);
+    // The graph always runs in stereo, whatever the file holds. This was
+    // jmax (inputChannels, 2), and inputChannels is jlimit'ed to 1..2 where it
+    // is computed, so the expression could only ever be 2 -- which in turn made
+    // the jmin (ch, graphChannels - 1) further down always exactly ch. Both were
+    // written for a mono graph that cannot occur, and read as though a case were
+    // being handled. A mono source fills channel 0 and leaves channel 1 silent,
+    // which is what the host does with a mono capture device as well.
+    constexpr int graphChannels = 2;
     juce::AudioBuffer<float> block (graphChannels, blockSize);
     juce::AudioBuffer<float> rendered (2, static_cast<int> (framesToRender));
     rendered.clear();
@@ -489,9 +496,9 @@ struct Result
         midi.clear();
         graph.processBlock (block, midi);
 
-        for (int ch = 0; ch < 2; ++ch)
+        for (int ch = 0; ch < graphChannels; ++ch)
             rendered.copyFrom (ch, static_cast<int> (position),
-                               block, juce::jmin (ch, graphChannels - 1), 0, thisBlock);
+                               block, ch, 0, thisBlock);
 
         position += thisBlock;
     }

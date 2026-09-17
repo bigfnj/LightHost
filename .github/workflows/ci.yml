@@ -73,7 +73,16 @@ jobs:
       - name: Configure (Ninja Release preset)
         # Pin the make program to the stable apt path so the generator can never
         # latch onto get-cmake's temp-dir ninja.
-        run: cmake --preset ninja-release -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja
+        #
+        # REQUIRE_SMOKE_TESTS turns a missing xvfb-run into a configure failure.
+        # Without it, losing xvfb registered none of the three smoke tests and
+        # ctest reported "100% tests passed" having run one test instead of four
+        # -- the failure the apt guard above is written against, reached by any
+        # route other than an empty package list.
+        run: >-
+          cmake --preset ninja-release
+          -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja
+          -DLIGHTHOST_REQUIRE_SMOKE_TESTS=ON
 
       - name: Build
         run: cmake --build build/ninja-release -j$(nproc)

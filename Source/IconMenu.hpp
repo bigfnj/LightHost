@@ -110,7 +110,18 @@ private:
     bool applyInitiatedLoad = false;
     /** Asks first, then calls deletePluginStates() if the answer is yes. */
     void confirmDeletePluginStates();
-    void deletePluginStates();
+
+    /** Deletes every stored preset, and returns how many refused to go.
+
+        Returns a count rather than void because the caller used to announce
+        "Deleted saved plugin states" whatever happened. Vault::erase reports
+        false when deleteFile() fails -- an antivirus or backup agent holding
+        the .lhs open is the realistic cause on Windows -- and discarding that
+        made a run where every delete failed log identically to one where all
+        of them succeeded, behind the one dialog in the app that takes trouble
+        to warn the user first.
+    */
+    [[nodiscard]] int deletePluginStates();
     void setIcon();
     void handleDeletePlugin (int index);
     void handleBypassPlugin (int index);
@@ -347,6 +358,22 @@ private:
         directory with the primary configuration.
     */
     [[nodiscard]] lighthost::state::Vault stateVault() const;
+
+    /** Erases one plugin's stored preset and forgets its fingerprint, together.
+
+        The two have to move as a pair, and in this order. lastWrittenState is
+        the in-memory record of what is on disk, so clearing it while the .lhs
+        survived is what made a deleted preset come back: loadActivePlugins
+        reads the vault by identity, finds the file nothing removed, and
+        restores the state the user just asked to destroy.
+
+        Returns false when the file would not go, so callers can count or log
+        it. Vault::erase is [[nodiscard]] and three call sites used to cast it
+        away, which left the orphaned .lhs unreachable for ever -- nothing
+        enumerates the vault directory, so nothing will ever find it again.
+    */
+    [[nodiscard]] bool forgetPluginState (const lighthost::state::Vault& vault,
+                                          const juce::String& identity);
 
     /** One-shot move of pre-5.0.0 base64 state out of the settings document.
         Writes the file first and only then drops the key.

@@ -96,17 +96,23 @@ public:
         of the old format must not discard its copy until this has returned true,
         or a failed write becomes lost user state.
 
-        An empty block erases instead of writing, so clearing a preset leaves no
-        file behind rather than an empty one.
+        An empty block is refused, not written and not treated as an erase.
+        Clearing is erase()'s job and has to stay a separate verb. This used to
+        erase, and the only production caller that can arrive here with an empty
+        block is savePluginStates, which gets one when a plugin's
+        getStateInformation fails transiently -- a VST2 getChunk that returned
+        nothing, or a plugin in a bad state. Reading that as "the user cleared
+        the preset" deleted the good .lhs AND returned true, so the save path
+        recorded a success, updated lastWrittenState and dropped the pre-5.0.0
+        blob as well. Both copies gone, nothing logged. restoreInto already
+        treats an empty block as "nothing stored" and refuses to overwrite; the
+        two halves now agree on what empty means.
     */
     [[nodiscard]] bool write (const juce::String& identity,
                               const juce::MemoryBlock& state) const
     {
-        if (identity.isEmpty())
+        if (identity.isEmpty() || state.getSize() == 0)
             return false;
-
-        if (state.getSize() == 0)
-            return erase (identity);
 
         if (! directory.createDirectory())
             return false;
@@ -126,13 +132,38 @@ public:
             if (! out.write (magic, static_cast<size_t> (magicLength)))
                 return false;
 
-            // Scoped so the compressor is flushed and closed before the file
-            // stream it writes through goes away. GZIPCompressorOutputStream
-            // closes on flush(), so letting it destruct is the only correct
-            // order here.
-            juce::GZIPCompressorOutputStream gzip (out);
+            {
+                // Scoped INSIDE `out`, not beside it. GZIPCompressorOutputStream
+                // writes its deflate tail from its destructor, via
+                // GZIPCompressorHelper::finish, which is
+                // `while (! finished) doNextBlock (...)` with every return value
+                // discarded -- so the last bytes of every file used to be written
+                // with nobody checking, and then overwriteTargetFileWithTemporary
+                // renamed a truncated file over the good one and returned true. A
+                // same-volume rename needs no free space, so a full disk hit
+                // exactly that path.
+                //
+                // The gzip.write check below cannot stand in for this. zlib
+                // buffers with Z_NO_FLUSH, so for any state small enough that
+                // deflate emits nothing before Z_FINISH, gzip.write returns true
+                // having put zero bytes on disk and the whole stream is written
+                // in the unchecked destructor flush.
+                juce::GZIPCompressorOutputStream gzip (out);
 
-            if (! gzip.write (state.getData(), state.getSize()))
+                if (! gzip.write (state.getData(), state.getSize()))
+                    return false;
+            }
+
+            // flush() before getStatus(): FileOutputStream buffers, so bytes the
+            // deflate tail handed it may still be unwritten here, and its own
+            // destructor would flush them after the last moment we can look.
+            // flush() is flushBuffer() plus FlushFileBuffers, and both record a
+            // failure in `status`. Saves are already rare -- savePluginStates
+            // fingerprints and skips unchanged state -- so the forced flush costs
+            // nothing measurable and makes the durability claim above true.
+            out.flush();
+
+            if (out.getStatus().failed())
                 return false;
         }
 
@@ -141,9 +172,20 @@ public:
 
     /** Reads the state for one identity.
 
-        An empty block means "nothing usable stored". Absent, truncated and
-        wrong-magic are deliberately not distinguished: every caller treats them
-        the same way, as a plugin that starts at its factory defaults.
+        An empty block means "nothing usable stored". Absent and wrong-magic are
+        deliberately not distinguished: both produce an empty block, and every
+        caller treats that as a plugin starting at its factory defaults.
+
+        Truncation is NOT in that set, and this comment used to claim it was. A
+        file cut mid-stream decompresses to whatever deflate had already emitted,
+        readIntoMemoryBlock appends it, and restorePluginState hands that partial
+        blob to setStateInformation -- a plugin configured from half its preset
+        rather than reset to defaults. Detecting it needs a length or checksum in
+        the header, which is a format change; the gzip trailer cannot stand in,
+        because GZIPDecompressorInputStream::isExhausted() folds error, clean end
+        and EOF into one bool and the helper's own `finished` flag is private.
+        Filed in BACKLOG.md. The write path is where truncated files came from,
+        and that is now checked, so this is the residue rather than the cause.
     */
     [[nodiscard]] juce::MemoryBlock read (const juce::String& identity) const
     {
