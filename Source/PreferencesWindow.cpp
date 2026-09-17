@@ -1185,7 +1185,8 @@ public:
         lighthost::metering::Meter* outputMeterToUse,
         std::function<void (bool)> onSignalViewToggled,
         std::function<lighthost::metering::Meter* (int)> probeMeterAt,
-        std::function<std::vector<juce::String>()> committedChainNames)
+        std::function<std::vector<juce::String>()> committedChainNames,
+        std::function<void (const juce::String&, const juce::String&)> onDevicesChosen)
         : deviceManager (dm),
           knownPlugins   (knownPlugins_),
           laneTrim       (std::move (laneTrimIn)),
@@ -1358,6 +1359,7 @@ public:
         onSignalViewToggledFn  = std::move (onSignalViewToggled);
         probeMeterAtFn         = std::move (probeMeterAt);
         committedChainNamesFn  = std::move (committedChainNames);
+        onDevicesChosenFn      = std::move (onDevicesChosen);
 
         // Added AFTER the section label so it is in front of it: JUCE paints and
         // hit-tests later children on top, and SectionLabel would otherwise
@@ -1818,6 +1820,7 @@ private:
     std::function<void (bool)> onSignalViewToggledFn;
     std::function<lighthost::metering::Meter* (int)> probeMeterAtFn;
     std::function<std::vector<juce::String>()> committedChainNamesFn;
+    std::function<void (const juce::String&, const juce::String&)> onDevicesChosenFn;
 
     // Apply button, version label, and the transient Apply confirmation
     juce::TextButton applyButton;
@@ -2085,6 +2088,19 @@ private:
                 {
                     juce::Logger::writeToLog ("Preferences: setAudioDeviceSetup threw unknown exception");
                 }
+
+                // Recorded AFTER the request goes in, and deliberately from
+                // the combo snapshots rather than from the setup that came
+                // back: setAudioDeviceSetup may have fallen back, and what
+                // belongs in the record is what was asked for. It is the only
+                // thing that can later say a substitution happened.
+                //
+                // setup.inputDeviceName rather than inName, because the guards
+                // above drop a name the device type does not offer and a
+                // placeholder like "(no input devices)"; recording a name that
+                // was never requestable would report a substitution for ever.
+                if (safe != nullptr && safe->onDevicesChosenFn)
+                    safe->onDevicesChosenFn (setup.inputDeviceName, setup.outputDeviceName);
 
                 // 3. Plugin chain + bypass states
                 if (safe->onApplyFn) safe->onApplyFn (chain, bypass, lanes);
@@ -2548,6 +2564,8 @@ PreferencesWindow::PreferencesWindow (
     std::function<void (bool enabled)> onSignalViewToggled,
     std::function<lighthost::metering::Meter* (int index)> probeMeterAt,
     std::function<std::vector<juce::String>()> committedChainNames,
+    std::function<void (const juce::String& inputName,
+                        const juce::String& outputName)> onDevicesChosen,
     std::function<void()> onClose)
     : DocumentWindow ("Preferences",
                       juce::LookAndFeel::getDefaultLookAndFeel()
@@ -2572,7 +2590,8 @@ PreferencesWindow::PreferencesWindow (
             setSignalViewOpen (enabled);
         },
         std::move (probeMeterAt),
-        std::move (committedChainNames));
+        std::move (committedChainNames),
+        std::move (onDevicesChosen));
 
     // Height budget. The authority is fixedLayoutHeight(), not this comment --
     // which had drifted 34px out of date within one release of being written,

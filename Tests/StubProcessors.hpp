@@ -17,11 +17,11 @@ namespace lighthost::test
     class LatencyStub final : public juce::AudioProcessor
     {
     public:
-        explicit LatencyStub (int latencySamples)
+        explicit LatencyStub (int latencyInSamples)
             : AudioProcessor (BusesProperties()
                                   .withInput  ("In",  juce::AudioChannelSet::stereo(), true)
                                   .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
-              latency (latencySamples)
+              latency (latencyInSamples)
         {
             setLatencySamples (latency);
         }
@@ -76,6 +76,12 @@ namespace lighthost::test
             JUCE asserts on this in AudioProcessor::processBypassed. Honouring the
             contract here is what makes this stub a fair model of a real plugin.
         */
+        // Same reason as the processBlock one above: overriding only the float
+        // form hides AudioProcessor's double form, and GCC says so with
+        // -Woverloaded-virtual. Nothing here processes doubles, so bringing the
+        // base version into scope is the whole fix.
+        using juce::AudioProcessor::processBlockBypassed;
+
         void processBlockBypassed (juce::AudioBuffer<float>& data, juce::MidiBuffer& midi) override
         {
             applyDelay (data, midi);
@@ -134,14 +140,14 @@ namespace lighthost::test
     class BypassParameterStub final : public juce::AudioProcessor
     {
     public:
-        explicit BypassParameterStub (int latencySamples)
+        explicit BypassParameterStub (int latencyInSamples)
             : AudioProcessor (BusesProperties()
                                   .withInput  ("In",  juce::AudioChannelSet::stereo(), true)
                                   .withOutput ("Out", juce::AudioChannelSet::stereo(), true)),
-              delay (latencySamples)
+              delay (latencyInSamples)
         {
             addParameter (bypass = new juce::AudioParameterBool ({ "bypass", 1 }, "Bypass", false));
-            setLatencySamples (latencySamples);
+            setLatencySamples (latencyInSamples);
         }
 
         juce::AudioProcessorParameter* getBypassParameter() const override { return bypass; }

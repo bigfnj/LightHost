@@ -140,7 +140,13 @@ target_compile_definitions(LightHost PRIVATE
 )
 
 # ── VST2 SDK include path ───────────────────────────────────────────────────────
-target_include_directories(LightHost PRIVATE
+# SYSTEM, so the compiler stops diagnosing code we are not allowed to change.
+# These are Steinberg's 2006 headers under their own licence: aeffect.h uses
+# strncpy and strncat and a __int64 extension token, which Clang warns about
+# three times each. Left as ordinary includes they would be the only thing
+# standing between this project and -Werror, and the fix would have to be
+# either suppressing those warnings everywhere or editing a vendored SDK.
+target_include_directories(LightHost SYSTEM PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/lib/vstsdk2.4"
 )
 
@@ -170,14 +176,24 @@ if(WIN32)
         NTDDI_VERSION=0x0A00000C
     )
 
-    # Enable latest MSVC features
-    target_compile_options(LightHost PRIVATE
-        /W4             # Warning level 4
-        /permissive-    # Standards conformance
-        /Zc:__cplusplus # Report correct __cplusplus value
-        /Zc:preprocessor # Conforming preprocessor
-        /utf-8          # Source and execution charset UTF-8
-    )
+    # Enable latest MSVC features.
+    #
+    # Guarded on MSVC, not on WIN32. These are slash-form flags that only the
+    # MSVC driver understands, and clang++ on Windows is WIN32 too -- it takes
+    # GNU-form flags and rejects "/utf-8" as a missing input file. So the
+    # clang-release preset had never once built here: it died on the first
+    # translation unit, and BACKLOG.md was recommending it as the way to catch
+    # MSVC-only divergence before a push. CMake sets MSVC for cl and for
+    # clang-cl, which are exactly the drivers that accept these.
+    if(MSVC)
+        target_compile_options(LightHost PRIVATE
+            /W4             # Warning level 4
+            /permissive-    # Standards conformance
+            /Zc:__cplusplus # Report correct __cplusplus value
+            /Zc:preprocessor # Conforming preprocessor
+            /utf-8          # Source and execution charset UTF-8
+        )
+    endif()
 
     # Link Windows 11 APIs
     target_link_libraries(LightHost PRIVATE

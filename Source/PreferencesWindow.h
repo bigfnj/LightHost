@@ -79,6 +79,17 @@ public:
             committed. Beside probeMeterAt because the two have to be read
             together or not at all. */
         std::function<std::vector<juce::String>()> committedChainNames,
+        /** Told the device names the user picked, when Apply commits them.
+
+            This is the only place in the application that knows a device name
+            was CHOSEN rather than arrived at. JUCE records one device name for
+            a role and nothing else, and the stored DEVICESETUP is rewritten
+            with whatever device actually opened -- so after a fallback, the
+            request the substitution check compares against is gone. Reported
+            from here, at Apply, because these two strings came off the combo
+            boxes and nothing else in the device path can say that. */
+        std::function<void (const juce::String& inputName,
+                            const juce::String& outputName)> onDevicesChosen,
         std::function<void()> onClose);
 
     ~PreferencesWindow() override;

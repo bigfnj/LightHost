@@ -150,6 +150,16 @@ public:
     */
     [[nodiscard]] lighthost::metering::Meter* getProbeMeter (int index);
 
+    /** The committed chain's plugin names, in the order the probes are indexed.
+
+        Exists so the signal view can label a row from the same chain the row's
+        meter comes from. The Preferences list holds a STAGED chain the user can
+        reorder or delete without pressing Apply, and labelling from that while
+        metering from this produced rows named after one plugin and fed by
+        another.
+    */
+    [[nodiscard]] std::vector<juce::String> getCommittedChainNames();
+
     /** The device meters, for the Preferences UI. Both outlive any Preferences
         window, because IconMenu owns it.
     */

@@ -816,6 +816,23 @@ lighthost::metering::Meter* IconMenu::getProbeMeter (int index)
     return &probeMeters[static_cast<size_t> (index)];
 }
 
+std::vector<juce::String> IconMenu::getCommittedChainNames()
+{
+    // getTimeSortedList is the same source reconnectGraph walks when it decides
+    // which chain position carries which probe, so index i here and probe i
+    // there are the same plugin by construction rather than by two paths
+    // happening to agree.
+    const auto sorted = getTimeSortedList();
+
+    std::vector<juce::String> names;
+    names.reserve (static_cast<size_t> (sorted->size()));
+
+    for (const auto& pd : *sorted)
+        names.push_back (pd.name);
+
+    return names;
+}
+
 lighthost::gain::Processor* IconMenu::laneGainProcessor (int lane)
 {
     if (auto* node = graph.getNodeForId (laneGainNodeId (lane)))
@@ -1957,6 +1974,21 @@ void IconMenu::showPreferences()
                 return im->getProbeMeter (index);
 
             return nullptr;
+        },
+        [safe]() -> std::vector<juce::String>
+        {
+            if (auto* im = safe.getComponent())
+                return im->getCommittedChainNames();
+
+            return {};
+        },
+        [safe] (const juce::String& inputName, const juce::String& outputName)
+        {
+            // Only Apply reaches here, which is the whole point: this is the
+            // one moment we know a device name came from the user rather than
+            // from JUCE settling on a fallback.
+            if (auto* im = safe.getComponent())
+                im->recordRequestedDevices (inputName, outputName);
         },
         [safe]()
         {
