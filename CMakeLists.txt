@@ -91,6 +91,7 @@ target_sources(LightHost PRIVATE
     Source/Lanes.hpp
     Source/NodeIds.hpp
     Source/ConfirmPolicy.hpp
+    Source/HostServices.hpp
     Source/DevicePolicy.hpp
     Source/PluginScan.hpp
     Source/SettingsKeys.hpp
@@ -170,9 +171,21 @@ target_link_libraries(LightHost PRIVATE
 # ── Platform-specific settings ──────────────────────────────────────────────────
 if(WIN32)
     # Target Windows 11 22H2+ (build 10.0.22621.0)
+    #
+    # WINVER and _WIN32_WINNT were here too, at 0x0A00, and were redundant:
+    # juce_BasicNativeHeaders.h defines both to _WIN32_WINNT_WIN10 -- the same
+    # value -- unconditionally, before it includes windows.h. Ours arrived
+    # first from the command line, so every translation unit redefined them.
+    # MSVC says nothing about that; Clang calls it -Wmacro-redefined, which is
+    # how it surfaced the moment warnings became errors.
+    #
+    # Relying on JUCE is safe here rather than merely tidy: the one place that
+    # includes <windows.h> directly, IconMenu.cpp, does so after its JUCE
+    # includes, so the macros are already set by then.
+    #
+    # NTDDI_VERSION stays, because JUCE does not set it, and it is the one of
+    # the three that actually pins 22H2 rather than "the Windows 10 family".
     target_compile_definitions(LightHost PRIVATE
-        WINVER=0x0A00
-        _WIN32_WINNT=0x0A00
         NTDDI_VERSION=0x0A00000C
     )
 
@@ -195,6 +208,24 @@ if(WIN32)
         )
     endif()
 
+    # An enumerator a switch does not handle, at warning level 1.
+    #
+    # Not on by default at ANY level: C4062 is off unless asked for by name, so
+    # MSVC was the one compiler here that said nothing about a missing case.
+    # GCC and Clang have warned all along, because JUCE's recommended flags
+    # already pass -Wswitch-enum -- which means the silent-enumerator failure
+    # PluginWindow.h's comment describes could only ever have happened on the
+    # machine this project is developed on, and would have been caught by CI.
+    # That is the wrong way round: catch it where it is written.
+    #
+    # /w14062 rather than /w14061, deliberately. 4061 fires for an enumerator
+    # covered only by a default label, which is a legitimate pattern; 4062
+    # fires only when there is no default AND no case, which is the one this
+    # codebase relies on for its derived settings keys.
+    if(MSVC)
+        target_compile_options(LightHost PRIVATE /w14062)
+    endif()
+
     # Link Windows 11 APIs
     target_link_libraries(LightHost PRIVATE
         dwmapi         # Desktop Window Manager (DWM) for Win11 visuals
@@ -210,6 +241,32 @@ if(MSVC)
         $<$<CONFIG:Release>:/LTCG /OPT:REF /OPT:ICF>
     )
 endif()
+
+# ── Warnings are errors ─────────────────────────────────────────────────────────
+# Defined here and applied to both of our targets below, never to JUCE or to the
+# VST2 SDK -- those are vendored, and failing a build on a diagnostic in code we
+# are not going to edit would only teach someone to switch this off.
+#
+# WHY. /W4 and JUCE's warning flags were already on across three platforms, so
+# every one of these was already being printed; nothing read them. Turning them
+# into errors is what makes the compiler a gate rather than a commentator, and
+# the class of thing it catches is not hypothetical here: 5.2.0 shipped a
+# release-blocking break because MSVC resolved an operator<< overload that GCC
+# and Clang refused, and that arrived from CI after the push.
+#
+# WHAT IT COST. Nine diagnostics, all real and all small: three from GCC (a
+# constructor parameter shadowing AudioProcessor's own latencySamples, twice,
+# and processBlockBypassed hiding its double overload) and six from Clang (two
+# free functions with no declaration in scope, three shadowed names, and an
+# int-to-size_t-and-back round trip on a juce::Array index). None was a bug that
+# had bitten. One -- getLogFile declared separately in the file that used it --
+# was a signature nothing was checking.
+#
+# WHEN THIS BITES YOU. A new compiler version introduces a warning and the build
+# stops. Fix the warning. Do not reach for the switch: a compiler that is
+# allowed to be ignored is not a gate, and the warnings had been accumulating
+# unread for exactly that reason.
+set(LIGHTHOST_WARNINGS_AS_ERRORS $<IF:$<BOOL:${MSVC}>,/WX,-Werror>)
 
 # ── Unit tests ──────────────────────────────────────────────────────────────────
 # Console app driven by juce::UnitTestRunner — no third-party test framework, as
@@ -276,6 +333,12 @@ if(LIGHTHOST_BUILD_TESTS)
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
     )
+
+    # Same switch warning the app gets, for the same reason: the stub
+    # processors switch over enums too.
+    if(MSVC)
+        target_compile_options(LightHostTests PRIVATE /w14062)
+    endif()
 
     # One CTest entry runs the whole binary, which runs every category in
     # Tests/TestMain.cpp. Named for what it is rather than for one of the
@@ -365,3 +428,46 @@ endif()
 
 # ── CMake presets integration ───────────────────────────────────────────────────
 # Use cmake --preset=default to build, or cmake --preset=release for optimised
+
+# ── Apply the warning gate ──────────────────────────────────────────────────────
+# Last, so every source file is known, and PER FILE rather than per target.
+#
+# Per target does not work here, and the difference is not cosmetic. JUCE's
+# CMake adds its module .cpp files to OUR target rather than building a library
+# of its own -- the object files land in CMakeFiles/LightHost.dir/lib/juce/...
+# -- so target_compile_options(LightHost PRIVATE -Werror) makes every warning
+# in vendored JUCE an error too. Measured, not assumed: it stopped the build on
+# juce_VSTPluginFormat.cpp's unused private field 'alreadyInside', which is
+# Clang's complaint about somebody else's code and would have failed the macOS
+# job after the push.
+#
+# Failing on a diagnostic in code the project is not going to edit teaches one
+# thing only, which is to turn the switch off. So the flag goes on the files
+# this repository is responsible for, and nowhere else.
+#
+# LIGHTHOST_WARNINGS_AS_ERRORS is defined above, with what it cost to turn on.
+option(LIGHTHOST_WERROR "Treat compiler warnings as errors in Light Host's own sources" ON)
+
+# Only .cpp files: the headers listed in target_sources are there so they show
+# up in an IDE, and a header is diagnosed as part of whichever .cpp includes it.
+set(LIGHTHOST_OWN_SOURCES
+    Source/HostStartup.cpp
+    Source/IconMenu.cpp
+    Source/PluginWindow.cpp
+    Source/PreferencesWindow.cpp
+)
+
+if(LIGHTHOST_BUILD_TESTS)
+    file(GLOB LIGHTHOST_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Tests/*.cpp")
+    list(APPEND LIGHTHOST_OWN_SOURCES ${LIGHTHOST_TEST_SOURCES})
+endif()
+
+if(LIGHTHOST_WERROR)
+    set_source_files_properties(${LIGHTHOST_OWN_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "${LIGHTHOST_WARNINGS_AS_ERRORS}")
+else()
+    message(STATUS
+        "LIGHTHOST_WERROR is OFF: warnings will not fail the build. This is a "
+        "local escape hatch for bisecting against an older compiler, not a "
+        "configuration to commit or to use in CI.")
+endif()

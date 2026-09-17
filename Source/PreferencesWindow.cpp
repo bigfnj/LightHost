@@ -1,5 +1,6 @@
 #include "PreferencesWindow.h"
 #include "GainProcessor.hpp"
+#include "HostServices.hpp"
 #include "LookAndFeel.hpp"
 #include "OfflineRender.hpp"
 #include "PluginChainStore.hpp"
@@ -12,8 +13,7 @@ using namespace juce;
 
 namespace metrics = lighthost::ui::metrics;
 
-juce::ApplicationProperties& getAppProperties();
-juce::File getLogFile();
+// Both declared in IconMenu.hpp, which this file already includes.
 
 //==============================================================================
 // SectionLabel
@@ -492,8 +492,10 @@ private:
         if (proportion > 0.0f)
         {
             g.setColour (meterscale::colourFor (row.peakDb));
-            g.fillRoundedRectangle (bar.toFloat().withWidth (
-                                        juce::jmax (2.0f, bar.getWidth() * proportion)), 2.0f);
+            const auto barArea = bar.toFloat();
+
+            g.fillRoundedRectangle (barArea.withWidth (
+                                        juce::jmax (2.0f, barArea.getWidth() * proportion)), 2.0f);
         }
 
         content.removeFromTop (2);
@@ -2433,11 +2435,19 @@ private:
         juce::Component::SafePointer<PreferencesContentComponent> safe (this);
         menu.showMenuAsync (
             juce::PopupMenu::Options{}.withTargetComponent (addPluginButton),
-            [safe, types = std::move (types)] (int result) mutable
+            // "captured" rather than reusing the name: an init-capture that
+            // shadows the local it moves from compiles, and then the next
+            // person to add a line inside the lambda cannot tell which one
+            // they are touching.
+            [safe, captured = std::move (types)] (int result) mutable
             {
                 if (safe == nullptr) return;
-                if (result <= 0 || result > static_cast<int> (types.size())) return;
-                safe->chainList.items.push_back (types[static_cast<size_t> (result - 1)]);
+                // juce::Array counts and indexes with int, not size_t, so the
+                // casts that used to be here converted an int to size_t and
+                // straight back again -- narrowing on the return trip, which is
+                // what Clang's -Wshorten-64-to-32 was pointing at.
+                if (result <= 0 || result > captured.size()) return;
+                safe->chainList.items.push_back (captured[result - 1]);
                 safe->chainList.bypassed.push_back (false);
                 safe->chainList.syncBypassedSize();  // extends lanes too — keeps the trio in lockstep
                 safe->updateChainListHeight();
@@ -2582,10 +2592,10 @@ PreferencesWindow::PreferencesWindow (
         // The host is told first so the probes exist, then the column is filled
         // from them. Doing it the other way round would read every meter before
         // it had been created.
-        [this, onSignalViewToggled = std::move (onSignalViewToggled)] (bool enabled)
+        [this, notifyHost = std::move (onSignalViewToggled)] (bool enabled)
         {
-            if (onSignalViewToggled)
-                onSignalViewToggled (enabled);
+            if (notifyHost)
+                notifyHost (enabled);
 
             setSignalViewOpen (enabled);
         },

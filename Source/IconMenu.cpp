@@ -112,10 +112,13 @@ private:
             // Replace the built-in Options button onClick so we can append our item.
             getOptionsButton().onClick = [this]
             {
-                auto menu = createOptionsMenu();
-                menu.addSeparator();
-                menu.addItem (kScanCustomFolderID, "Scan Custom Folder...");
-                menu.showMenuAsync (
+                // Not "menu": IconMenu has a field of that name, and a local
+                // shadowing it is the kind of thing that reads correctly right
+                // up until someone edits the lambda and means the other one.
+                auto optionsMenu = createOptionsMenu();
+                optionsMenu.addSeparator();
+                optionsMenu.addItem (kScanCustomFolderID, "Scan Custom Folder...");
+                optionsMenu.showMenuAsync (
                     PopupMenu::Options()
                         .withDeletionCheck (*this)
                         .withTargetComponent (getOptionsButton()),

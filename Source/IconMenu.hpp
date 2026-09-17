@@ -7,6 +7,7 @@
 // moving it only puts the include where the use is. NodeIds.hpp itself stays,
 // because maxProbes sizes a member array below.
 #include "GainProcessor.hpp"
+#include "HostServices.hpp"
 #include "DeviceTap.hpp"
 #include "NodeIds.hpp"
 #include "PluginStateVault.hpp"
@@ -21,7 +22,7 @@
 #include <set>
 #include <vector>
 
-juce::ApplicationProperties& getAppProperties();
+// getAppProperties and getLogFile live in HostServices.hpp, included above.
 
 class PreferencesWindow;
 
