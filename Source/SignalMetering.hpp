@@ -69,11 +69,42 @@ namespace lighthost::metering
     */
     static constexpr float kRmsCoefficient = 0.30f;
 
-    /** How fast the held peak falls, per block, as a linear factor.
+    /** How fast a held peak falls. THE one owner of that rate.
 
-        0.9496 is about 0.45 dB per block, or 45 dB per second at a 480-sample
-        block and 48 kHz -- fast enough to follow a level down, slow enough that
-        a transient stays readable for a moment after it has gone.
+        Fast enough to follow a level down, slow enough that a transient stays
+        readable for a moment after it has gone.
+
+        It is here rather than beside either of the two things that fall,
+        because up to 5.2.0 it was written out twice in different units -- as
+        the per-block factor below, and again in PreferencesWindow.cpp as a
+        per-tick dB step -- with both comments claiming 45 dB per second and
+        nothing holding them to it. Drift means the bar the UI draws falls at a
+        different rate from the peak it is drawing, so bars sag below the held
+        peak or stick above it. That is the symptom that made 5.1.0 move the
+        ballistics into Meter in the first place.
+    */
+    static constexpr float kPeakFallDbPerSecond = 45.0f;
+
+    /** The block size and sample rate kPeakDecayPerBlock is quoted against.
+
+        A per-block factor is only a rate once you say how long a block is, and
+        that number belongs in code rather than in prose: this pair was a
+        sentence in a comment, so nothing could check it. Not the real block
+        size or rate, which are whatever the device gives us -- only the
+        reference the literal below was chosen at. Tests/SignalMeteringTests.cpp
+        reads them.
+    */
+    static constexpr int    kReferenceBlockSize  = 480;
+    static constexpr double kReferenceSampleRate = 48000.0;
+
+    /** kPeakFallDbPerSecond expressed as a per-block linear factor, which is
+        what the audio thread can apply without a log.
+
+        A literal rather than a derivation, because deriving it would need the
+        reference pair above to be the truth about the running device, and it is
+        not. Tests/SignalMeteringTests.cpp asserts the equivalence instead, so
+        changing one rate without the other fails a test rather than quietly
+        desynchronising the UI from the meter.
     */
     static constexpr float kPeakDecayPerBlock = 0.9496f;
 
@@ -318,7 +349,15 @@ namespace lighthost::metering
 
         using juce::AudioProcessor::processBlock;
 
-        void processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer&) override
+        /** noexcept because Meter::measure is, and it is the only thing called.
+
+            Narrowing an override this way is a promise the audio thread can
+            use, and it is safe HERE precisely because nothing third-party is
+            reachable from it. DeviceTap's device callback deliberately keeps
+            the opposite promise: it forwards into plugin code, where noexcept
+            would convert a plugin's throw into std::terminate.
+        */
+        void processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer&) noexcept override
         {
             meter.measure (audio);
         }

@@ -70,6 +70,15 @@ public:
             time the view is refreshed rather than cached, because the probes
             come and go with the panel. */
         std::function<lighthost::metering::Meter* (int index)> probeMeterAt,
+        /** The COMMITTED chain's plugin names, in display order -- the same
+            order and indexing probeMeterAt uses.
+
+            The signal view labels its rows from this rather than from the
+            staged list, which the user can reorder or delete from without
+            pressing Apply while the probes stay indexed over what was
+            committed. Beside probeMeterAt because the two have to be read
+            together or not at all. */
+        std::function<std::vector<juce::String>()> committedChainNames,
         std::function<void()> onClose);
 
     ~PreferencesWindow() override;

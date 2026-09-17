@@ -187,6 +187,67 @@ public:
             expect (later > atPeak - 20.0f, "the peak fell far too fast to read");
         }
 
+        beginTest ("the per-block factor still means kPeakFallDbPerSecond");
+        {
+            // One rate, written in two units. kPeakFallDbPerSecond owns it;
+            // kPeakDecayPerBlock is the linear factor the audio thread can
+            // apply without a log, and it cannot be derived from the owner
+            // because a per-block factor needs an assumed block size and sample
+            // rate. So this is the only thing stopping the pair drifting.
+            // meterscale::fallDbPerTick, the third expression of the same rate,
+            // IS derived and cannot drift.
+            //
+            // Drift is not a crash: the bar the UI draws simply falls at a
+            // different rate from the held peak it is drawing, so bars sag
+            // below the number beside them or stick above a level that has
+            // already gone.
+            constexpr double blocksPerSecond =
+                lighthost::metering::kReferenceSampleRate
+                    / lighthost::metering::kReferenceBlockSize;
+
+            expectWithinAbsoluteError (blocksPerSecond, 100.0, 1.0e-9,
+                                       "the reference pair no longer gives a round 100 "
+                                       "blocks a second, so the arithmetic below is not "
+                                       "the arithmetic the comments describe");
+
+            const double dbPerBlock = 20.0 * std::log10 (
+                static_cast<double> (lighthost::metering::kPeakDecayPerBlock));
+
+            // 0.15 dB per second. A four-decimal linear factor can only be
+            // steered in steps of about 0.09 dB per second, so the tolerance
+            // has to clear one of those grains -- and it deliberately clears
+            // barely more than one, which is what makes a wrong digit in the
+            // last place fail: 0.9497 lands 0.17 out.
+            expectWithinAbsoluteError (dbPerBlock * blocksPerSecond,
+                                       -static_cast<double> (lighthost::metering::kPeakFallDbPerSecond),
+                                       0.15,
+                                       "the block factor and the per-second rate have drifted, "
+                                       "so the UI and the meter no longer fall together");
+        }
+
+        beginTest ("a held peak really does fall at that rate");
+        {
+            // The arithmetic above says the two constants agree. This says the
+            // factor is applied once per block, which is the other half of the
+            // claim and the half arithmetic cannot check.
+            Meter meter;
+            feedSingleSpike (meter, 1.0f);
+            expectWithinAbsoluteError (meter.read().peakDb, 0.0f, 0.05f);
+
+            constexpr int blocksInOneSecond =
+                static_cast<int> (lighthost::metering::kReferenceSampleRate)
+                    / lighthost::metering::kReferenceBlockSize;
+
+            for (int i = 0; i < blocksInOneSecond; ++i)
+                feedConstant (meter, 0.0f);
+
+            expectWithinAbsoluteError (meter.read().peakDb,
+                                       -lighthost::metering::kPeakFallDbPerSecond,
+                                       0.15f,
+                                       "one reference second of silence did not fall by the "
+                                       "rate the UI draws it falling at");
+        }
+
         beginTest ("RMS stops being reported once nothing is watching");
         {
             // It used to latch, so a reader arriving later was shown a figure
