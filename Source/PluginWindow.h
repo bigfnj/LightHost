@@ -54,8 +54,23 @@ private:
     {
         case PluginWindow::Normal:  return "Normal";
         case PluginWindow::Generic: return "Generic";
-        default:                    return {};
     }
+
+    // Present only because C++ requires a return here; no declared enumerator
+    // reaches it. It is deliberately NOT a `default:` label. A default is what
+    // tells the compiler the switch is complete, so a third WindowFormatType
+    // would compile in silence and arrive here, and the keys below would be
+    // built from an empty string: one shared "uiLastX_" for every window type
+    // added after these two.
+    //
+    // Which compiler that actually earns a warning from is worth knowing rather
+    // than assuming, so it was measured on 2026-09-17. With no default, clang
+    // -Wall warns (-Wswitch); with one, only -Wswitch-enum does, and JUCE's
+    // recommended flags pass that to both clang and GCC. MSVC warns NEITHER way
+    // at /W4 -- C4062 is off by default and wants /w14062, which
+    // CMakeLists.txt does not set. Adding it is what would turn a missing
+    // enumerator into the hard failure /WX is meant to make it.
+    return {};
 }
 
 // Where a window remembers its position, per window type. Read back by the

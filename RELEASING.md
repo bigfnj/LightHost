@@ -36,13 +36,19 @@ push to `main`. It is not the release workflow, but it is the same compilers and
 the same test suite, so a green CI run on the exact commit being tagged is the
 evidence that the release build will get that far.
 
-**Read the run's conclusion; do not trust `gh run watch --exit-status`.** It
-returned exit code 0 for two separate runs that had failed, on 2026-09-16. Ask
-for the field instead:
+**Ask `tools/ci-status.sh`; do not trust `gh run watch --exit-status`.** That
+command returned exit code 0 for two separate runs that had failed, on
+2026-09-16, and both were caught only because someone looked.
 
 ```bash
-gh run view <run-id> --json conclusion,jobs --jq '"run: \(.conclusion)", (.jobs[] | "  \(.name): \(.conclusion)")'
+tools/ci-status.sh                # HEAD
+tools/ci-status.sh <ref-or-sha>   # the commit you are about to tag
 ```
+
+It reads the run's `conclusion` field and every job's, exits 0 only when the
+run's is exactly `success`, waits for a run still in progress, and fails on a
+commit that has no run at all — no evidence is not success. Reading the field by
+hand does the same job, for as long as you remember to do it.
 
 A gate that reports success on a failed run is worse than no gate, and this is
 the one gate standing between you and a repeat of v5.0.1.
@@ -86,7 +92,8 @@ ambiguous `operator<<` overload MSVC resolves and GCC and Clang refuse.
 
 4. **Run the manual checks** in the next section, on the binary built in step 2.
 
-5. **Commit, push `main`, and wait for CI to pass on that commit.** See above.
+5. **Commit, push `main`, and wait for CI to pass on that commit.** Run
+   `tools/ci-status.sh` and let it tell you; see above for why not by eye.
 
 6. **Tag and push.**
 

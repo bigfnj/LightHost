@@ -21,9 +21,12 @@
 // does -- Meter::measure, Probe::processBlock and DeviceTap's device callback
 // all do too since 5.1.0, and Source/SignalMetering.hpp states the same rules
 // for them. It was the only one when this was written. It allocates nothing, takes no locks,
-// and does no I/O. The target comes across from the message thread as a relaxed
-// atomic and is ramped, because a gain applied as a step produces a click, and a
-// click is what a user will report as a bug in the plugin they were listening to.
+// and does no I/O. The setting comes across from the message thread as ONE
+// relaxed atomic, in decibels, and is ramped, because a gain applied as a step
+// produces a click, and a click is what a user will report as a bug in the
+// plugin they were listening to. Why one atomic and not a decibel value beside
+// a linear one is in processBlock, and it is a correctness point rather than a
+// tidiness one.
 //
 // The processor reports no latency, so inserting one does not disturb the graph's
 // inter-lane delay compensation.
@@ -48,7 +51,12 @@ namespace lighthost::gain
         return juce::jlimit (kMinDb, kMaxDb, decibels);
     }
 
-    /** True when a trim is close enough to unity that it can be skipped. */
+    /** True when a trim is close enough to unity that it can be skipped.
+
+        The tolerance is in DECIBELS, so the caller has to be holding decibels.
+        processBlock is the only caller and asks it directly; a linear test of
+        its own would be a second rule, and the two do not agree.
+    */
     [[nodiscard]] inline bool isUnity (float decibels) noexcept
     {
         return std::abs (decibels) < 0.001f;
@@ -69,12 +77,16 @@ namespace lighthost::gain
         /** Sets the trim. Safe to call from the message thread while audio runs. */
         void setGainDb (float decibels)
         {
-            const auto clamped = clampDb (decibels);
-            currentDb.store (clamped, std::memory_order_relaxed);
-            targetLinear.store (juce::Decibels::decibelsToGain (clamped, kMinDb),
-                                std::memory_order_relaxed);
+            currentDb.store (clampDb (decibels), std::memory_order_relaxed);
         }
 
+        /** The trim in decibels, as clamped. For tests: nothing shipped reads it
+            back from here, because IconMenu::getLaneGainDb answers from the
+            chain store rather than from the graph. Kept rather than deleted
+            because the clamp above is otherwise observable only by rendering,
+            which would measure the ramp at the same time and no longer be a
+            test of the clamp.
+        */
         [[nodiscard]] float getGainDb() const
         {
             return currentDb.load (std::memory_order_relaxed);
@@ -101,29 +113,58 @@ namespace lighthost::gain
             // Start at the target rather than ramping up from wherever the last
             // session left off: a device change should not fade the lane in.
             smoothed.reset (sampleRate, kRampSeconds);
-            smoothed.setCurrentAndTargetValue (targetLinear.load (std::memory_order_relaxed));
+            rampTargetDb = currentDb.load (std::memory_order_relaxed);
+            smoothed.setCurrentAndTargetValue (juce::Decibels::decibelsToGain (rampTargetDb, kMinDb));
         }
 
         using juce::AudioProcessor::processBlock;
 
         void processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer&) override
         {
-            const auto target = targetLinear.load (std::memory_order_relaxed);
+            const auto db = currentDb.load (std::memory_order_relaxed);
 
-            if (! juce::approximatelyEqual (target, smoothed.getTargetValue()))
-                smoothed.setTargetValue (target);
+            // The decibels are converted here rather than being carried across
+            // as a second, linear atomic beside them. Two atomics written one
+            // after the other can be read apart: a block landing between the
+            // stores sees the new decibels next to the previous linear target,
+            // and if the ramp has already settled on that older target the skip
+            // below fires -- passing a lane the user has just unmuted at full
+            // level for one block. One value cannot disagree with itself.
+            //
+            // The conversion is a pow, and it runs only when the setting has
+            // moved, so at most once per block while a fader is dragged. It
+            // allocates nothing and takes no lock, so the rules at the top of
+            // this file still hold.
+            if (! juce::approximatelyEqual (db, rampTargetDb))
+            {
+                rampTargetDb = db;
+                smoothed.setTargetValue (juce::Decibels::decibelsToGain (db, kMinDb));
+            }
 
             // Settled at unity: the common case, and worth not touching the
-            // buffer for.
-            if (! smoothed.isSmoothing() && juce::approximatelyEqual (target, 1.0f))
+            // buffer for. Asked of isUnity in DECIBELS, not re-derived as a
+            // linear comparison here, because the two rules do not agree:
+            // isUnity (0.0005f) is true and decibelsToGain (0.0005f) is not
+            // approximatelyEqual to 1.0f. The skip therefore discards at most
+            // isUnity's tolerance, 0.001 dB, which is what that tolerance is
+            // for.
+            if (! smoothed.isSmoothing() && isUnity (db))
                 return;
 
             smoothed.applyGain (audio, audio.getNumSamples());
         }
 
     private:
-        std::atomic<float> targetLinear { 1.0f };
-        std::atomic<float> currentDb    { kDefaultDb };
+        /** The setting, and the only copy of it. Read every block. */
+        std::atomic<float> currentDb { kDefaultDb };
+
+        /** What the ramp was last pointed at, so the conversion happens on a
+            change rather than every block. Audio thread only, except in
+            prepareToPlay, which JUCE calls with the graph stopped -- the same
+            condition that lets prepareToPlay touch `smoothed`.
+        */
+        float rampTargetDb = kDefaultDb;
+
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> smoothed;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Processor)

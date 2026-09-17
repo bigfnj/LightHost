@@ -314,6 +314,9 @@ public:
                               getLastYProp (PluginWindow::Generic), -1), 456);
 
             PluginWindow::closeAllCurrentlyOpenWindows();
+            expect (! PluginWindow::containsActiveWindows(),
+                    "the registry is global and shared with every other block, so a "
+                    "window left open here breaks whichever one is appended next");
         }
     }
 };

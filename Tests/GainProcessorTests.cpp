@@ -163,6 +163,28 @@ public:
             expect (! isUnity (0.5f));
             expect (! isUnity (-0.5f));
         }
+
+        beginTest ("the buffer is skipped on the decibel rule, not a linear one");
+        {
+            // isUnity is the rule processBlock asks, and it is a rule about
+            // DECIBELS. 0.0005 dB is inside its tolerance while
+            // decibelsToGain (0.0005f) is 1.0000576, which is not
+            // approximatelyEqual to 1.0f -- so a linear test re-derived in
+            // processBlock would multiply the buffer here and these samples
+            // would not come back untouched. Exact equality is the point: it is
+            // what distinguishes "skipped" from "multiplied by very nearly one".
+            PreparedGain gain (0.0005f);
+            const auto rendered = renderConstant (gain.processor, 0.5f, 2);
+
+            float largestDeparture = 0.0f;
+
+            for (const auto sample : rendered)
+                largestDeparture = juce::jmax (largestDeparture, std::abs (sample - 0.5f));
+
+            expectEquals (largestDeparture, 0.0f,
+                          "the buffer was multiplied rather than skipped, so processBlock "
+                          "is not asking isUnity");
+        }
     }
 };
 
