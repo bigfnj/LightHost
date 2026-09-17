@@ -22,6 +22,14 @@
 // the one surface that is always visible and costs no layout.
 //
 // Message-thread only. Everything that reports here already runs there.
+//
+// There was a clear(), which forgot the remembered problems while leaving the
+// total standing. Nothing shipped ever called it -- the tray tooltip and the
+// Preferences status line both show mostRecent(), and neither offers a dismiss
+// -- so the behaviour its comment described, a cleared sink that still admits
+// something happened earlier, was reachable only from its own test. It is gone
+// rather than kept for a caller that never arrived. A dismiss can bring it back
+// in the commit that needs it.
 //==============================================================================
 namespace lighthost::status
 {
@@ -55,7 +63,13 @@ namespace lighthost::status
         }
 
         [[nodiscard]] bool hasProblem() const noexcept       { return ! problems.empty(); }
-        /** For tests. Nothing shipped reads this. */
+
+        /** How many have been reported, counting the ones the bound in report()
+            has already dropped.
+
+            For tests. Nothing shipped reads this, and it is the only way to
+            tell a dropped report from one that never arrived.
+        */
         [[nodiscard]] int  totalReported() const noexcept    { return total; }
 
         /** The most recent problem, or an empty string if there has been none. */
@@ -64,21 +78,12 @@ namespace lighthost::status
             return problems.empty() ? juce::String() : problems.back().message;
         }
 
-        [[nodiscard]] const std::vector<Problem>& all() const noexcept { return problems; }
+        /** Every remembered problem, oldest first.
 
-        /** Forgets the problems without resetting the total, so a cleared sink
-            still admits that something happened earlier.
+            For tests. The shipped surfaces show mostRecent() only, so the bound
+            report() applies cannot be observed through anything else.
         */
-        void clear()
-        {
-            if (problems.empty())
-                return;
-
-            problems.clear();
-
-            if (onChange != nullptr)
-                onChange();
-        }
+        [[nodiscard]] const std::vector<Problem>& all() const noexcept { return problems; }
 
         /** Called after any change, so a UI can refresh itself. */
         std::function<void()> onChange;

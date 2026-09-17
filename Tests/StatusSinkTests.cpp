@@ -52,20 +52,12 @@ public:
                           "the total should count everything, not just what is remembered");
         }
 
-        beginTest ("clearing forgets the problems but not that there were some");
-        {
-            Sink sink;
-            sink.report ("something");
-            sink.clear();
-
-            expect (! sink.hasProblem());
-            expect (sink.mostRecent().isEmpty());
-            expectEquals (sink.totalReported(), 1,
-                          "a cleared sink should still admit something happened");
-        }
-
         beginTest ("a listener is told when something changes");
         {
+            // There is one notifier and one thing it means: a report arrived.
+            // The tray tooltip and the Preferences status line both redraw from
+            // mostRecent(), so every report has to reach them, including the
+            // ones that push an older problem off the end.
             Sink sink;
             int notifications = 0;
             sink.onChange = [&notifications] { ++notifications; };
@@ -73,12 +65,7 @@ public:
             sink.report ("one");
             expectEquals (notifications, 1);
 
-            sink.clear();
-            expectEquals (notifications, 2);
-
-            // Clearing an already-empty sink changes nothing, so it notifies
-            // nothing: a UI should not be asked to redraw for no reason.
-            sink.clear();
+            sink.report ("two");
             expectEquals (notifications, 2);
         }
     }

@@ -42,17 +42,47 @@ input=${2:-}
 chain=${3:-reaeq}
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-exe="$here/build/release/LightHost_artefacts/Release/Light Host.exe"
 baseline="$here/tools/render-regression.sha256"
+
+# Where the build can be, in the order it is looked for. JUCE puts products
+# under <target>_artefacts/<CONFIG>/ for the single-config Ninja presets as well
+# as for the multi-config MSVC one, so what differs between platforms is the
+# build directory and the file at the end of it, not the layout. macOS produces
+# a bundle, and --render has to be given the executable inside it; that
+# candidate comes before the bare name because only one of the two exists.
+candidates=(
+    "$here/build/release/LightHost_artefacts/Release/Light Host.exe"
+    "$here/build/ninja-release/LightHost_artefacts/Release/Light Host.exe"
+    "$here/build/ninja-release/LightHost_artefacts/Release/Light Host.app/Contents/MacOS/Light Host"
+    "$here/build/ninja-release/LightHost_artefacts/Release/Light Host"
+)
 
 if [[ -z "$mode" || -z "$input" ]]; then
     echo "usage: tools/render-regression.sh {capture|check} <input.wav> [chain]" >&2
     exit 2
 fi
 
-if [[ ! -f "$exe" ]]; then
-    echo "no build at: $exe" >&2
-    echo "build first: cmake --build build/release --config Release" >&2
+exe=""
+
+for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]]; then
+        exe="$candidate"
+        break
+    fi
+done
+
+# Every path, not just the one for this platform: the usual reason for landing
+# here is having built a different preset from the one being looked for, and
+# that is only obvious if the list is in front of you.
+if [[ -z "$exe" ]]; then
+    echo "no build found. Tried:" >&2
+
+    for candidate in "${candidates[@]}"; do
+        echo "  $candidate" >&2
+    done
+
+    echo "build first: cmake --build build/release --config Release   (Windows, VS)" >&2
+    echo "         or: cmake --build build/ninja-release              (Linux, macOS)" >&2
     exit 2
 fi
 
@@ -77,7 +107,24 @@ if [[ ! -f "$out" ]]; then
     exit 1
 fi
 
-hash=$(sha256sum "$out" | cut -d' ' -f1)
+# sha256sum is coreutils, which macOS does not ship; shasum is perl and is on
+# macOS, Linux and git-for-Windows alike. Both are accepted rather than picking
+# one, because the hash in the baseline file has to be the same string whichever
+# of them produced it -- and it is: they print the same digest, only the flags
+# differ.
+sha256_of()
+{
+    if command -v sha256sum > /dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum > /dev/null 2>&1; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        echo "no sha256 tool: install coreutils for sha256sum, or use a shell with shasum" >&2
+        return 2
+    fi
+}
+
+hash=$(sha256_of "$out")
 
 case "$mode" in
     capture)
