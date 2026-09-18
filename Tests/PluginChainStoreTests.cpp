@@ -1,4 +1,5 @@
 #include "../Source/PluginChainStore.hpp"
+#include "../Source/NodeIds.hpp"
 #include "../Source/SettingsKeys.hpp"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -312,6 +313,40 @@ public:
             store.rollback();
 
             expectEquals (store.allocateNodeId(), abandoned);
+        }
+
+        beginTest ("the id range stops before the reserved band");
+        {
+            // Source/NodeIds.hpp reserves 1'000'000 upwards for the nodes the
+            // host inserts itself. Nothing but arithmetic kept plugin ids clear
+            // of it, and walking into it does not fail loudly: addNode refuses a
+            // duplicate id with only a debug assertion, and getNodeForId then
+            // hands back the graph's audio INPUT node for that plugin.
+            juce::PropertySet settings;
+            settings.setValue ("nextPluginNodeId", Store::kMaxPluginNodeId);
+
+            Store store (settings);
+
+            expectEquals (store.allocateNodeId(), Store::kMaxPluginNodeId,
+                          "the last usable id should still be handed out");
+
+            expectEquals (store.allocateNodeId(), 0,
+                          "an exhausted range must report 0, not the first "
+                          "reserved id");
+
+            // 0 is what readNodeId already reports for "no id yet", so callers
+            // have a value they recognise rather than a poisoned one.
+            expectEquals (store.allocateNodeId(), 0, "and must keep reporting it");
+        }
+
+        beginTest ("the ceiling sits exactly below the lowest reserved id");
+        {
+            // Asserted against NodeIds.hpp rather than against a second copy of
+            // the number, so raising one without the other fails here.
+            expectEquals (Store::kMaxPluginNodeId + 1,
+                          static_cast<int> (lighthost::nodeids::input.uid),
+                          "the plugin range and the reserved range have drifted "
+                          "apart, leaving a gap or an overlap");
         }
     }
 };

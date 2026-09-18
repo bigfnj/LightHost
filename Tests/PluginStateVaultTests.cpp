@@ -11,13 +11,21 @@
 // be mistaken for success by a caller deciding whether to drop its only other
 // copy.
 //
-// The first two read as "nothing stored". Truncation reads that way only when
+// All of them now read as unusable, and a truncated file is reported as
+// `corrupt` rather than `absent` so the caller preserves it. Until 5.4.0 the
+// mid-stream case returned a partial blob.
+//
+// The first two read as "nothing stored". Truncation used to read that way only when
 // the cut lands before deflate emitted anything; a cut mid-stream still yields a
-// partial blob, which the two truncation cases below pin honestly rather than
-// papering over. That gap is in BACKLOG.md and needs a format change to close.
+// partial blob. That is now detected: the payload is a zlib stream, RFC 1950
+// ends one with a big-endian Adler-32 of the uncompressed data, and comparing
+// it against what actually decompressed catches truncation without the format
+// change BACKLOG.md predicted would be needed.
 //==============================================================================
 namespace
 {
+
+using Vault = lighthost::state::Vault;
 
 class PluginStateVaultTests final : public juce::UnitTest
 {
@@ -152,25 +160,23 @@ public:
             expectEquals ((int) vault.read ("truncated-early").getSize(), 0);
         }
 
-        beginTest ("a file truncated mid-stream yields a PARTIAL state (known gap)");
+        beginTest ("a file truncated mid-stream is refused, not handed over partial");
         {
-            // Pinning a defect on purpose, so it stops being invisible. A file
-            // cut after deflate has emitted output decompresses to whatever it
-            // had emitted, readIntoMemoryBlock appends that, and
-            // restorePluginState hands the partial blob to setStateInformation:
-            // a plugin configured from half a preset rather than reset to
-            // factory defaults. The doc on Vault::read asserted the opposite
-            // until today.
+            // This test previously pinned the opposite, deliberately: a file cut
+            // after deflate had emitted output decompressed to whatever it had
+            // emitted, and restorePluginState handed that half-preset to
+            // setStateInformation. Its own comment said "when that lands, this
+            // test SHOULD fail; change it to expect 0 then." It has landed.
             //
-            // Closing it needs a length or checksum in the header, which is a
-            // format change -- the gzip trailer cannot stand in, because
-            // isExhausted() folds error, clean end and EOF into one bool and the
-            // helper's `finished` flag is private. Filed in BACKLOG.md. When
-            // that lands, this test SHOULD fail; change it to expect 0 then.
+            // It did not need the format change the comment predicted. The
+            // payload is a zlib stream and RFC 1950 ends one with a big-endian
+            // Adler-32 of the uncompressed data, so the file already carries a
+            // checksum of its own contents. Truncation destroys the real
+            // trailer, so the last four bytes are deflate data, and they
+            // disagree with the checksum of what decompressed.
             //
             // Incompressible bytes, not blockOf's repeated pattern: a pattern
-            // deflates to almost nothing, leaving no stream to truncate inside,
-            // which is how the degenerate point above came to be the only one.
+            // deflates to almost nothing, leaving no stream to truncate inside.
             const auto original = randomBlock (64 * 1024, 20260917);
 
             expect (vault.write ("truncated-mid", original));
@@ -186,14 +192,100 @@ public:
             // Half the stream: well past the header, well short of the end.
             expect (file.replaceWithData (raw.getData(), raw.getSize() / 2));
 
-            const auto partial = vault.read ("truncated-mid");
+            auto outcome = Vault::ReadResult::ok;
+            const auto readBack = vault.read ("truncated-mid", &outcome);
 
-            expect (partial.getSize() > 0,
-                    "expected the partial-read gap this test exists to pin; if this now "
-                    "fails, truncation is detected and the test should expect 0");
-            expect (partial.getSize() < original.getSize(),
-                    "a truncated file returned at least as much as was written");
-            expect (partial != original, "a truncated file returned the original bytes");
+            expectEquals ((int) readBack.getSize(), 0,
+                          "a truncated file must yield nothing, not half a preset");
+            expect (outcome == Vault::ReadResult::corrupt,
+                    "truncation must report corrupt, not absent -- absent would "
+                    "license the caller to overwrite the only copy");
+        }
+
+        beginTest ("corrupt is distinguishable from absent, which is the whole point");
+        {
+            // The caller keys on this. `absent` means nothing was ever stored,
+            // so saving over it is harmless; `corrupt` means the only copy of a
+            // preset is unusable and must be left alone. Collapsing them is how
+            // 5.2.0 lost a preset through the legacy base64 path.
+            auto outcome = Vault::ReadResult::ok;
+
+            (void) vault.read ("never-written-at-all", &outcome);
+            expect (outcome == Vault::ReadResult::absent);
+
+            expect (vault.write ("intact", blockOf ("q", 512)));
+            (void) vault.read ("intact", &outcome);
+            expect (outcome == Vault::ReadResult::ok);
+        }
+
+        beginTest ("a single flipped byte in the payload is caught");
+        {
+            // Not just truncation. A bit rot or a partial overwrite in the
+            // middle of the stream changes what decompresses, so the stored
+            // Adler-32 no longer matches it.
+            const auto original = randomBlock (32 * 1024, 20260918);
+
+            expect (vault.write ("bit-rot", original));
+
+            const auto file = vault.fileFor ("bit-rot");
+
+            juce::MemoryBlock raw;
+            expect (file.loadFileAsData (raw));
+
+            auto* bytes = static_cast<juce::uint8*> (raw.getData());
+            const auto middle = raw.getSize() / 2;
+            bytes[middle] = static_cast<juce::uint8> (bytes[middle] ^ 0xff);
+
+            expect (file.replaceWithData (raw.getData(), raw.getSize()));
+
+            auto outcome = Vault::ReadResult::ok;
+            const auto readBack = vault.read ("bit-rot", &outcome);
+
+            // Either the deflate stream rejects the altered byte outright or the
+            // checksum does. Both are correct; what matters is that no altered
+            // preset reaches a plugin.
+            expect (readBack != original, "a corrupted payload was returned as valid");
+
+            if (readBack.getSize() != 0)
+                expect (false, "a corrupted payload returned bytes at all");
+            else
+                expect (outcome == Vault::ReadResult::corrupt);
+        }
+
+        beginTest ("the Adler-32 helper agrees with the values RFC 1950 specifies");
+        {
+            // Tested directly because the truncation check rests on it, and a
+            // checksum that is subtly wrong would pass every test above by
+            // disagreeing with the file consistently.
+            //
+            // Known values: the empty string is 1, and "Wikipedia" is 0x11E60398.
+            expectEquals ((int) (juce::int64) Vault::adler32 ("", 0), 1);
+
+            const char* wiki = "Wikipedia";
+            expectEquals ((juce::int64) Vault::adler32 (wiki, 9), (juce::int64) 0x11E60398);
+        }
+
+        beginTest ("the Adler-32 helper blocks correctly past NMAX");
+        {
+            // The modulo runs once per 5552 bytes rather than per byte, so the
+            // blocking arithmetic only shows up on inputs longer than that. A
+            // real plugin state measured four megabytes.
+            const auto big = blockOf ("abcdefgh", 64 * 1024);
+
+            // Recomputed the slow, obvious way.
+            constexpr juce::uint32 base = 65521;
+            juce::uint32 a = 1, b = 0;
+            const auto* p = static_cast<const juce::uint8*> (big.getData());
+
+            for (size_t i = 0; i < big.getSize(); ++i)
+            {
+                a = (a + p[i]) % base;
+                b = (b + a) % base;
+            }
+
+            expectEquals ((juce::int64) Vault::adler32 (big.getData(), big.getSize()),
+                          (juce::int64) ((b << 16) | a),
+                          "the blocked implementation disagrees with the direct one");
         }
 
         beginTest ("a file without the magic reads as nothing stored");

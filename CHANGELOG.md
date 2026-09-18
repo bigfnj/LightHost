@@ -4,7 +4,106 @@
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed — a damaged saved preset is no longer half-applied to a plugin
+
+A `.lhs` file cut mid-stream decompressed to whatever the decompressor had
+emitted, and that partial blob went to `setStateInformation`: a plugin configured
+from half a preset rather than reset to its defaults.
+
+`BACKLOG.md` had this as needing a format change and a migration for every file
+already on disk. It did not. It had looked at the *gzip* trailer, and the payload
+is not gzip — `GZIPCompressorOutputStream` defaults to `windowBits = 0`, so it is
+a **zlib** stream, and RFC 1950 ends one with a big-endian Adler-32 of the
+uncompressed data. The integrity field was in the file all along.
+
+Reading now compares that checksum against what decompressed. Truncation
+destroys the real trailer, so the comparison lands on whatever deflate bytes came
+last, which disagree unless they collide with the true checksum — about one in
+four billion. Probabilistic, and stated as such in the code.
+
+A damaged file is also now reported as `corrupt` rather than `absent`, which
+matters more than it sounds: it is still the only copy of that preset, so the
+node is recorded as un-restored and the file is left alone. Collapsing those two
+is exactly how 5.2.0 lost a preset through the legacy base64 path.
+
+### Fixed — a rolled-back chain edit no longer deletes preset files
+
+Both erase loops in `applyPluginChain` deleted state files as they went. Within
+one iteration that was correct; across a transaction it was not. With two
+departing plugins and a throw on the second, the settings rolled back but the
+first plugin's `.lhs` was already gone — leaving settings that described a plugin
+whose preset no longer existed, and a log line promising "re-adding it will
+restore the old preset" that had become false.
+
+The deletes now happen after the settings commit succeeds. Every abandon path
+returns first, so a rolled-back edit deletes nothing. No transaction redesign was
+needed; a local list in the one function with the problem gives the same
+guarantee.
+
+### Fixed — the Preferences baseline no longer records an uncommitted chain
+
+`onApplyFn` returns void, so the panel could not tell that the host had abandoned
+the edit — and then overwrote the baseline the abandon path had just set
+correctly. With `staged == baseline` from that point, the next refresh took the
+no-op fast path and replaced the rows with nothing said. That is the defect a
+previous fix exists to prevent, reached through the one door it did not check.
+
+### Fixed — a latency report during shutdown could rewire a graph being destroyed
+
+`~IconMenu` cancelled its async updater but never detached its processor
+listeners, and `closeAllCurrentlyOpenWindows()` deletes every editor and then
+pumps the message queue. A plugin reporting a latency change as its editor closed
+was therefore delivered inside that pump, running a rewire mid-teardown — adding
+probe nodes to a graph about to be destroyed, and driving a Preferences window
+the destructor deliberately never resets. `PluginWindow.cpp` already documented
+this pairing as the caller's responsibility and named the path that honours it;
+this one did not.
+
+### Changed — loading a chain publishes two render sequences instead of N+2
+
+The `addNode` for a hosted plugin was the only graph mutation in `IconMenu.cpp`
+taking the default `UpdateKind`, which is `sync`. An eight-plugin chain published
+ten render sequences during load, each an O(nodes²) ordering pass plus three
+block-sized buffer allocations.
+
+It also moves `prepareToPlay` after the state restore rather than before it,
+which is the better order — a plugin sizes its buffers knowing its real settings
+— and the order the offline renderer already used. Not claimed as a measured
+startup improvement; it is wasted work removed.
+
+### Added — a plugin that refuses a bypass write is asked once, then reported
+
+`Node::isBypassed()` reads the plugin's own bypass parameter rather than the
+host's stored intent, so a plugin that clamps or ignores the write left the
+guard's condition true for ever and was written to on every rewire. Now read back
+once, then logged and left alone for the session.
+
+### Added — the plugin node id range has a ceiling
+
+Ids are handed out from 1 and never reused, and `1'000'000` upwards is reserved
+for the nodes the host inserts itself. Nothing but arithmetic kept them apart.
+Reaching it needs about a million discrete adds, so this is a guard rather than a
+fix — but the failure was silent in release and did not look like an id problem:
+`addNode` refuses a duplicate with only a debug assertion, and the lookup then
+returns the graph's audio *input* node for that plugin, so the chain wires input
+to input and a bypassed plugin silences the host.
+
+### Changed — the icon source is 512 px, 68% smaller
+
+1,055,725 → 335,036 bytes, with nothing displayed changed. Details in the commit;
+the short version is that `writeWinIcon` caps at 256 but `writeMacIcon` goes to
+1024, so 256 would have quietly dropped two sizes from the macOS `.icns`.
+
+### Documentation
+
+The README's screenshots are current for the first time since 4.0.3 — nine new
+captures, each viewed and audited before being embedded, after an automated
+attempt nearly put an unrelated application's window into a public repository.
+
+Two suspicions in `BACKLOG.md` were traced and found not to be defects: a
+self-sustaining rewire loop cannot start, because a graph rebuild never
+re-prepares an already-prepared node, and the destructor's cancel ordering was a
+symptom of the missing listener detach rather than a fault of its own.
 
 ---
 

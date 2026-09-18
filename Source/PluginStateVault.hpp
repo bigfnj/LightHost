@@ -63,6 +63,16 @@ public:
     static constexpr const char* magic       = "LHS1";
     static constexpr int         magicLength = 4;
 
+    /** How a read turned out.
+
+        `corrupt` exists because it must not be confused with `absent`. A blob
+        that is present and unusable is still the only copy there is, so the
+        caller has to record the node as un-restored and leave the file alone --
+        reporting it as "nothing saved" is precisely how 5.2.0 lost a preset
+        through the legacy base64 path.
+    */
+    enum class ReadResult { ok, absent, corrupt };
+
     [[nodiscard]] juce::File getDirectory() const { return directory; }
 
     /** A cheap content fingerprint, so a state whose bytes have not changed is
@@ -82,6 +92,58 @@ public:
         }
 
         return hash;
+    }
+
+    /** RFC 1950 Adler-32, which is the checksum a zlib stream ends with.
+
+        Blocked by NMAX so the modulo runs once per 5552 bytes rather than once
+        per byte: a real plugin state measured four megabytes, and this runs on
+        the message thread during startup for every plugin in the chain.
+    */
+    [[nodiscard]] static juce::uint32 adler32 (const void* data, size_t numBytes) noexcept
+    {
+        constexpr juce::uint32 base = 65521;
+        constexpr size_t       nmax = 5552;
+
+        const auto* p = static_cast<const juce::uint8*> (data);
+        juce::uint32 a = 1, b = 0;
+
+        while (numBytes > 0)
+        {
+            const auto block = juce::jmin (nmax, numBytes);
+
+            for (size_t i = 0; i < block; ++i)
+            {
+                a += p[i];
+                b += a;
+            }
+
+            a %= base;
+            b %= base;
+            p += block;
+            numBytes -= block;
+        }
+
+        return (b << 16) | a;
+    }
+
+    /** The four trailing bytes, big-endian, as zlib writes its Adler-32. */
+    [[nodiscard]] static juce::uint32 trailerOf (const juce::File& file, juce::int64 fileSize)
+    {
+        juce::FileInputStream tail (file);
+
+        if (tail.failedToOpen() || ! tail.setPosition (fileSize - 4))
+            return 0;
+
+        juce::uint8 bytes[4] = {};
+
+        if (tail.read (bytes, 4) != 4)
+            return 0;
+
+        return (static_cast<juce::uint32> (bytes[0]) << 24)
+             | (static_cast<juce::uint32> (bytes[1]) << 16)
+             | (static_cast<juce::uint32> (bytes[2]) << 8)
+             |  static_cast<juce::uint32> (bytes[3]);
     }
 
     [[nodiscard]] juce::File fileFor (const juce::String& identity) const
@@ -170,26 +232,37 @@ public:
         return temp.overwriteTargetFileWithTemporary();
     }
 
-    /** Reads the state for one identity.
+    /** Reads the state stored for an identity, and says whether it is usable.
 
-        An empty block means "nothing usable stored". Absent and wrong-magic are
-        deliberately not distinguished: both produce an empty block, and every
-        caller treats that as a plugin starting at its factory defaults.
+        INTEGRITY IS CHECKED, and it does not need a format change to do it.
 
-        Truncation is NOT in that set, and this comment used to claim it was. A
-        file cut mid-stream decompresses to whatever deflate had already emitted,
-        readIntoMemoryBlock appends it, and restorePluginState hands that partial
-        blob to setStateInformation -- a plugin configured from half its preset
-        rather than reset to defaults. Detecting it needs a length or checksum in
-        the header, which is a format change; the gzip trailer cannot stand in,
-        because GZIPDecompressorInputStream::isExhausted() folds error, clean end
-        and EOF into one bool and the helper's own `finished` flag is private.
-        Filed in BACKLOG.md. The write path is where truncated files came from,
-        and that is now checked, so this is the residue rather than the cause.
+        The payload is a zlib stream -- GZIPCompressorOutputStream defaults to
+        windowBits = 0 and GZIPDecompressorInputStream to zlibFormat -- and RFC
+        1950 ends such a stream with a four-byte big-endian Adler-32 of the
+        uncompressed data. So the file already carries a checksum of its own
+        contents, and BACKLOG.md was wrong to conclude that detecting a truncated
+        file required adding a length or checksum to the header.
+
+        It works on a truncated file for a reason worth stating, because it is
+        not obvious: truncation destroys the real trailer, so the last four bytes
+        are whatever deflate data happened to land there. Those bytes are then
+        compared against the Adler-32 of what actually decompressed, and they
+        disagree unless the garbage collides with the true checksum -- about one
+        chance in four billion. This is a probabilistic check, not a proof, and
+        that is a far better position than the previous one, which was that
+        `gzip.readIntoMemoryBlock` discarded its return value and a half-decoded
+        preset was handed to `setStateInformation` as though it were whole.
+
+        What the caller must do with `corrupt`: treat it as "there is state here
+        and it cannot be used". Do not overwrite it.
     */
-    [[nodiscard]] juce::MemoryBlock read (const juce::String& identity) const
+    [[nodiscard]] juce::MemoryBlock read (const juce::String& identity,
+                                          ReadResult* outcome = nullptr) const
     {
+        const auto report = [outcome] (ReadResult r) { if (outcome != nullptr) *outcome = r; };
+
         juce::MemoryBlock result;
+        report (ReadResult::absent);
 
         if (identity.isEmpty())
             return result;
@@ -198,6 +271,17 @@ public:
 
         if (! file.existsAsFile())
             return result;
+
+        // magic + zlib header + at least one deflate byte + the Adler-32 tail.
+        // Anything shorter cannot be a complete stream, so it is corrupt rather
+        // than absent: something wrote it and did not finish.
+        const auto fileSize = file.getSize();
+
+        if (fileSize < magicLength + 2 + 1 + 4)
+        {
+            report (ReadResult::corrupt);
+            return result;
+        }
 
         juce::FileInputStream in (file);
 
@@ -208,10 +292,31 @@ public:
 
         if (in.read (header, magicLength) != magicLength
             || juce::String (header, static_cast<size_t> (magicLength)) != magic)
+        {
+            report (ReadResult::corrupt);
             return result;
+        }
 
-        juce::GZIPDecompressorInputStream gzip (in);
-        gzip.readIntoMemoryBlock (result);
+        {
+            juce::GZIPDecompressorInputStream gzip (in);
+            gzip.readIntoMemoryBlock (result);
+        }
+
+        if (result.getSize() == 0)
+        {
+            report (ReadResult::corrupt);
+            result.reset();
+            return result;
+        }
+
+        if (adler32 (result.getData(), result.getSize()) != trailerOf (file, fileSize))
+        {
+            report (ReadResult::corrupt);
+            result.reset();           // never hand a partial preset to a plugin
+            return result;
+        }
+
+        report (ReadResult::ok);
         return result;
     }
 

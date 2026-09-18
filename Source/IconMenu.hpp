@@ -273,6 +273,12 @@ private:
     */
     void stopListeningToAll();
 
+    // Node ids whose plugin refused a bypass write. isBypassed() reads the
+    // plugin's own parameter rather than our stored intent, so one that clamps
+    // or ignores the write would otherwise be written on every single rewire.
+    // Asked once, then left alone for the session.
+    std::set<juce::uint32> bypassRefused;
+
     #if JUCE_WINDOWS
     [[nodiscard]] static juce::File getStartupShortcutPath();
     [[nodiscard]] bool isStartupEnabled() const;

@@ -441,6 +441,25 @@ IconMenu::~IconMenu()
     // rewire the graph while it is being torn down.
     cancelPendingUpdate();
 
+    // And stop listening, for the same reason loadActivePlugins does these two
+    // lines together.
+    //
+    // The cancel alone is not enough, and ~AsyncUpdater is too late to help:
+    // IconMenu derives from AsyncUpdater, so that destructor runs after this
+    // whole body. closeAllCurrentlyOpenWindows() at the end of this function
+    // deletes every editor and then PUMPS THE MESSAGE QUEUE, and plugins
+    // commonly report a latency change as their editor closes. Still registered
+    // as a listener, we would take that report, arm the updater, and have it
+    // delivered by that same pump -- running reconnectGraph() mid-teardown,
+    // which adds probe nodes to a graph about to be destroyed and pushes a
+    // bypass parameter into a plugin whose editor has just gone, and
+    // refreshPreferencesIfOpen(), which drives a window this destructor
+    // deliberately never resets.
+    //
+    // PluginWindow.cpp states this invariant as the caller's responsibility and
+    // names loadActivePlugins as the example that honours it. This path did not.
+    stopListeningToAll();
+
     // Abandon any in-flight load before saving. Bumping the generation makes the
     // pending createPluginInstanceAsync callbacks no-op when they arrive. Their
     // captured SafePointer already guards against this object being gone; the
@@ -596,12 +615,42 @@ void IconMenu::loadActivePlugins()
         if (nodeIdVal == 0)
         {
             nodeIdVal = store.allocateNodeId();
+
+            if (nodeIdVal == 0)
+            {
+                // The id range is exhausted. Skipping the plugin and saying so
+                // is the only honest option: the alternative is handing the
+                // graph a reserved id, which addNode refuses with nothing but a
+                // debug assertion, after which getNodeForId returns the graph's
+                // audio INPUT node for this plugin.
+                status.report ("Ran out of plugin node ids, so " + plugin.name
+                               + " was not loaded. Deleting and re-adding the"
+                                 " chain resets them.");
+                continue;
+            }
+
             store.stageNodeId (plugin, nodeIdVal);
         }
 
-        auto savedState = vault.read (ChainStore::identityOf (plugin));
+        auto vaultOutcome = lighthost::state::Vault::ReadResult::absent;
+        auto savedState = vault.read (ChainStore::identityOf (plugin), &vaultOutcome);
 
-        if (savedState.getSize() == 0)
+        if (vaultOutcome == lighthost::state::Vault::ReadResult::corrupt)
+        {
+            // Present and unusable, which is NOT the same as absent. The file is
+            // the only copy of that preset, so the node is recorded as
+            // un-restored -- savePluginStates skips those -- and the legacy
+            // fallback below is deliberately not tried: it would find nothing,
+            // report "nothing saved", and license the next save to overwrite the
+            // corrupt file with factory defaults. That is the same shape as the
+            // base64 preset loss fixed in 5.2.0.
+            statesNotRestored.insert (static_cast<uint32> (nodeIdVal));
+
+            status.report (plugin.name + " has a damaged saved preset, so it has"
+                                         " loaded its defaults. The file has been"
+                                         " left alone.");
+        }
+        else if (savedState.getSize() == 0)
         {
             // Falls back to the pre-5.0.0 key, so a migration that could not
             // write its file presents as a plugin that still has its preset
@@ -715,7 +764,18 @@ void IconMenu::onPluginInstanceReady (std::unique_ptr<AudioProcessor> instance,
 
         if (stillWanted)
         {
-            if (auto node = graph.addNode (std::move (instance), nodeId))
+            // UpdateKind::none, like every other graph mutation in this file.
+            // The default is sync, which rebuilds and publishes a render
+            // sequence per plugin -- so an eight-plugin chain published ten
+            // where two would do, each an O(nodes^2) ordering pass plus three
+            // block-sized buffer allocations. Nothing between here and the
+            // rebuild in onAllPluginsLoaded reads the sequence.
+            //
+            // It also moves prepareToPlay to that final rebuild, i.e. AFTER
+            // restorePluginState below, so a plugin sizes its buffers knowing
+            // its real settings. OfflineRender already prepares in that order.
+            if (auto node = graph.addNode (std::move (instance), nodeId,
+                                           AudioProcessorGraph::UpdateKind::none))
             {
                 restorePluginState (*node, nodeId, savedState);
 
@@ -1245,7 +1305,26 @@ void IconMenu::reconnectGraph()
         // every hosted plugin, carrying the value each already had. Anything
         // recording automation from the plugin sees those.
         if (const auto wantBypass = store.readBypassed (pd); node->isBypassed() != wantBypass)
+        {
             node->setBypassed (wantBypass);
+
+            // Read back, and stop asking a node that will not take it.
+            //
+            // isBypassed() consults the plugin's own bypass PARAMETER, not our
+            // stored intent, so a plugin that clamps or refuses the write leaves
+            // the condition above true for ever and is written on every rewire.
+            // Not a loop by itself -- parameter changes are deliberately ignored
+            // here -- but an unbounded write into third-party code, and paired
+            // with a plugin that re-declares latency it would close one.
+            // Bounded and said out loud instead, like the sample-rate budget.
+            if (node->isBypassed() != wantBypass
+                && bypassRefused.insert (nodeId.uid).second)
+            {
+                juce::Logger::writeToLog ("IconMenu: " + pd.name
+                                          + " will not accept a bypass write;"
+                                            " not asking again this session");
+            }
+        }
 
         auto* processor = node->getProcessor();
         if (processor == nullptr)
@@ -2422,13 +2501,33 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     {
         store.rollback();
         juce::Logger::writeToLog ("IconMenu: " + what + " threw (" + detail
-                                  + "); chain edit abandoned, settings untouched");
+                                  + "); chain edit abandoned. Staged settings were"
+                                    " rolled back and no plugin state was deleted;"
+                                    " the chain XML the change listener writes is"
+                                    " outside this guard by design");
         sortedPluginCache.reset();
         reconnectGraph();
         refreshPreferencesIfOpen();
     };
 
     const auto vault = stateVault();
+
+    // State files to delete, collected rather than deleted as we go, and applied
+    // only once store.commit() has succeeded at the bottom of this function.
+    //
+    // Deleting in the loop was correct within one iteration -- the 5.4.0 change
+    // that moved each erase after its guarded mutation -- but not across the
+    // transaction. With two departing plugins and a throw on the second,
+    // abandon() rolls the settings back, and rollback clears pendingWrites and
+    // pendingRemovals; it cannot put the first plugin's .lhs back. The result
+    // was settings describing a plugin whose preset no longer existed, and the
+    // loop's own log line promising "re-adding it will restore the old preset"
+    // was then false.
+    //
+    // Collecting them makes the erase part of the same all-or-nothing step as
+    // the settings write, without redesigning ChainStore's staging: abandon()
+    // returns before this list is ever walked, so nothing is deleted.
+    std::vector<std::pair<juce::String, juce::String>> statesToForget;   // identity, name
 
     for (const auto& plugin : departing)
     {
@@ -2458,13 +2557,10 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         // saved state no longer exists. handleDeletePlugin had the identical
         // inversion and was fixed in the same pass.
         //
-        // The state file still goes with the settings keys once the mutation
-        // has succeeded, or the directory accumulates orphans for plugins that
-        // are no longer in the chain.
-        if (! forgetPluginState (vault, departingIdentity))
-            juce::Logger::writeToLog ("Could not delete saved state for "
-                                      + plugin.description.name
-                                      + "; re-adding it will restore the old preset");
+        // The state file still goes with the settings keys, or the directory
+        // accumulates orphans for plugins no longer in the chain -- but it goes
+        // WITH them, at the commit, not here. See statesToForget above.
+        statesToForget.emplace_back (departingIdentity, plugin.description.name);
     }
 
     // Set when addType reported a replacement rather than an add. See the
@@ -2474,7 +2570,18 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
     for (const auto& plugin : arriving)
     {
         if (store.readNodeId (plugin) == 0)
-            store.stageNodeId (plugin, store.allocateNodeId());
+        {
+            const auto allocated = store.allocateNodeId();
+
+            if (allocated == 0)
+            {
+                status.report ("Ran out of plugin node ids, so " + plugin.name
+                               + " was not added.");
+                continue;
+            }
+
+            store.stageNodeId (plugin, allocated);
+        }
 
         try
         {
@@ -2564,13 +2671,7 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
         // from the broadcast left every dropped plugin's preset gone while the
         // settings that referenced it were restored.
         for (const auto& plugin : dropped)
-        {
-            const auto droppedIdentity = ChainStore::identityOf (plugin);
-
-            if (! forgetPluginState (vault, droppedIdentity))
-                juce::Logger::writeToLog ("Could not delete saved state for " + plugin.name
-                                          + "; re-adding it will restore the old preset");
-        }
+            statesToForget.emplace_back (ChainStore::identityOf (plugin), plugin.name);
 
         if (! dropped.empty())
         {
@@ -2636,6 +2737,15 @@ void IconMenu::applyPluginChain (const std::vector<PluginDescription>& newChain,
 
     store.commit();
     flushSettings (*settings, "applying the plugin chain");
+
+    // Only now. Every abandon() path above returns before reaching this, so a
+    // chain edit that was rolled back leaves every .lhs where it was -- which is
+    // what the log line in the departing loop has always promised and, until
+    // this was deferred, could not deliver across more than one plugin.
+    for (const auto& [forgetIdentity, forgetName] : statesToForget)
+        if (! forgetPluginState (vault, forgetIdentity))
+            juce::Logger::writeToLog ("Could not delete saved state for " + forgetName
+                                      + "; re-adding it will restore the old preset");
     sortedPluginCache.reset();
 
     // ── Reload the graph ─────────────────────────────────────────────────────

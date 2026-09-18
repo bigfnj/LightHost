@@ -487,13 +487,39 @@ namespace lighthost::chain
         }
 
         //==========================================================================
-        /** Reserves the next graph node id. Staged like everything else, so an
-            abandoned edit does not burn an id.
+        /** The highest id a plugin node may be given.
+
+            Source/NodeIds.hpp reserves 1'000'000 upwards for the nodes the host
+            inserts itself -- the two IO nodes, the lane trims, the probes.
+            Plugin ids are handed out from 1 and never reused, so nothing but
+            arithmetic keeps the two apart, and that arithmetic was unchecked.
+
+            Reaching it needs roughly a million discrete adds, which is not a
+            real session: both callers allocate only for a plugin with no stored
+            id, so nothing allocates in bulk. Guarded anyway because the failure
+            is silent in a release build and does not present as an id problem.
+            AudioProcessorGraph::addNode refuses a duplicate id with only a debug
+            assertion, and getNodeForId (1'000'000) then returns the graph's
+            audio INPUT node for that plugin -- so the chain wires input to
+            input, and if the plugin is bypassed it bypasses the graph input and
+            silences the host.
+        */
+        static constexpr int kMaxPluginNodeId = 999'999;
+
+        /** Reserves the next graph node id, or 0 when the range is exhausted.
+
+            Staged like everything else, so an abandoned edit does not burn an
+            id. 0 is what readNodeId already reports for "no id yet", and both
+            callers now check for it explicitly rather than passing it on.
         */
         [[nodiscard]] int allocateNodeId()
         {
             const auto stored = valueOf (kNextNodeIdKey, "1").getIntValue();
             const auto nodeId = stored > 0 ? stored : 1;
+
+            if (nodeId > kMaxPluginNodeId)
+                return 0;
+
             stageValue (kNextNodeIdKey, juce::String (nodeId + 1));
             return nodeId;
         }

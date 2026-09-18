@@ -1002,6 +1002,10 @@ public:
         // committed, and the merged list is by definition not that.
         committedBaseline = incoming;
 
+        // Counted so the apply path can tell whether this ran while it was
+        // inside the host. See write site 3.
+        ++committedBaselineWrites;
+
         updateChainListHeight();
         chainList.repaint();
 
@@ -1378,8 +1382,25 @@ private:
         would have to justify itself -- and a missing third is what would make a
         deleted plugin reappear, because the applied chain would go on being
         compared against a baseline from before the Apply.
+
+        Site 3 is CONDITIONAL, which the first version of this comment did not
+        say. onApplyFn returns void, so it cannot report that the host abandoned
+        the edit -- and on that path the host rolls its settings back and
+        refreshes this panel, which reaches setChain and sets the baseline from
+        the chain that is actually committed. Writing stagedRows over it
+        afterwards recorded a chain that was never committed, after which
+        staged == baseline and the next refresh took the no-op fast path and
+        replaced the rows silently. So site 3 defers to site 2 when site 2 ran
+        during the apply.
     */
     ChainRows committedBaseline;
+
+    /** How many times setChain has written the baseline.
+
+        Only ever compared against itself across a call into the host, to answer
+        "did a refresh happen in there?". Wraps harmlessly.
+    */
+    unsigned int committedBaselineWrites = 0;
 
     juce::Viewport          chainViewport;
     juce::TextButton        addPluginButton;
@@ -1778,6 +1799,8 @@ private:
                     // and inside the panel there is only ever one row list.
                     const auto applied = lighthost::ui::chainVectorsFrom (stagedRows);
 
+                    const auto writesBefore = safe->committedBaselineWrites;
+
                     safe->onApplyFn (applied.chain, applied.bypassed, applied.lanes);
 
                     // Write site 3 of 3, and the load-bearing one. The staged
@@ -1788,9 +1811,24 @@ private:
                     // incoming chain nor the baseline, read it as a pending
                     // addition, and put the plugin the user just deleted back.
                     //
+                    // Skipped when setChain ran inside onApplyFn, because then
+                    // the host has already set the baseline from the chain it
+                    // actually committed, and that is better information than
+                    // stagedRows.
+                    //
+                    // This is what the abandon path does: onApplyFn is void, so
+                    // it cannot report that the edit was rolled back, and on
+                    // that path the host rewires and refreshes this panel. The
+                    // refresh set the baseline correctly; writing stagedRows
+                    // over it recorded a chain that was never committed, leaving
+                    // staged == baseline so the next refresh took the no-op fast
+                    // path and swapped the rows with nothing said. On the
+                    // success path a refresh sets the same thing stagedRows
+                    // would, so deferring costs nothing there.
+                    //
                     // Re-checked for null because onApplyFn reaches IconMenu,
                     // which can close this window.
-                    if (safe != nullptr)
+                    if (safe != nullptr && safe->committedBaselineWrites == writesBefore)
                         safe->committedBaseline = stagedRows;
                 }
 

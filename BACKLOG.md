@@ -38,174 +38,188 @@ changed, is what keeps finding them.
 
 ## Bugs
 
-### A `.lhs` truncated mid-stream is handed to the plugin as a partial preset
+**All three are fixed.** Traced and closed on 2026-09-18, along with the four
+suspicions below. Two of the three turned out to be cheaper than this file
+predicted, and one of the suspicions was a real defect the entry had
+mis-diagnosed.
+
+### Fixed: a truncated `.lhs` is no longer handed over as a partial preset
 
 `Source/PluginStateVault.hpp`, `read`
 
-`gzip.readIntoMemoryBlock (result)` discards its return, and
-`MemoryOutputStream::writeFromInputStream` appends whatever the decompressor
-produced before the source ran out. So a file cut mid-stream decompresses to a
-partial blob, `restorePluginState` passes it to `setStateInformation`, and the
-plugin comes up configured from half a preset rather than reset to factory
-defaults. The doc on `read` asserted the opposite until 5.4.0; it now says this.
+The entry said detection "needs a length or a checksum in the header, which is a
+format change with a migration for every `.lhs` already on disk." **That was
+wrong, and it is worth understanding why, because the same reasoning error is
+easy to repeat.** It looked at the *gzip* trailer and correctly found no way to
+ask `GZIPDecompressorInputStream` whether the stream ended cleanly. But the
+payload is not gzip: `GZIPCompressorOutputStream` defaults to `windowBits = 0`
+and the decompressor to `zlibFormat`, so it is a **zlib** stream, and RFC 1950
+ends one with a four-byte big-endian Adler-32 of the uncompressed data.
 
-**Why it is not fixed here.** Detecting it needs a length or a checksum in the
-header, which is a format change with a migration for every `.lhs` already on
-disk. The gzip trailer cannot stand in: `GZIPDecompressorInputStream::
-isExhausted()` folds error, clean end and EOF into one bool, and the helper's
-own `finished` flag is private, so there is no way to ask "did this stream end
-properly" through the public API.
+The integrity field was already in the file. No format change, no migration.
 
-**What 5.4.0 did instead** was fix the producer. `Vault::write` now flushes and
-checks `FileOutputStream::getStatus()` before the rename, so Light Host stops
-*making* truncated files -- the gzip tail used to be written by
-`GZIPCompressorHelper::finish`, which discards every `doNextBlock` return, and
-`overwriteTargetFileWithTemporary` then renamed the truncated result over the
-good one and reported success. What remains is external corruption.
+`read` now computes the Adler-32 of what decompressed and compares it with the
+trailer. On a truncated file the real trailer is gone, so the comparison is
+against whatever deflate bytes landed last — which disagree unless they collide
+with the true checksum, about one chance in four billion. A probabilistic check,
+which is stated in the code, and a large improvement on handing half a preset to
+`setStateInformation`.
 
-Two tests pin the current behaviour honestly, including the partial read. When
-the format gains an integrity field, `a file truncated mid-stream yields a
-PARTIAL state (known gap)` should start failing; change it to expect 0 then.
+It also returns a `ReadResult`, because `corrupt` must not be confused with
+`absent`: a damaged file is still the only copy of that preset, so the node is
+recorded as un-restored and the file is left alone. Collapsing those two is
+exactly how 5.2.0 lost a preset through the legacy base64 path.
 
-### `committedBaseline` records a chain the apply may not have committed
+The test that pinned the old behaviour has been inverted, as its own comment
+asked. `adler32` is tested directly against the RFC's published values, and its
+NMAX blocking against a naive per-byte implementation.
 
-`Source/PreferencesWindow.cpp:1793-1794`, reached via
-`Source/IconMenu.cpp` `applyPluginChain`
+### Fixed: `committedBaseline` no longer records a chain the apply did not commit
 
-`onApplyFn` is `void`, so `commitAllSettings` cannot see that `applyPluginChain`
-took its `abandon` path -- which rolls the settings back, rewires, refreshes the
-panel and returns, leaving the committed chain at whatever the list mutations
-reached rather than at `stagedRows`. The refresh during that apply sets
-`committedBaseline` correctly from `incoming`; the unconditional write two lines
-later then overwrites it with the chain that was *not* committed.
+`Source/PreferencesWindow.cpp`
 
-`staged == baseline` from then on, so the next refresh takes the `isNoOpEdit`
-fast path and replaces the rows with `incoming` verbatim, with both counters at
-zero so nothing is said. That is the bug commit `7fe1812` exists to fix, reached
-through the one door it did not check.
+Write site 3 is now conditional. `setChain` counts its own writes, and the apply
+lambda skips its write when that counter moved while it was inside the host —
+because the only way it moves there is the abandon path refreshing the panel,
+and that refresh has already set the baseline from the chain actually committed.
+On the success path a refresh sets what `stagedRows` would have, so deferring
+costs nothing.
 
-The fix is either making `onApplyFn` report success, or skipping the write when
-`setChain` already fired during the apply. Not done here because the reachable
-trigger is `std::bad_alloc` and the change is to the apply path's contract,
-which is not a thing to alter in the same release that rewrote the merge.
+Chosen over making `onApplyFn` return a result, which would change the apply
+path's contract. The member comment that claimed three unconditional write sites
+now says site 3 is conditional and why.
 
-The member comment saying three write sites are sufficient and "a fourth would
-have to justify itself" is wrong on the first half, and is left in place with
-this entry as its correction.
+### Fixed: the vault erase is transactional across the whole edit
 
-### The vault erase reorder is correct per iteration, not per transaction
+`Source/IconMenu.cpp`, `applyPluginChain`
 
-`Source/IconMenu.cpp`, the `departing` loop in `applyPluginChain`
+Both erase loops — `departing` and `dropped` — now collect identities into a
+list instead of deleting as they go, and the deletes happen after
+`store.commit()` and `flushSettings()` have succeeded. Every `abandon` path
+returns before that list is walked, so a rolled-back edit deletes nothing.
 
-5.4.0 moved each `forgetPluginState` after the guarded mutation it belongs to,
-which is right within one iteration. Across a transaction it is not: with two
-departing plugins, a throw while handling the second still leaves the first
-one's `.lhs` deleted, because `abandon` calls `store.rollback()` and rollback
-only clears `pendingWrites` and `pendingRemovals`. It cannot put a deleted file
-back, and it does not undo `activePluginList.removeType`.
+This did not need the transaction redesign the entry predicted. Staging inside
+`ChainStore` would have meant a `commit()` signature change across six call
+sites; a local vector in the one function that has the problem is the same
+guarantee with none of that. Note `deletePluginStates` deliberately still
+deletes directly — its whole purpose is deleting, it counts per-file failures to
+report them, and it has no mutation that can throw.
 
-Same trigger as the entry above, `std::bad_alloc`, and the same reason for
-leaving it: a real fix means staging the erases and committing them with the
-settings, which is a transaction redesign.
-
-Related and smaller: `abandon` logs "chain edit abandoned, settings untouched".
-`pluginListActive` is a settings value and the change listener rewrites it, so
-that log line and the comment in `changeListenerCallback` disagree.
+The `abandon` log line said "settings untouched", which was not quite true: the
+change listener rewrites `pluginListActive` outside the guard by design. It now
+says what actually happened.
 
 ### A throw from the chain-list XML write: settled, see DECISIONS.md
 
 `Source/IconMenu.cpp`, the three `activePluginList` mutation sites and
 `changeListenerCallback`
 
-This has been carried as a defect for three releases and it is not one. The
-entry offered two fixes and demanded one of them; the code has since argued
-back, in `changeListenerCallback`, and the argument is better than the entry.
-
-What is true: `removeType` / `addType` / `sendChangeMessage` are each wrapped in
-a guard that rolls the settings back. The listener that writes the XML runs
-later on the message thread, outside all three, and a throw from *that* write is
-documented as unrecoverable and left to terminate -- deliberately, because
-swallowing it would leave a settings file describing a chain that is not
-running, and the next launch would restore the wrong one.
-
-The entry's objection was "a guard that covers half a transaction is worse than
-one that covers none of it". That is the part that does not survive: these are
-two different failures, not two halves of one. The mutation throwing is
-recoverable and is recovered from; the persist throwing is not and says so.
-5.4.0 brought the third site into the same shape as the other two, so the
-asymmetry the entry complained about is gone in the other direction.
-
-**Done.** It is now in [DECISIONS.md](DECISIONS.md), with its reversing trigger:
-a persist that can fail recoverably, i.e. if the write ever moves somewhere a
-retry makes sense. Nothing to do in the code.
-
-This entry is kept only as a signpost, and the reasoning above is left because
-it is the argument the decision rests on. It was previously counted as cleared
-in the table at the foot of this file *and* still carried here as an open bug
-with an action attached, which is how an item ends up being worked twice.
+Kept as a signpost only. This was carried as a defect for three releases and is
+not one: the mutation throwing is recoverable and is recovered from; the persist
+throwing is not, and says so. It is in [DECISIONS.md](DECISIONS.md) with its
+reversing trigger — a persist that can fail recoverably.
 
 ---
 
-## Suspected, not traced
+## Suspected, traced 2026-09-18
 
-### A plugin could drive a self-sustaining rewire loop
+All four resolved. Two were not real, one was real and got fixed, one was real,
+unreachable, and got a guard anyway.
 
-`Source/IconMenu.cpp`, `reconnectGraph` against `audioProcessorChanged`
+### NOT REAL: a plugin driving a self-sustaining rewire loop
 
-A plugin that re-announces its latency in response to something `reconnectGraph`
-does would drive `reconnectGraph` to `audioProcessorChanged` to
-`triggerAsyncUpdate` and round again, one turn per message-loop iteration. The
-`AsyncUpdater` coalesces, so it would rebuild forever rather than blow the
-stack, and `handleAsyncUpdate` logs on every turn, so a live loop would at least
-be visible in `LightHost.log` as a repeating line.
+The named route — a plugin that re-declares latency in `prepareToPlay` — is
+unreachable from `reconnectGraph`, because **a rebuild never re-prepares a node
+that is already prepared.** `NodeStates::applySettings` keeps a `preparedNodes`
+set and `continue`s past anything in it, and that set is only cleared when the
+graph's sample rate or block size actually changes — which `rebuild()` does not
+touch. So each turn of the supposed loop prepares nothing and announces nothing.
 
-5.3.0 guarded `setBypassed` on the value actually changing, which closes the
-obvious route -- a bypass write can no longer trigger a latency announcement
-that triggers another bypass write. What is not closed is a plugin that
-re-declares on `prepareToPlay`.
+Two further dampers sit behind that: the render-sequence signature means a
+rewire that changes nothing publishes nothing, and `setLatencySamples` is itself
+change-guarded, so a plugin re-announcing the *same* latency emits no callback.
 
-Not reproduced. It needs a plugin that behaves this way, and none of the sixteen
-installed here does.
+Observed live on the real chain: one plugin does re-declare its latency after
+load, producing exactly one extra rewire, which then settles. That is the
+desired behaviour — it is what picks the new latency up.
 
-### Every plugin add publishes a render sequence, and only this site does
+No budget was added. The sample-rate recursion it would imitate is genuinely
+unbounded; this one is provably not, and a second piece of state to keep correct
+for a loop that cannot start is a cost with no benefit.
 
-`Source/IconMenu.cpp`, the `graph.addNode` in `loadActivePlugins`
+**One residual hole was real and is now closed.** `Node::isBypassed()` reads the
+plugin's own bypass *parameter*, not our stored intent, so a plugin that clamps
+or ignores the write leaves the guard's condition true for ever and is written on
+every single rewire. `reconnectGraph` now reads back once and, if the write did
+not take, logs it and stops asking that node for the rest of the session. That
+bounds the one unbounded write into third-party code, and surfaces a plugin bug
+the user would otherwise never see.
 
-That call takes the default `UpdateKind`, which is `sync`. Every other graph
-mutation in the file passes `UpdateKind::none` and says why, including
-`syncProbeNodes`, which complains about exactly this in detail. So a chain of
-eight plugins builds and publishes eight render sequences during load instead of
-one at `onAllPluginsLoaded`.
+### REAL, FIXED: every plugin add published a render sequence
 
-Audibly harmless -- the new node is unconnected and the wiring is unchanged, so
-every intermediate sequence sounds like the last one. **Not measured**, so this
-is a suspicion about startup time and nothing more. It is listed because it is
-the one mutation site with no comment saying the choice was deliberate.
+The `addNode` in `onPluginInstanceReady` — not `loadActivePlugins`, as the entry
+said — was the only graph mutation in the file taking the default `UpdateKind`,
+which is `sync`. An eight-plugin chain therefore published ten render sequences
+during load where two would do, each an O(nodes²) ordering pass plus three
+block-sized buffer allocations. Now `UpdateKind::none`, like every other
+mutation there.
 
-### `cancelPendingUpdate()` runs before the thing most likely to re-arm it
+It also moves `prepareToPlay` to the final rebuild, i.e. **after**
+`restorePluginState` rather than before it, which is the better order — a plugin
+sizes its buffers knowing its real settings — and the order `OfflineRender`
+already used. Verified on the real chain: all plugins load, the graph wires, and
+the render regression is byte-identical.
 
-`Source/IconMenu.cpp`, the destructor
+Still not measured as a startup-time improvement, and it is not claimed as one.
+It is provably wasted work removed.
 
-The cancel is commented "a plugin may have reported a latency change moments
-ago". Twenty-odd lines later comes `PluginWindow::closeAllCurrentlyOpenWindows()`,
-which `loadActivePlugins` separately identifies as the main source of late
-latency reports. So the guard runs before its most likely trigger.
+The four defaulting sites in `OfflineRender.hpp` are genuinely free, because
+they all run before `graph.prepareToPlay` when there are no settings to apply,
+so no sequence is built.
 
-No failure could be constructed: `~AsyncUpdater` cancels again, so a re-arm
-between the two is collected anyway. The guard is in the wrong place for the
-reason it gives, which is worth knowing if that destructor is ever reordered.
+### REAL, FIXED — and the entry had the cause wrong
 
-### The node id counter has no ceiling
+`~IconMenu` did have a hole here, but not the one described. The claim was that
+`cancelPendingUpdate()` runs before its most likely trigger and that
+`~AsyncUpdater` cancels again anyway, making it cosmetic. Both halves are wrong:
+`IconMenu` derives from `AsyncUpdater`, so that destructor runs *after* this
+whole body, far too late to help.
 
-`Source/PluginChainStore.hpp`, `allocateNodeId`
+What was actually missing is `stopListeningToAll()`. `loadActivePlugins` calls it
+immediately after its cancel, and `PluginWindow.cpp` names that pairing as the
+caller's responsibility — because `closeAllCurrentlyOpenWindows()` deletes every
+editor and then **pumps the message queue**. Still registered as a listener, a
+latency report from a closing editor was delivered inside that pump, running
+`reconnectGraph()` mid-teardown — which adds probe nodes to a graph about to be
+destroyed and pushes a bypass parameter into a plugin whose editor has just
+gone — and `refreshPreferencesIfOpen()`, which drives a window this destructor
+deliberately never resets.
 
-Ids are handed out from 1 upward and never reused; `Source/NodeIds.hpp` reserves
-`1'000'000` for the lane trims. Nothing stops the counter reaching it. A million
-plugin adds in one settings file is not a realistic session, so this is an
-unbounded counter rather than a bug, but the reservation is only safe by
-arithmetic nobody checks.
+One line added. Moving the cancel, which is what the entry proposed, would have
+fixed nothing: the re-arm and its delivery are both inside
+`closeAllCurrentlyOpenWindows()`.
+
+### REAL BUT UNREACHABLE, GUARDED: the node id counter had no ceiling
+
+Verified rather than assumed: there is **no bulk-allocation path.** Both callers
+allocate only for a plugin with no stored id, and the abandon path rolls a
+staged allocation back. Reaching `1'000'000` needs roughly that many discrete
+adds.
+
+Guarded anyway, because the failure is silent in a release build and does not
+look like an id problem. `addNode` refuses a duplicate id with only a debug
+assertion, and `getNodeForId (1'000'000)` then returns the graph's audio **input**
+node for that plugin — so the chain wires input to input, and if that plugin is
+bypassed it bypasses the graph input and silences the host entirely.
+
+`allocateNodeId` now stops at `kMaxPluginNodeId` and returns 0, which is the
+value `readNodeId` already uses for "no id yet". Both callers check it and report
+rather than passing it on. Two tests pin the ceiling, and one asserts it against
+`NodeIds.hpp` rather than against a second copy of the number, so raising one
+without the other goes red.
 
 ---
+
 
 ## Testability
 
@@ -304,24 +318,37 @@ nobody should trust without saying so.
 
 ## Process
 
-- **The README's front-page screenshot shows v4.0.3.**
-  `docs/images/preferences.png` predates the lane trims, the signal view and the
-  status row, so the first thing a visitor sees is three releases out of date.
+- **DONE 2026-09-18: the README screenshots are current.** Captured by hand on
+  a console session, which is what the two failed RDP attempts established was
+  necessary. Nine new images; the three v4.0.3-era ones are no longer
+  referenced.
 
-  5.4.0 removed the hard part: `-preferences` brings the window up from a
-  command line, so no tray hunting and no GUI automation is needed.
+  The lesson from the failed attempts is kept because it is the useful part:
+  `SetForegroundWindow` fails silently when the calling process lacks foreground
+  rights, so an automated capture photographed whatever window was painted at
+  those coordinates. It nearly put an unrelated application's screen content
+  into a public repository, and the only thing that caught it was looking at the
+  image. **Check any capture by eye before referencing it.** Every one of the
+  nine was viewed and audited before being embedded.
 
-      "Light Host" -preferences
+- **A personal handle is in the git history of a public repo.** The old
+  front-page shot, `docs/images/preferences.png`, has the output device named
+  "J-Dizzle Mic Chain (VB-Audio Virtual Cable)". The device has since been
+  renamed and the new captures do not show it, so the README no longer displays
+  it -- but the file is still on disk and in history from `c7aba83` onward.
 
-  What is still needed is a **console session with real audio hardware**.
-  Attempted over RDP on 2026-09-17 and abandoned twice. Windows exposes only
-  "Remote Audio" and no input to an RDP session, so the device rows would
-  misrepresent the application; and `SetForegroundWindow` fails silently when
-  the calling process lacks foreground rights, so the capture photographed
-  whatever window was painted at those coordinates instead. That second failure
-  is the one to remember: it nearly committed an unrelated application's screen
-  content into a public repository, and the only thing that caught it was
-  looking at the image before using it. **Check any automated capture by eye.**
+  Removing it from history means a rewrite of a public repository, which breaks
+  every existing clone and is not a thing to do unasked. **This is a judgement
+  call for whoever owns the repo**: a self-chosen handle is not the same as an
+  address or a real name, and it may be perfectly acceptable. It is written down
+  here so the choice is deliberate rather than unnoticed.
+
+- **Four image files are now referenced by nothing**: `preferences.png`,
+  `available-plugins.png`, `options-menu.png` and `plugin-scanning.png`. The
+  first is still linked from this file, in the entry above, so deleting it would
+  leave a dangling path. `plugin-scanning.png` is clean and is the only evidence
+  anywhere of the default VST2 scan paths -- it was left out because that
+  section already carries three screenshots, not because it is unusable.
 - **`RELEASING.md` uses `v5.2.0` as its worked tagging example**, and v5.2.0 is
   the one version in the v5 line that was deliberately never tagged despite
   having a CHANGELOG section. So the example version doubles as the
