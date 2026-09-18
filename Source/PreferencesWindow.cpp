@@ -11,6 +11,7 @@
 #include "PluginChainStore.hpp"
 #include "SignalMetering.hpp"
 #include "UiMetrics.hpp"
+#include "VisibilityTimers.hpp"
 #include "Lanes.hpp"
 #include <set>
 
@@ -133,42 +134,10 @@ namespace meterscale
 // watching. A badge that decayed would have been clear again long before anyone
 // opened the window, which is the same as not having one.
 //==============================================================================
-/** Implemented by anything that runs a timer only while it can be seen.
-
-    Exists for one reason: JUCE delivers `minimisationStateChanged` to the
-    top-level component and to nothing below it, and restoring a window produces
-    no `visibilityChanged`, no `parentHierarchyChanged` and no `resized()` on the
-    descendants -- the peer skips its bounds update while minimised, so on
-    restore the bounds are unchanged and nothing cascades.
-
-    So a component that stops its own timer when hidden has no event telling it
-    to start again. PreferencesWindow receives the one event there is and walks
-    the tree calling this.
-*/
-struct VisibilityDrivenTimer
-{
-    virtual ~VisibilityDrivenTimer() = default;
-
-    /** Start or stop, according to whether this component can now be seen. */
-    virtual void refreshTimerForVisibility() = 0;
-};
-
-/** Tells every VisibilityDrivenTimer under `root` to re-check itself. */
-inline void refreshVisibilityTimers (juce::Component& root)
-{
-    if (auto* timed = dynamic_cast<VisibilityDrivenTimer*> (&root))
-        timed->refreshTimerForVisibility();
-
-    for (auto* child : root.getChildren())
-        if (child != nullptr)
-            refreshVisibilityTimers (*child);
-}
-
-//==============================================================================
 class SignalMeter final : public juce::Component,
                           public juce::SettableTooltipClient,
                           private juce::Timer,
-                          private VisibilityDrivenTimer
+                          private lighthost::ui::VisibilityDrivenTimer
 {
 public:
     explicit SignalMeter (const juce::String& caption) : label (caption)
@@ -383,7 +352,7 @@ private:
 //==============================================================================
 class SignalViewRows final : public juce::Component,
                              private juce::Timer,
-                             private VisibilityDrivenTimer
+                             private lighthost::ui::VisibilityDrivenTimer
 {
 public:
     struct Tap
@@ -2721,5 +2690,5 @@ void PreferencesWindow::minimisationStateChanged (bool isNowMinimised)
     // The whole point: this is the only component JUCE tells. See the
     // declaration in PreferencesWindow.h for why nothing below it finds out.
     if (auto* content = getContentComponent())
-        refreshVisibilityTimers (*content);
+        lighthost::ui::refreshVisibilityTimers (*content);
 }

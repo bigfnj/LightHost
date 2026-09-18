@@ -111,9 +111,10 @@ int main (int argc, char** argv)
                                        "PluginChain", "PluginScan", "PluginState",
                                        "PluginStateVault", "PluginWindow",
                                        "SampleRate", "SelfTest", "SettingsKeys",
-                                       "StartupFlags", "Status" };
+                                       "StartupFlags", "Status",
+                                       "VisibilityTimers" };
 
-    const juce::StringArray needsDisplay { "PluginWindowGui" };
+    const juce::StringArray needsDisplay { "PluginWindowGui", "VisibilityTimersGui" };
 
     juce::StringArray declared (headless);
     declared.addArray (needsDisplay);

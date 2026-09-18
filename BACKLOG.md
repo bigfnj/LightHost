@@ -333,13 +333,27 @@ nobody should trust without saying so.
   `parentHierarchyChanged` and no `resized()` below it, because the peer skips
   its bounds update while minimised so the bounds are unchanged on restore.
 
-  **FIXED the same day**: a `VisibilityDrivenTimer` interface, implemented by
+  **FIXED and now tested.** A `VisibilityDrivenTimer` interface, implemented by
   both timer owners, and `PreferencesWindow::minimisationStateChanged` -- the one
-  component that does receive the event -- walks the tree and tells them to
-  re-check. Reasoned rather than observed: the restart path is the same
-  `updateTimerState`/`setWatching` that `visibilityChanged` already drives and
-  that demonstrably works, but nobody has watched a meter resume after a
-  minimise. Worth one glance next time the window is open.
+  component that receives the event -- walks the tree and tells them to
+  re-check. `SignalViewRows` rebuilds its `Meter::Watch` objects as well as
+  restarting its timer, because `setWatching(true)` goes through
+  `beginWatching()`.
+
+  It was recorded here as "reasoned rather than observed" for a few hours, and
+  that is now closed. The walk lives in `Source/VisibilityTimers.hpp` so it is
+  reachable from tests, and `Tests/VisibilityTimerTests.cpp` asserts both halves:
+  seven headless cases for the walk, and two GUI cases that minimise and restore
+  a real `DocumentWindow`. The second GUI case is the interesting one -- it
+  asserts that a descendant receives NO `visibilityChanged`, NO
+  `parentHierarchyChanged` and NO `resized()` on restore, which is the claim the
+  whole fix rests on. If JUCE ever starts telling descendants directly, that
+  test goes red and the forwarding becomes redundant, which is worth being told
+  rather than left to be rediscovered.
+
+  Both were confirmed to fail before being believed: making the walk
+  non-recursive turns the nested case red with "a timer three levels down was
+  not reached".
 
 - **`setStatusMessage` can push the Apply button off the bottom.** It grows
   `fixedLayoutHeight()` by a row and calls `resized()` on the panel, which

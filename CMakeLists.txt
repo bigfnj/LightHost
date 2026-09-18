@@ -290,6 +290,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Source/AudioChainList.hpp
         Source/PluginWindow.cpp
         Tests/TestMain.cpp
+        Tests/VisibilityTimerTests.cpp
         Tests/AudioChainListTests.cpp
         Tests/ChainReconcileTests.cpp
         Tests/ConfirmPolicyTests.cpp
