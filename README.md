@@ -12,7 +12,7 @@ to a virtual cable, and every application on the machine hears your processed
 voice. Set it up once and forget it is running.
 
 <p align="center">
-  <img src="docs/images/preferences.png" alt="The Light Host Preferences window: input device, plugin chain, lane trims, output device and device settings" width="520">
+  <img src="docs/images/lighthost-main.png" alt="The Light Host Preferences window: input device with a level meter and clip badge, an audio chain of three plugins each with a lane and a settings button, lane trims for the four lanes, output device with its own meter, and device settings ending in the latency readout" width="520">
 </p>
 
 ---
@@ -105,18 +105,23 @@ is not worth that to this project.
 
 ## Adding plugins
 
-`+ Add Plugin` lists what Light Host already knows about. To scan for plugins, use
-**Edit Plugins** from the tray right-click menu:
+`+ Add Plugin` lists what Light Host already knows about, grouped by manufacturer:
 
 <p align="center">
-  <img src="docs/images/available-plugins.png" alt="The Available Plugins window listing scanned VST and VST3 plugins with name, format, category, manufacturer and description columns" width="720">
+  <img src="docs/images/plugins.png" alt="The Add Plugin menu listing manufacturers — Altinus, Cockos, Elgato, scintillator and sonible — with the Elgato submenu open on its five plugins" width="320">
+</p>
+
+To scan for plugins, use **Edit Plugins** from the tray right-click menu:
+
+<p align="center">
+  <img src="docs/images/plugins-loaded.png" alt="The Available Plugins window listing scanned VST and VST3 plugins with name, format, category, manufacturer and description columns" width="720">
 </p>
 
 The `Options…` button holds the scanning controls, including a **Scan Custom
 Folder…** item for plugins installed somewhere non-standard:
 
 <p align="center">
-  <img src="docs/images/options-menu.png" alt="The Options menu showing list management and scan actions, including Scan Custom Folder" width="380">
+  <img src="docs/images/plugin-options.png" alt="The Options menu open below its button, showing list management and scan actions including Scan Custom Folder, with the two items that need a selected plugin greyed out" width="380">
 </p>
 
 Light Host does not prune your scanned list. A plugin that will not load is
@@ -199,7 +204,11 @@ It updates when a plugin re-declares its latency, so switching a plugin's
 latency mode shows the cost at the moment you change it. Note that `Buffer Size`
 above it is the *device* block size and not the answer: a 10 ms buffer sitting
 under a 94 ms plugin chain is a number that misleads if it is the only one on
-screen.
+screen — which is the pair of rows in the shot below.
+
+<p align="center">
+  <img src="docs/images/device-settings-zoomin.png" alt="The Device Settings section: Device API set to Windows Audio, sample rate 48 kHz, buffer size 480 samples at 10.0 ms, and beneath them the latency row reading 94.0 ms plugins plus 20.0 ms device equals 114.0 ms" width="520">
+</p>
 
 It is a readout, not a setting. Plugin latency is inherent to the plugins, and on
 a live monitoring path there is nothing for the host to compensate — the only
@@ -223,11 +232,22 @@ Preferences shows a meter under the input device and another under the output,
 each with a peak reading in dBFS and a **CLIP** badge.
 
 **The badge latches.** It stays lit until you click it, rather than fading once
-the level comes back down. That is deliberate: this feature exists because a
-microphone sat at +30 dB hitting full scale for hours, the application said
-nothing about it, and the first sign of trouble was other people on the call
-saying the audio was unusable. A warning that had cleared itself by the time
-anyone looked would have been the same as no warning.
+the level comes back down.
+
+<p align="center">
+  <img src="docs/images/clip-01.png" alt="The input row with the CLIP badge lit red, an arrow pointing at it, and the peak reading showing -49.1 dBFS — the badge still latched although the level has fallen far below full scale" width="520">
+  <br>
+  <img src="docs/images/clip-02.png" alt="The same input row after the CLIP badge has been clicked: the badge is dark again and the peak reads -44.8 dBFS" width="520">
+  <br>
+  <em>Top: the badge still lit at −49.1 dBFS, long after the peak that set it.
+  Bottom: the same row after clicking the badge to clear it.</em>
+</p>
+
+That is deliberate: this feature exists because a microphone sat at +30 dB
+hitting full scale for hours, the application said nothing about it, and the
+first sign of trouble was other people on the call saying the audio was
+unusable. A warning that had cleared itself by the time anyone looked would have
+been the same as no warning.
 
 If the input badge lights, the fix is upstream of Light Host — lower the Windows
 input level for that device. Clipping happens in the converter, before any plugin
@@ -238,6 +258,10 @@ sees a sample, so nothing in the chain can undo it.
 `Signal view` in the AUDIO CHAIN header opens a column to the right of the
 window: the input, one row per plugin, then the output. Each row shows peak, RMS,
 and **the change from the row above**.
+
+<p align="center">
+  <img src="docs/images/signal-view.png" alt="The Preferences window with the signal view column open on the right, showing a bar and peak and RMS figures for the input, for each of the three plugins in turn, and for the output, with each row's change from the row above reading +0.2 dB, -4.5 dB, +5.4 dB and +0.0 dB" width="720">
+</p>
 
 That last column is the useful one. It answers "which plugin is doing that?"
 directly — a compressor adding 7 dB of make-up gain shows up as `+7.0 dB` on its
