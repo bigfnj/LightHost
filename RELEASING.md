@@ -18,6 +18,11 @@ keep — see "Prerelease tags".
 
 ---
 
+> The worked example above used to be `v5.2.0`, which is the one version in the
+> v5 line that was deliberately never tagged despite having a CHANGELOG section.
+> So the example doubled as the counter-example, and anyone checking the doc
+> against `git tag` found it missing.
+
 ## Wait for CI before tagging
 
 **Push `main`, wait for CI to go green on all three platforms, and only then
@@ -114,8 +119,8 @@ the local one that the two rarely disagree, but "rarely" is not "never".
 6. **Tag and push.**
 
    ```bash
-   git tag v5.2.0
-   git push origin v5.2.0
+   git tag v5.4.0
+   git push origin v5.4.0
    ```
 
 7. **Confirm the release actually published.** See "After the tag".
@@ -206,19 +211,19 @@ the old commit, and the artifacts stop matching the tag they claim to come from.
 ## Prerelease tags
 
 The workflow still supports them, and they are worth knowing about even though
-they are not the normal path. A tag carrying a prerelease suffix (`v5.2.0-rc1`)
+they are not the normal path. A tag carrying a prerelease suffix (`v5.4.0-rc1`)
 is classified as a draft marked prerelease: nothing becomes visible until someone
 publishes it by hand, and it never takes the Latest badge. The changelog lookup
-strips the suffix, so `v5.2.0-rc1` reads the `## [5.2.0]` section.
+strips the suffix, so `v5.4.0-rc1` reads the `## [5.2.0]` section.
 
 Use one when the thing being tested is the pipeline itself — a change to
 `release.yml`, a new artifact, a new platform — because that is what a local
 build cannot check. Delete the draft and both tags afterwards:
 
 ```bash
-gh release delete v5.2.0-rc1 --yes
-git push origin :refs/tags/v5.2.0-rc1
-git tag -d v5.2.0-rc1
+gh release delete v5.4.0-rc1 --yes
+git push origin :refs/tags/v5.4.0-rc1
+git tag -d v5.4.0-rc1
 ```
 
 ---

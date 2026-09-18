@@ -33,6 +33,29 @@ public:
         openPreferencesOnStart =
             lighthost::startup::openPreferencesRequested (getCommandLineParameterArray());
 
+        // --scan with -self-test asks for two contradictory things. The
+        // self-test runs in a throwaway settings folder that is deleted on
+        // success, so the scan it was asked to persist goes with it: the user
+        // gets no plugin list and no reason why. Refused rather than silently
+        // half-honoured, which is the one thing a flag combination must not do.
+        if (scanMode && selfTest)
+        {
+            std::printf ("SCAN + SELF-TEST: --scan writes the plugin list into the "
+                         "self-test's throwaway settings folder, which is deleted "
+                         "when the run passes, so the scan would be lost. Run them "
+                         "separately.\n");
+            // Disarmed, not merely quit. quit() begins the shutdown, and the
+            // self-test's shutdown checks are gated on this flag -- left set,
+            // they ran against a run that never started and printed a second,
+            // contradictory failure underneath the refusal.
+            selfTest = false;
+            scanMode = false;
+
+            setApplicationReturnValue (2);
+            quit();
+            return;
+        }
+
         juce::PropertiesFile::Options options;
         options.applicationName     = getApplicationName();
         options.filenameSuffix      = "settings";

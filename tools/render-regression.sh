@@ -160,12 +160,18 @@ case "$mode" in
 
         # First non-comment line, so a baseline written before the provenance
         # lines existed still reads correctly.
-        want=$(grep -vE '^[[:space:]]*(#|$)' "$baseline" | head -n 1)
+        # No `| head -n 1` on either of these. Under `pipefail`, head exiting
+        # first can SIGPIPE its producer, which yields 141, and `set -e` then
+        # aborts -- a tooling failure reported as a regression. Unreachable with
+        # a baseline file this small, because the producer finishes before head
+        # closes, but neither pipe needs to exist: both tools can stop by
+        # themselves.
+        want=$(awk '!/^[[:space:]]*(#|$)/ { print; exit }' "$baseline")
 
         # Refuse to compare against a baseline taken from a different input or
         # chain. Reporting REGRESSION FAIL for that would be a lie: nothing
         # regressed, the question was different.
-        recorded_provenance=$(sed -n 's/^# \(input=.*\)$/\1/p' "$baseline" | head -n 1)
+        recorded_provenance=$(sed -n 's/^# \(input=.*\)$/\1/p;/^# input=/q' "$baseline")
 
         if [[ -n "$recorded_provenance" && "$recorded_provenance" != "$provenance" ]]; then
             echo "REGRESSION TOOL FAIL: this baseline was taken from a different render" >&2
