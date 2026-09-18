@@ -386,7 +386,12 @@ can tell you and the thing a scan used to throw away.
 
 `--scan-path` is not optional on every machine. JUCE's default VST2 locations do
 not include `%COMMONPROGRAMFILES%\VST2`, which is where the ReaPlugs installer
-puts ReaEQ, so that whole folder is invisible to a bare `--scan`.
+puts ReaEQ, so that whole folder is invisible to a bare `--scan`. The folder
+picker shows the defaults it does use:
+
+<p align="center">
+  <img src="docs/images/plugin-scanning.png" alt="The Select folders to scan dialog, listing the two default VST2 locations: C colon backslash Program Files backslash Steinberg backslash VstPlugins, and C colon backslash Program Files backslash VstPlugins" width="520">
+</p>
 
 The list is written after each format finishes rather than once at the end.
 Scanning loads every plugin it finds into this process, so a plugin that

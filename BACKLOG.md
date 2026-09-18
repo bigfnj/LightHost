@@ -331,24 +331,20 @@ nobody should trust without saying so.
   image. **Check any capture by eye before referencing it.** Every one of the
   nine was viewed and audited before being embedded.
 
-- **A personal handle is in the git history of a public repo.** The old
-  front-page shot, `docs/images/preferences.png`, has the output device named
-  "J-Dizzle Mic Chain (VB-Audio Virtual Cable)". The device has since been
-  renamed and the new captures do not show it, so the README no longer displays
-  it -- but the file is still on disk and in history from `c7aba83` onward.
+- **CLOSED 2026-09-18: the handle in git history is accepted.** The old
+  front-page shot carries "J-Dizzle Mic Chain" as a device name, in history from
+  `c7aba83`. The repo owner's decision is that a self-chosen handle is not a
+  concern, so nothing is being rewritten. Recorded because the alternative --
+  rewriting a public repository and breaking every clone -- should never be done
+  on a whim later by someone who finds this and assumes it was an oversight.
 
-  Removing it from history means a rewrite of a public repository, which breaks
-  every existing clone and is not a thing to do unasked. **This is a judgement
-  call for whoever owns the repo**: a self-chosen handle is not the same as an
-  address or a real name, and it may be perfectly acceptable. It is written down
-  here so the choice is deliberate rather than unnoticed.
+- **CLOSED 2026-09-18: the orphaned images are resolved.**
+  `plugin-scanning.png` is now used: it shows the two default VST2 scan
+  locations, which is direct evidence for the `--scan-path` paragraph that had
+  only prose behind it. `preferences.png`, `available-plugins.png` and
+  `options-menu.png` are deleted from the tree -- all three are 4.0.3-era, all
+  three are superseded, and all three remain in history if wanted.
 
-- **Four image files are now referenced by nothing**: `preferences.png`,
-  `available-plugins.png`, `options-menu.png` and `plugin-scanning.png`. The
-  first is still linked from this file, in the entry above, so deleting it would
-  leave a dangling path. `plugin-scanning.png` is clean and is the only evidence
-  anywhere of the default VST2 scan paths -- it was left out because that
-  section already carries three screenshots, not because it is unusable.
 - **`RELEASING.md` uses `v5.2.0` as its worked tagging example**, and v5.2.0 is
   the one version in the v5 line that was deliberately never tagged despite
   having a CHANGELOG section. So the example version doubles as the
