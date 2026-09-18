@@ -3,6 +3,10 @@
 #include "GainProcessor.hpp"
 #include "HostServices.hpp"
 #include "LookAndFeel.hpp"
+// For nodeids::maxProbes, which the signal view's header names. It is the cap
+// getCommittedChainNames applies, and the only "rows you are not seeing" the
+// column still has after its rows gained a scrollbar.
+#include "NodeIds.hpp"
 #include "OfflineRender.hpp"
 #include "PluginChainStore.hpp"
 #include "SignalMetering.hpp"
@@ -120,7 +124,7 @@ namespace meterscale
 // sum of squares, and this component displays peak, which is measured always and
 // by SIMD. It did hold one briefly, which meant the audio thread computed an RMS
 // figure on every block for as long as this window was open and then threw it
-// away -- while two comments claimed the opposite. Only SignalViewPanel, which
+// away -- while two comments claimed the opposite. Only SignalViewRows, which
 // actually displays RMS, takes a Watch.
 //
 // WHY THE CLIP BADGE LATCHES
@@ -129,9 +133,42 @@ namespace meterscale
 // watching. A badge that decayed would have been clear again long before anyone
 // opened the window, which is the same as not having one.
 //==============================================================================
+/** Implemented by anything that runs a timer only while it can be seen.
+
+    Exists for one reason: JUCE delivers `minimisationStateChanged` to the
+    top-level component and to nothing below it, and restoring a window produces
+    no `visibilityChanged`, no `parentHierarchyChanged` and no `resized()` on the
+    descendants -- the peer skips its bounds update while minimised, so on
+    restore the bounds are unchanged and nothing cascades.
+
+    So a component that stops its own timer when hidden has no event telling it
+    to start again. PreferencesWindow receives the one event there is and walks
+    the tree calling this.
+*/
+struct VisibilityDrivenTimer
+{
+    virtual ~VisibilityDrivenTimer() = default;
+
+    /** Start or stop, according to whether this component can now be seen. */
+    virtual void refreshTimerForVisibility() = 0;
+};
+
+/** Tells every VisibilityDrivenTimer under `root` to re-check itself. */
+inline void refreshVisibilityTimers (juce::Component& root)
+{
+    if (auto* timed = dynamic_cast<VisibilityDrivenTimer*> (&root))
+        timed->refreshTimerForVisibility();
+
+    for (auto* child : root.getChildren())
+        if (child != nullptr)
+            refreshVisibilityTimers (*child);
+}
+
+//==============================================================================
 class SignalMeter final : public juce::Component,
                           public juce::SettableTooltipClient,
-                          private juce::Timer
+                          private juce::Timer,
+                          private VisibilityDrivenTimer
 {
 public:
     explicit SignalMeter (const juce::String& caption) : label (caption)
@@ -154,6 +191,10 @@ public:
 
     void visibilityChanged() override      { updateTimerState(); }
     void parentHierarchyChanged() override { updateTimerState(); }
+
+    // Neither of the two above fires when a window is restored from minimised.
+    // PreferencesWindow forwards that event here.
+    void refreshTimerForVisibility() override { updateTimerState(); }
 
     ~SignalMeter() override { stopTimer(); }
 
@@ -315,11 +356,11 @@ private:
 };
 
 //==============================================================================
-// SignalViewPanel
+// SignalViewRows
 //
-// The per-plugin taps, as a column to the right of the main panel: input, then
-// one row per plugin, then output. Each row carries a peak, an RMS and the
-// change from the row above it.
+// The per-plugin taps, as one tall component inside the column's viewport:
+// input, then one row per plugin, then output. Each row carries a peak, an RMS
+// and the change from the row above it.
 //
 // The delta column is the reason this exists. Working out that smart:chain was
 // adding 7 dB took a paced offline render and an analysis script; the number was
@@ -327,9 +368,22 @@ private:
 //
 // One timer for the whole column rather than one per row, and it only runs while
 // the column is showing -- which is also the only time the probes exist at all.
+//
+// WHY THE TIMER AND THE WATCHES ARE STILL HERE, ONE LEVEL INSIDE A VIEWPORT
+//
+// isShowing() walks to the top-level component, so it answers the same here as
+// it does on SignalViewPanel: a Viewport keeps its content holder and its viewed
+// component visible for as long as they are attached, which leaves the column's
+// own visible flag and the peer's minimised state as the only things that vary.
+// But visibilityChanged() is delivered to the component whose flag changed and
+// to NOTHING below it -- the same hole the timerCallback note below is about --
+// so hiding the column cannot reach this class on its own. SignalViewPanel
+// forwards it through setWatching, which keeps the stop synchronous instead of
+// one tick late.
 //==============================================================================
-class SignalViewPanel final : public juce::Component,
-                              private juce::Timer
+class SignalViewRows final : public juce::Component,
+                             private juce::Timer,
+                             private VisibilityDrivenTimer
 {
 public:
     struct Tap
@@ -339,10 +393,10 @@ public:
         lighthost::metering::Meter* meter = nullptr;
     };
 
-    SignalViewPanel() = default;
-    ~SignalViewPanel() override { stopTimer(); }
+    SignalViewRows() = default;
+    ~SignalViewRows() override { stopTimer(); }
 
-    /** Replaces the column. Called when the chain changes or the panel opens. */
+    /** Replaces the rows. Called when the chain changes or the panel opens. */
     void setTaps (std::vector<Tap> newTaps)
     {
         watches.clear();
@@ -355,8 +409,34 @@ public:
         repaint();
     }
 
-    void visibilityChanged() override        { updateWatchState(); }
-    void parentHierarchyChanged() override   { updateWatchState(); }
+    /** The height every row needs. What the viewport scrolls over, and the only
+        thing the column has to ask this class for when it lays out.
+    */
+    [[nodiscard]] int getPreferredHeight() const noexcept
+    {
+        return static_cast<int> (taps.size()) * kRowH;
+    }
+
+    /** Starts or stops the per-frame work, including the watches that turn on
+        the audio thread's RMS accumulation.
+
+        Driven from the column rather than from this class's own
+        visibilityChanged, because a parent's visibility change is not delivered
+        to its children. parentHierarchyChanged below still hooks the one event
+        that IS delivered here -- being attached or detached.
+    */
+    void setWatching (bool shouldWatch)
+    {
+        if (shouldWatch)
+            beginWatching();
+        else
+            endWatching();
+    }
+
+    void parentHierarchyChanged() override   { setWatching (isShowing()); }
+
+    // Restoring from minimised delivers none of the hooks above.
+    void refreshTimerForVisibility() override { setWatching (isShowing()); }
 
     void paint (juce::Graphics& g) override
     {
@@ -365,16 +445,6 @@ public:
         const auto text = laf.findColour (juce::Label::textColourId);
 
         g.fillAll (bg.darker (0.30f));
-
-        auto area = getLocalBounds();
-
-        // Header, matching the section bars in the main panel.
-        auto header = area.removeFromTop (kHeaderH);
-        g.setColour (bg.darker (0.55f));
-        g.fillRect (header);
-        g.setColour (text.withAlpha (0.80f));
-        g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f).withStyle ("Bold")));
-        g.drawText ("SIGNAL VIEW", header.reduced (10, 0), juce::Justification::centredLeft);
 
         // There was a "No plugins in the chain." message here, behind
         // `if (taps.empty())`. It had never been drawn: the only caller,
@@ -386,35 +456,34 @@ public:
         // message would then be wrong in the other direction: the view is not
         // empty, it is showing the two things it can always show.
 
-        // Rows that do not fit are counted rather than drawn into a
-        // zero-height rectangle. removeFromTop returns an empty rectangle once
-        // area is exhausted and every draw becomes a silent no-op, so a chain
-        // longer than the window simply stopped being shown -- no scrollbar,
-        // no ellipsis, nothing. A meter you cannot see reads exactly like a
-        // meter showing silence, which for a diagnostic view is the same
-        // mis-attribution the labels were just fixed for.
+        // Only the rows the invalid region actually touches.
         //
-        // Counting is not a scrollbar. It is the smallest change that stops
-        // the view lying; SignalViewPanel would need a juce::Viewport to
-        // actually show them, which is recorded in BACKLOG.md.
-        size_t drawn = 0;
+        // 5.3.0 drew rows with removeFromTop until the area ran out and counted
+        // the rest, because removeFromTop returns an empty rectangle once
+        // exhausted and every draw then becomes a silent no-op -- so a chain
+        // longer than the window simply stopped being shown, and a meter you
+        // cannot see reads exactly like a meter showing silence. This component
+        // is now laid out at its full height inside a viewport, so every row
+        // exists and every row is reachable; what used to be a truncation is a
+        // scroll position.
+        //
+        // Clipping the loop is what stops a 34-row chain costing 34 paintTap
+        // calls on every one of the 25 frames a second the timer asks for, and
+        // is the ONLY per-frame work a row scrolled out of sight sheds -- the
+        // meters themselves are still read for every row, on purpose. See
+        // timerCallback.
+        const auto clip = g.getClipBounds();
 
-        for (size_t i = 0; i < taps.size(); ++i)
-        {
-            if (area.getHeight() < kRowH)
-                break;
+        if (clip.isEmpty() || taps.empty())
+            return;
 
-            paintTap (g, area.removeFromTop (kRowH), i, text, bg);
-            ++drawn;
-        }
+        const int firstRow = juce::jmax (0, clip.getY() / kRowH);
+        const int lastRow  = juce::jmin (static_cast<int> (taps.size()) - 1,
+                                         (clip.getBottom() - 1) / kRowH);
 
-        if (drawn < taps.size())
-        {
-            g.setColour (juce::Colour (lighthost::ui::LookAndFeel::kCaution));
-            g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f)));
-            g.drawText (juce::String (taps.size() - drawn) + " more not shown -- make the window taller",
-                        header.reduced (10, 0), juce::Justification::centredRight);
-        }
+        for (int i = firstRow; i <= lastRow; ++i)
+            paintTap (g, { 0, i * kRowH, getWidth(), kRowH },
+                      static_cast<size_t> (i), text, bg);
     }
 
 private:
@@ -425,14 +494,6 @@ private:
         bool  rmsValid = false;
         bool  clipped  = false;
     };
-
-    void updateWatchState()
-    {
-        if (isShowing())
-            beginWatching();
-        else
-            endWatching();
-    }
 
     void beginWatching()
     {
@@ -467,6 +528,23 @@ private:
 
         bool changed = false;
 
+        // EVERY row, not only the rows currently scrolled into view, and not
+        // only the rows currently watched.
+        //
+        // Two things make that deliberate rather than an oversight. The fall
+        // ballistics below advance per tick, so a row skipped while off screen
+        // would scroll back carrying whatever peak it held when it left --
+        // which for a diagnostic column is worse than the truncation this file
+        // has just stopped doing. And the delta column reads readings[i - 1]:
+        // gate the RMS on what is visible and the topmost visible row loses its
+        // reference the moment the row above it scrolls off, so the one number
+        // this panel exists for goes to "d --" while you scroll.
+        //
+        // The cost being avoided by gating would be the Watch, which is the
+        // audio thread's per-sample sum of squares -- and that is gated, on the
+        // whole column showing or not, which is the granularity that does not
+        // break the delta. A Meter::read here is a relaxed load of a few atoms
+        // on the message thread, 25 times a second.
         for (size_t i = 0; i < taps.size(); ++i)
         {
             if (taps[i].meter == nullptr)
@@ -595,15 +673,177 @@ private:
     }
 
 public:
-    /** Width the column is laid out at, and how much the window grows by. */
-    static constexpr int kWidth   = 300;
-    static constexpr int kRowH    = 46;
-    static constexpr int kHeaderH = 22;
+    static constexpr int kRowH = 46;
 
 private:
     std::vector<Tap> taps;
     std::vector<Row> readings;
     std::vector<std::unique_ptr<lighthost::metering::Meter::Watch>> watches;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SignalViewRows)
+};
+
+//==============================================================================
+// SignalViewPanel
+//
+// The column to the right of the main panel: a header, and the rows in a
+// viewport under it.
+//
+// The rest of this file treats this class as "the column" -- kWidth is how much
+// the window grows by when it opens, PreferencesShell sizes it, and
+// setSignalViewOpen shows and hides it -- so the viewport went INSIDE it rather
+// than around it. Wrapping it from outside would have moved all of that onto a
+// new type and, worse, put the component that owns the timer one level below the
+// component whose visibility is toggled.
+//
+// The header stays outside the viewport. It labels the column and carries the
+// probe-limit note, both of which are still true at every scroll position, and a
+// heading that scrolls away is a heading you have to scroll back for.
+//
+// WHY THE PLAIN VIEWPORT AND NOT PreferencesPanelViewport
+//
+// Modelled on chainViewport. The height the rows want changes when the CHAIN
+// changes, not only when the window is resized, so there has to be an explicit
+// "the content changed, re-height it" call whichever pattern is used -- which is
+// exactly the shape chainViewport already has in updateChainListHeight, called
+// from resized() and again from the list's onChange. PreferencesPanelViewport
+// exists to OWN a heap-allocated panel handed to setContentOwned, and derives
+// its child's height from a layout that only moves on resize; the rows here are
+// a member held by value and neither of those applies, so subclassing would have
+// bought an override of resized() that still needed a second entry point.
+//
+// The one idea taken from PreferencesPanelViewport is subtracting the
+// scrollbar's width only when the bar is actually there. updateChainListHeight
+// subtracts it unconditionally, which costs the chain list nothing because its
+// width follows the window; this column is a fixed kWidth and pins its numbers
+// to the right edge, so surrendering the bar's width when no bar is shown would
+// shift every number in the common case.
+//==============================================================================
+class SignalViewPanel final : public juce::Component
+{
+public:
+    using Tap = SignalViewRows::Tap;
+
+    SignalViewPanel()
+    {
+        // Not owned: `rows` is a member. Viewport keeps the viewed component in
+        // a WeakReference whether or not it owns it, which is what makes this
+        // borrowed form safe -- and is why chainViewport further down this file
+        // takes the same one.
+        rowViewport.setViewedComponent (&rows, false);
+        rowViewport.setScrollBarsShown (true, false);
+        addAndMakeVisible (rowViewport);
+    }
+
+    /** Replaces the column. Called when the chain changes or the panel opens.
+
+        `atProbeLimit` says the rows arrived at nodeids::maxProbes -- that chain
+        positions past it carry no probe and therefore no row at all. It is
+        passed in because the caller is what pairs a name to a probe; this class
+        cannot tell a probe row from a device row, and was burned once already by
+        a message that assumed it could.
+    */
+    void setTaps (std::vector<Tap> newTaps, bool atProbeLimit)
+    {
+        probeLimitReached = atProbeLimit;
+        rows.setTaps (std::move (newTaps));
+        updateRowsSize();
+        repaint();
+    }
+
+    // Forwarded, not re-derived. Both of these are delivered to the component
+    // whose state changed and to nothing beneath it, so the rows -- now a
+    // grandchild, through the viewport's content holder -- would never hear the
+    // column being hidden. isShowing() is evaluated on this component, which is
+    // the one the shell actually toggles.
+    void visibilityChanged() override        { rows.setWatching (isShowing()); }
+    void parentHierarchyChanged() override   { rows.setWatching (isShowing()); }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto& laf = getLookAndFeel();
+        const auto bg   = laf.findColour (juce::ResizableWindow::backgroundColourId);
+        const auto text = laf.findColour (juce::Label::textColourId);
+
+        g.fillAll (bg.darker (0.30f));
+
+        // Header, matching the section bars in the main panel.
+        auto header = getLocalBounds().removeFromTop (kHeaderH);
+        g.setColour (bg.darker (0.55f));
+        g.fillRect (header);
+        g.setColour (text.withAlpha (0.80f));
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f).withStyle ("Bold")));
+        g.drawText ("SIGNAL VIEW", header.reduced (10, 0), juce::Justification::centredLeft);
+
+        // What is left of 5.3.0's "N more not shown -- make the window taller".
+        //
+        // That counted the rows the column had and did not draw, and told the
+        // user to resize. With the rows inside a viewport the count is always
+        // zero and the instruction is wrong: scrolling is the answer now, and a
+        // message about the window's height would be a message about a problem
+        // that no longer exists.
+        //
+        // The accounting is not deleted, though, because there is a second
+        // limit it was never about and which a scrollbar does nothing for.
+        // nodeids::maxProbes caps the probes at 32, so a longer chain has
+        // positions with no row -- and nothing inside this column can see that,
+        // since getCommittedChainNames returns the list already capped. Hence
+        // the flag from outside.
+        //
+        // Worded as a statement about the limit rather than a count of hidden
+        // rows on purpose. A list that came back at exactly 32 is either a
+        // 32-plugin chain with nothing missing or a longer one with its tail
+        // dropped, and neither this class nor its caller can tell which -- so
+        // naming a number of missing rows would be the same guess the old
+        // message made about the window.
+        if (probeLimitReached)
+        {
+            g.setColour (juce::Colour (lighthost::ui::LookAndFeel::kCaution));
+            g.setFont (juce::Font (juce::FontOptions{}.withHeight (11.0f)));
+            g.drawText ("at the " + juce::String (lighthost::nodeids::maxProbes) + "-probe limit",
+                        header.reduced (10, 0), juce::Justification::centredRight);
+        }
+    }
+
+    void resized() override
+    {
+        rowViewport.setBounds (getLocalBounds().withTrimmedTop (kHeaderH));
+        updateRowsSize();
+    }
+
+    /** Width the column is laid out at, and how much the window grows by. */
+    static constexpr int kWidth   = 300;
+    static constexpr int kHeaderH = 22;
+
+private:
+    /** Sizes the rows to the width they may use and the height they need.
+        Called on resize AND from setTaps, because either can change which of the
+        two the viewport has to scroll over.
+
+        Cannot oscillate, for the reason PreferencesPanelViewport gives for the
+        same decision: the height the rows want comes from how many there are and
+        does not depend on the width handed back below.
+    */
+    void updateRowsSize()
+    {
+        if (rowViewport.getWidth() <= 0)
+            return;
+
+        const int preferred = rows.getPreferredHeight();
+        const bool needsBar = preferred > rowViewport.getHeight();
+        const int width     = rowViewport.getWidth()
+                            - (needsBar ? rowViewport.getScrollBarThickness() : 0);
+
+        rows.setSize (juce::jmax (1, width),
+                      juce::jmax (rowViewport.getHeight(), preferred));
+    }
+
+    // Declared before the viewport so the viewport is torn down first, while
+    // the component it points at is still alive.
+    SignalViewRows rows;
+    juce::Viewport rowViewport;
+
+    bool probeLimitReached = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SignalViewPanel)
 };
@@ -1107,7 +1347,18 @@ public:
 
         taps.push_back ({ "Output", asMs (chainLatencySamplesNow), deviceOutputMeter });
 
-        panel.setTaps (std::move (taps));
+        // Whether the names came back sitting on the probe cap.
+        //
+        // getCommittedChainNames caps at nodeids::maxProbes so that the names
+        // and the meters stay the same length -- so a longer chain loses its
+        // tail up there, before anything here can see it, and the panel is
+        // handed a list with no evidence that anything was dropped. Decided at
+        // this line because this is the loop that pairs a name to a probe, and
+        // therefore the last place that knows which rows are probes at all.
+        const auto atProbeLimit =
+            rowNames.size() >= static_cast<size_t> (lighthost::nodeids::maxProbes);
+
+        panel.setTaps (std::move (taps), atProbeLimit);
     }
 
     /** Writes a lane trim to disk, once, if it has moved since the last write. */
@@ -2461,4 +2712,14 @@ void PreferencesWindow::setSignalViewOpen (bool shouldBeOpen)
                             : juce::jmax (minWidth, widthBeforeSignalView);
 
     setSize (target, getHeight());
+}
+
+void PreferencesWindow::minimisationStateChanged (bool isNowMinimised)
+{
+    DocumentWindow::minimisationStateChanged (isNowMinimised);
+
+    // The whole point: this is the only component JUCE tells. See the
+    // declaration in PreferencesWindow.h for why nothing below it finds out.
+    if (auto* content = getContentComponent())
+        refreshVisibilityTimers (*content);
 }

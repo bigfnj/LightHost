@@ -285,18 +285,76 @@ nobody should trust without saying so.
   the attribute, on that method and on `EnumAudioEndpoints` beside it.
 - **`--scan` combined with `-self-test`** writes the plugin list into the
   throwaway self-test folder. Harmless, and one guard would make it an error.
-- **The signal view has no scrollbar.** 5.3.0 stopped it silently truncating and
-  made it count the rows it cannot show. A `juce::Viewport` would show them --
-  and this is less work than it sounds, because `PreferencesWindow.cpp` already
-  holds two worked examples: `chainViewport`, a plain `juce::Viewport` wrapping
-  the chain list, and `PreferencesPanelViewport`, a subclass that resizes its
-  viewed component to the visible width. Either pattern transfers.
+- **CLOSED 2026-09-18: the signal view scrolls.** The rows moved into a
+  `juce::Viewport`, following the `chainViewport` pattern rather than
+  `PreferencesPanelViewport` -- the latter exists to own a heap-allocated panel
+  handed to `setContentOwned`, and these rows are a by-value member.
+
+  The scrollbar thickness is subtracted only when the bar is actually shown,
+  which `updateChainListHeight` does unconditionally. That costs the chain list
+  nothing because its width follows the window, but this column is a fixed 300px
+  and pins its numbers to the right edge, so surrendering 8px for an absent bar
+  would move every number in the common case.
+
+  The 5.3.0 "N more not shown -- make the window taller" message is gone,
+  because it is no longer true: every row is reachable. The accounting was
+  repointed rather than deleted, at the limit a scrollbar cannot help with --
+  `nodeids::maxProbes`, 32, where `getCommittedChainNames` caps the list so
+  names and meters stay the same length. The header now says "at the 32-probe
+  limit" rather than naming a count of hidden rows, because a list that comes
+  back at exactly 32 is either a 32-plugin chain with nothing missing or a
+  longer one with its tail dropped, and the panel cannot tell which.
+
+  Per-row meter watches deliberately still follow the column's visibility, not
+  the scroll position. The delta column reads the row above, so gating on
+  visibility would make the topmost visible row lose its reference while
+  scrolling -- and the fall ballistics advance per tick, so a row scrolled back
+  would carry a stale peak. `paint` does now clip to `getClipBounds()`, so a
+  34-row chain costs the visible handful of rows per frame instead of all 34.
+
+  This also answers the 150%-display-scaling question. The main panel already
+  lives in a scrolling viewport, so it degrades by scrolling rather than
+  clipping; the signal view was the only part that did not, and now does. At
+  150% the default 520x650 window asks for 780x975, which fits a 1440 panel with
+  room and fits 1080p as well.
+
 - **`tools/render-regression.sh` pipes `grep` into `head -n 1` under
   `pipefail`.** If `grep` were killed by SIGPIPE after `head` exited, `pipefail`
   would yield 141 and `set -e` would abort the script -- a tooling failure
   reported as a regression. Not reachable with the current three-line baseline
   file, where `grep` finishes before `head` closes. Worth knowing if that file
   ever grows.
+- **Minimise and restore permanently stops both meter timers.** Found while
+  adding the scrollbar, and pre-existing. `SignalMeter::timerCallback` and
+  `SignalViewRows::timerCallback` stop correctly when the window stops being
+  visible, which is what keeps a minimised window free -- but nothing started
+  them again. JUCE delivers `minimisationStateChanged` to the top-level
+  component only, and restoring produces no `visibilityChanged`, no
+  `parentHierarchyChanged` and no `resized()` below it, because the peer skips
+  its bounds update while minimised so the bounds are unchanged on restore.
+
+  **FIXED the same day**: a `VisibilityDrivenTimer` interface, implemented by
+  both timer owners, and `PreferencesWindow::minimisationStateChanged` -- the one
+  component that does receive the event -- walks the tree and tells them to
+  re-check. Reasoned rather than observed: the restart path is the same
+  `updateTimerState`/`setWatching` that `visibilityChanged` already drives and
+  that demonstrably works, but nobody has watched a meter resume after a
+  minimise. Worth one glance next time the window is open.
+
+- **`setStatusMessage` can push the Apply button off the bottom.** It grows
+  `fixedLayoutHeight()` by a row and calls `resized()` on the panel, which
+  absorbs it from the chain viewport -- unless that viewport is already at
+  `kMinChainH`, in which case the lower sections overflow. Nothing re-runs
+  `PreferencesPanelViewport::resized`, so the panel is never re-heighted and the
+  viewport never learns it has more to scroll. Same shape for the Windows
+  virtual-input hint. Not fixed: it needs the panel re-heighted from the status
+  path, which is the layout plumbing rather than a one-liner.
+
+- **`updateChainListHeight` subtracts the scrollbar width unconditionally.**
+  Cosmetic for an elastic-width list, and named only because it is the one point
+  where this file's two viewport patterns now disagree -- the signal view
+  subtracts it conditionally, for a reason that does not apply here.
+
 - **`chooseChainTestOutput` destroys its `FileChooser` from inside that
   chooser's own callback**, by reassigning `chainTestChooser`. It survives
   because `FileChooser::finished` copies the callback out and touches nothing

@@ -95,6 +95,21 @@ public:
     ~PreferencesWindow() override;
     void closeButtonPressed() override;
 
+    /** Restarts the meter timers when the window is restored.
+
+        Both meter components stop their timer when they stop being visible,
+        which is correct and is what keeps a minimised window free. What they
+        cannot do is start again: JUCE delivers minimisationStateChanged to the
+        TOP-LEVEL component only, and neither visibilityChanged nor
+        parentHierarchyChanged fires on a descendant when a window is restored --
+        the peer skips the bounds update while minimised, so no resized()
+        cascade happens either. Left to themselves the meters stopped on the
+        first minimise and stayed stopped for the rest of the session.
+
+        This is the one place that receives the event, so it forwards it.
+    */
+    void minimisationStateChanged (bool isNowMinimised) override;
+
     void refreshPluginChain (const std::vector<juce::PluginDescription>& chain,
                              const std::vector<bool>& bypassStates,
                              const std::vector<int>& laneStates);
