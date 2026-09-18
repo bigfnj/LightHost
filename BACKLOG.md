@@ -362,33 +362,20 @@ nobody should trust without saying so.
   now says what it means without a number. The figure changes every time anyone
   adds a test; run the binary. This file quoted one two lines above the item
   saying not to, until 2026-09-17.
-- **`Resources/icon.png` is still 1.0 MB** after a lossless pass on 2026-09-17
-  took it from 1,149,765 to 1,055,725 bytes (8.2%, pixel-identical). It is a
-  1024x1024 RGBA PNG used as both `ICON_BIG` and `ICON_SMALL`, and it remains
-  **8.7x** the next largest tracked non-vendored file
-  (`Source/PreferencesWindow.cpp`, 121,714 bytes). It was 9.4x before the pass,
-  and never the 2.5x this entry used to claim.
+- **DONE 2026-09-18: `Resources/icon.png` is 335,036 bytes**, down from
+  1,055,725 (-68%), and nothing displayed changed. The open question was whether
+  this repo should carry a 1024 px original at all; the answer taken is no,
+  because nothing consumes it above 512.
 
-  Only 8.2% came out because the artwork is a glossy 3D render carrying 277,089
-  unique colours across 1,048,576 pixels, which PNG has little to remove. The
-  remaining megabyte is not a compression problem, it is a **resolution** one:
-  `juceaide` downsamples this file at build time into
-  `LightHost_artefacts/JuceLibraryCode/icon.ico`, which holds 16, 32, 48 and 256
-  px entries and totals 118,042 bytes. Nothing above 256 px ever reaches the
-  binary. A 256x256 source would therefore cost about what that `.ico` already
-  does -- call it a tenth of the current file -- and change nothing that is
-  displayed anywhere.
+  The entry that stood here reasoned from "nothing above 256 px ever reaches the
+  binary", which is true of Windows only -- `writeWinIcon` emits
+  {16, 32, 48, 256} but `writeMacIcon` emits {16, 32, 64, 128, 256, 512, 1024}.
+  A 256 px source would have quietly dropped two sizes from the macOS `.icns`.
+  512 keeps every size but the Retina-largest, and the shipped Windows 256 entry
+  is 50.4 dB PSNR against the old one.
 
-  Left open rather than done because it is a question about the master asset,
-  not about the build: whether this repo should keep the 1024 px original at
-  all, or keep it somewhere that is not the source tree. Whoever owns the
-  artwork decides that.
-
-  Measured and rejected on the way: zeroing the RGB under the 228,523 fully
-  transparent pixels (21.8% of the image, currently holding 3,068 distinct
-  colours that nothing can ever render) saves a further 9,936 bytes, 0.9%. Not
-  worth giving up a `magick compare -metric AE` of 0 for.
-
+  The 1024 master is in history and recoverable with
+  `git show 1f4acb2:Resources/icon.png` if it is ever wanted back.
 ---
 
 ## Standing checks
