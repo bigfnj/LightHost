@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [5.5.0] — 2026-09-18
+
 ### Fixed — a damaged saved preset is no longer half-applied to a plugin
 
 A `.lhs` file cut mid-stream decompressed to whatever the decompressor had
@@ -93,6 +99,99 @@ to input and a bypassed plugin silences the host.
 1,055,725 → 335,036 bytes, with nothing displayed changed. Details in the commit;
 the short version is that `writeWinIcon` caps at 256 but `writeMacIcon` goes to
 1024, so 256 would have quietly dropped two sizes from the macOS `.icns`.
+
+### Fixed — the signal view scrolls, so no row is unreachable
+
+It was the only part of the Preferences window that did not. The panel around it
+has always lived in a viewport, so a window too short for its content scrolled;
+this column truncated, counted what it could not show, and told you to make the
+window taller.
+
+The rows now live in a `juce::Viewport`. The scrollbar thickness is subtracted
+only when the bar is actually shown — the chain list subtracts it
+unconditionally, which costs an elastic-width list nothing, but this column is a
+fixed 300 px pinning its numbers to the right edge.
+
+The "N more not shown" message is gone because it is no longer true. The
+accounting moved to the limit a scrollbar cannot help with: probes are capped at
+32, so the header now says "at the 32-probe limit" when the list comes back at
+that length — a statement about the limit rather than a count, because a list of
+exactly 32 is either a 32-plugin chain with nothing hidden or a longer one
+already truncated, and the view cannot tell which.
+
+Per-row meter watches deliberately still follow the column's visibility rather
+than the scroll position: the delta column reads the row above it, so gating on
+visibility would make the topmost visible row lose its reference mid-scroll.
+
+This also settles a question that had been open since the JUCE 9 checklist. At
+150% display scaling the default 520x650 window asks for 780x975, and with
+everything now scrolling there is no size at which the layout has nowhere to go.
+What it does not prove is that every control *looks* right scaled; that still
+wants a person at such a display.
+
+### Fixed — minimising the Preferences window no longer freezes the meters
+
+Both meter timers stopped when the window stopped being visible, which is
+correct and is what keeps a minimised window free. Nothing started them again,
+so one minimise froze the device meters and every signal-view row for the rest
+of the session.
+
+The reason is worth recording. `ComponentPeer::handleMovedOrResized` guards its
+bounds propagation on `! nowMinimised`, so the component's bounds are not
+updated while minimised; on restore the new bounds equal the old ones and no
+`resized()` cascade reaches any descendant. It then delivers
+`minimisationStateChanged` and `sendVisibilityChangeMessage` to the **top-level
+component only**. A descendant that stopped its own timer therefore receives no
+event of any kind when the window comes back.
+
+A `VisibilityDrivenTimer` interface and a depth-first walk, driven from the one
+component that does receive the event. `SignalViewRows` rebuilds its
+`Meter::Watch` objects as well as restarting its timer.
+
+Tested rather than argued, in both halves: seven headless cases for the walk —
+including a timer three levels down under containers owning no timer, which is
+the real hierarchy — and two GUI cases that minimise and restore an actual
+window. The second GUI case asserts the premise directly, that a descendant
+receives no `visibilityChanged`, no `parentHierarchyChanged` and no `resized()`
+on restore. If JUCE ever changes that, it fails and says the forwarding is
+redundant.
+
+### Fixed — the audio-endpoint tool's error guards could never run
+
+`tools/audio-endpoints.ps1` declared every COM method as returning the raw
+HRESULT and tested it, but without `[PreserveSig]` the CLR's marshaller takes
+that HRESULT away and raises instead — so `if (... == 0)` was unreachable and
+the script died on the case the line beside it was written to handle. Observed
+on an RDP session, where a role legitimately has no default endpoint.
+
+Verified by firing it: asking for role 99 now returns `0x80070057` with a null
+device, where it previously raised. Because failures now return rather than
+throw, the calls that were only survivable *because* it raised were given real
+checks.
+
+### Changed — contradictory flags are refused rather than half-honoured
+
+`--scan` with `-self-test` wrote the plugin list into the self-test's throwaway
+settings folder, which is deleted when the run passes: no list, and no reason
+why. It now says so and exits 2, and disarms both modes first so the self-test's
+shutdown checks do not print a contradictory failure underneath the refusal.
+
+### Documentation and tooling
+
+The README screenshots show the application as it is, for the first time since
+4.0.3 — nine captures, each viewed and audited before being embedded, after an
+automated attempt nearly put an unrelated application's window into a public
+repository.
+
+`tools/render-regression.sh` no longer pipes into `head`, where `pipefail` could
+report a tooling failure as a regression. `RELEASING.md` stopped using the one
+version in the v5 line that was deliberately never tagged as its worked tagging
+example.
+
+Two suspicions were traced and found not to be defects: a self-sustaining rewire
+loop cannot start, because a graph rebuild never re-prepares an already-prepared
+node — confirmed live, where one plugin re-declares its latency after load and
+produces exactly one extra rewire that settles.
 
 ### Documentation
 

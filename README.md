@@ -73,6 +73,16 @@ loudness measurement. If you need those, you need a DAW.
 Your chain, plugin settings, lane assignments, bypass states, trims and device
 choices are all restored next launch.
 
+Right-clicking the tray icon gives you everything else:
+
+<p align="center">
+  <img src="docs/images/tray-menu.png" alt="The Light Host tray menu: Preferences and Edit Plugins at the top, then an Active Plugins section listing reagate-standalone, Salvor and smartChain each with a submenu, then Delete Plugin States and a ticked Run at Startup, then a separator and Quit at the bottom" width="260">
+</p>
+
+Each plugin in *Active Plugins* has a submenu holding its editor, a bypass
+toggle, and the moves that reorder or remove it — so the common adjustments do
+not need the Preferences window at all.
+
 > **Quit from the tray menu**, not by killing the process. That is what writes
 > your plugin settings to disk.
 
@@ -442,9 +452,11 @@ migration leaves your presets where they were rather than losing them.
 **Worth backing up.** `Light Host.state/` holds anything you have trained or
 tuned inside a plugin, and some of that is not quickly reproducible.
 
-> The tray menu has **Delete Plugin States**, above **Quit** and separated from
-> it. It erases the saved settings of every plugin in the chain, so it names
-> them and asks first.
+> The tray menu has **Delete Plugin States** — visible in the
+> [tray menu shot](#quick-start) above, two rows and a separator clear of
+> **Quit**. That distance is deliberate: the two were once adjacent with the
+> destructive one underneath, which is a bad place for it. It erases the saved
+> settings of every plugin in the chain, so it names them and asks first.
 
 ---
 
