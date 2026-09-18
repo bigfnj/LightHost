@@ -268,9 +268,14 @@ directly — a compressor adding 7 dB of make-up gain shows up as `+7.0 dB` on i
 own row, which is otherwise a question that takes an offline render and a script
 to answer.
 
-Rows that do not fit the window are counted in the view's header rather than
-drawn, because a meter you cannot see reads exactly like one showing silence.
-Make the window taller to see them.
+The column scrolls, so every row in the chain is reachable whatever the window
+is doing. There is a second limit a scrollbar cannot help with: probes are
+capped at 32, so a chain longer than that loses its tail before the view sees
+it, and the header says "at the 32-probe limit" when the list comes back at that
+length. It is worded as a statement about the limit rather than a count of what
+is missing, because a list of exactly 32 is either a 32-plugin chain with
+nothing hidden or a longer one already truncated, and the view cannot tell
+which.
 
 ### What it costs while you are not looking
 
@@ -652,11 +657,23 @@ What they cover:
   rather than failure, a plugin that throws out of `setStateInformation` reports
   failure without letting the exception escape, and the resulting rule — never
   save a node whose restore failed — leaves the stored preset intact.
-- **The state vault**: round trips, that compression is actually running, and the
-  three ways a file can be unusable (absent, truncated, written by a later
-  version) all reading as "nothing stored" rather than as garbage handed to a
-  plugin.
+- **The state vault**: round trips, that compression is actually running, and
+  that a file which cannot be used never reaches a plugin as garbage. The
+  distinction the tests pin is between *absent* and *corrupt*: nothing stored
+  means saving over it later is harmless, while a damaged file is still the only
+  copy of that preset and must be left alone. Truncation and bit rot are both
+  detected, by checking the Adler-32 that RFC 1950 puts at the end of every zlib
+  stream against what actually decompressed — so the integrity field was in the
+  file all along, and the checksum helper is itself tested against the values
+  the RFC publishes.
 - **Instance names**: every escape attempt a `-multi-instance` name could make.
+- **Visibility-driven timers**: that a timer three levels down, under containers
+  that own no timer of their own, is re-armed when a window is restored from
+  minimised — and, in `unit-gui` against a real window, that a descendant
+  receives no `visibilityChanged`, no `parentHierarchyChanged` and no
+  `resized()` on that restore. The second half is the reason the first has to
+  exist, so it is asserted rather than assumed: if JUCE ever starts telling
+  descendants directly, that test fails and says so.
 - **Signal metering**: that a peak survives the blocks after it, that reading is
   not destructive so two components watching one meter agree, that RMS is only
   computed while something is watching, and that a probe passes audio through

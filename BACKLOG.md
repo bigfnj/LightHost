@@ -25,9 +25,14 @@ Linux locally; the `clang-release` preset covers Clang. macOS is CI-only.
 check, break the thing it guards and confirm it goes red before believing it.
 Five gates in this repo could not fail, and each had been green for months.
 
-Nothing here blocks a release. What remains is two testability gaps, one
-decision that needs writing down rather than fixing, and a handful of items
-that are a judgement call about assets and scope rather than defects.
+Nothing here blocks a release, and nothing here is broken. What remains is five
+testability gaps -- each one a check that exists and cannot be fired, listed so
+nobody trusts it without knowing that -- two small layout defects, and four
+defensive notes about code that is correct today for a stated reason.
+
+Everything that was actually wrong has been fixed. The three bugs and four
+suspicions carried into 2026-09-18 are all closed above, along with every
+hardening item that turned out to be a one-liner.
 
 The pattern from the last three passes held again: of the work done for 5.4.0,
 **five of the defects fixed had no backlog entry at all** -- they were found
@@ -272,7 +277,11 @@ nobody should trust without saying so.
 
 ## Hardening
 
-- **`tools/audio-endpoints.ps1` throws instead of reporting.** Found by running
+- **FIXED 2026-09-18: `tools/audio-endpoints.ps1` reports instead of throwing.**
+  Every method on all four COM interfaces now carries `[PreserveSig]`, and the
+  calls that were only survivable because the marshaller raised now check their
+  return. Verified by firing it: asking for role 99 returns `0x80070057` with a
+  null device, where it previously raised. Found by running
   it on an RDP session, where a role legitimately has no default endpoint:
 
       Exception calling "Report": "Element not found. (0x80070490)"
@@ -283,7 +292,10 @@ nobody should trust without saying so.
   exception before `if (... == 0 && d != null)` ever runs. Same shape as the
   five gates fixed in 5.3.0: a check that looks right and is unreachable. Fix is
   the attribute, on that method and on `EnumAudioEndpoints` beside it.
-- **`--scan` combined with `-self-test`** writes the plugin list into the
+- **FIXED 2026-09-18: `--scan` with `-self-test` is refused**, with the reason
+  and exit 2, and both flags are disarmed before quitting so the self-test's
+  shutdown checks do not print a contradictory failure underneath. It used to
+  write the plugin list into the
   throwaway self-test folder. Harmless, and one guard would make it an error.
 - **CLOSED 2026-09-18: the signal view scrolls.** The rows moved into a
   `juce::Viewport`, following the `chainViewport` pattern rather than
@@ -318,13 +330,16 @@ nobody should trust without saying so.
   150% the default 520x650 window asks for 780x975, which fits a 1440 panel with
   room and fits 1080p as well.
 
-- **`tools/render-regression.sh` pipes `grep` into `head -n 1` under
+- **FIXED 2026-09-18: `tools/render-regression.sh` no longer pipes into
+  `head`.** `awk` and `sed` both stop on their own, so neither pipe needed to
+  exist. It used to pipe `grep` into `head -n 1` under
   `pipefail`.** If `grep` were killed by SIGPIPE after `head` exited, `pipefail`
   would yield 141 and `set -e` would abort the script -- a tooling failure
   reported as a regression. Not reachable with the current three-line baseline
   file, where `grep` finishes before `head` closes. Worth knowing if that file
   ever grows.
-- **Minimise and restore permanently stops both meter timers.** Found while
+- **FIXED 2026-09-18: minimise and restore no longer stops the meter timers.**
+  Found while
   adding the scrollbar, and pre-existing. `SignalMeter::timerCallback` and
   `SignalViewRows::timerCallback` stop correctly when the window stops being
   visible, which is what keeps a minimised window free -- but nothing started
@@ -417,7 +432,8 @@ nobody should trust without saying so.
   `options-menu.png` are deleted from the tree -- all three are 4.0.3-era, all
   three are superseded, and all three remain in history if wanted.
 
-- **`RELEASING.md` uses `v5.2.0` as its worked tagging example**, and v5.2.0 is
+- **FIXED 2026-09-18: `RELEASING.md` uses `v5.4.0` as its worked example**, with
+  a note explaining why the old one was a bad choice. It used `v5.2.0`, and that is
   the one version in the v5 line that was deliberately never tagged despite
   having a CHANGELOG section. So the example version doubles as the
   counter-example, and a reader checking the doc against `git tag` finds the
@@ -464,8 +480,22 @@ Automated where possible, so they are not a list someone has to remember.
 - **`DeviceTap`'s ordering guarantee is untestable here.** It needs
   `juce_audio_devices`, which the test target deliberately does not link. A known
   limit rather than a gap to close.
-- **Display scaling at 150%, and the tray icon against a light taskbar**, cannot
-  be automated. Recorded in [RELEASING.md](RELEASING.md) as pre-release checks.
+- **Display scaling at 150% is answered; the light taskbar still needs eyes.**
+
+  The scaling half is no longer an open question. The whole Preferences panel
+  sits in a scrolling viewport, so it degrades by scrolling rather than
+  clipping, and since 2026-09-18 the signal view -- the only part that did not --
+  scrolls too. At 150% the default 520x650 window asks for 780x975, which fits
+  a 1440 panel with room and fits 1080p; the 440x400 minimum becomes 660x600.
+  So there is no size at which the layout has nowhere to go.
+
+  What that does NOT prove is that every control looks right at 150%, only that
+  nothing is unreachable. The development machine runs at 100% (96 DPI), and
+  nobody has looked at it scaled.
+
+  The tray icon against a light taskbar cannot be reasoned about at all -- it is
+  one bitmap for both themes. Both remain pre-release checks in
+  [RELEASING.md](RELEASING.md).
 - **macOS is built only by CI.** Linux and Clang can now be run before a push --
   `tools/build-linux-docker.sh` and the `clang-release` preset -- so macOS is the
   only platform whose first evidence still arrives after the commit. Its Clang is
