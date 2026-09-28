@@ -91,14 +91,22 @@ namespace lighthost::load
         stays available for everything else that can go wrong. */
     inline constexpr int kMaxReportsPerEpisode = 2;
 
-    /** How long after a device opens a dropout is settling rather than news.
+    /** How long a freshly-started chain gets before a dropout is news.
 
-        Opening a WASAPI device reports an under-run for the open itself.
-        Measured on the development machine: every single launch produced
-        `dropouts=1 driver=1` within the first poll, which escalated -- so the
-        tray said "Audio is dropping out" on a completely healthy start.
+        Opening a WASAPI device reports an under-run for the open itself, and
+        so does the moment a built graph first starts processing. Measured on
+        the development machine: every single launch produced
+        `dropouts=1 driver=1` and escalated, so the tray said "Audio is
+        dropping out" on a completely healthy start.
 
-        Dropouts inside this window are still COUNTED, and still shown in the
+        The window is anchored on THE LATER OF the device session starting and
+        the chain finishing loading -- not on the device alone. The first
+        attempt anchored it on the device and still fired, because loading a
+        real chain takes longer than the window: by the time audio actually
+        flowed, the device had been open for more than three seconds and the
+        under-run that arrived with the first block counted as news.
+
+        Dropouts inside the window are still COUNTED, and still shown in the
         readout and the log. They just cannot raise an alarm, because an alarm
         that fires on every launch is one people learn to close.
     */
@@ -320,6 +328,9 @@ namespace lighthost::load
 
             sessionIdentity   = identity;
             sessionStartMs    = 0;
+            // chainReadyMs deliberately survives: a device change does not
+            // reload the chain, so the graph is already warm and only the
+            // device needs to settle again.
             coreLabel         = {};
             session           = {};
             episode           = {};
@@ -336,6 +347,17 @@ namespace lighthost::load
             cached = {};
             return true;
         }
+
+        /** Says the plugin chain has finished loading and audio is really
+            flowing.
+
+            Called by the host, because nothing observable from inside a
+            sequence of load samples distinguishes "quiet because the graph is
+            still being built" from "quiet because everything is fine". The
+            under-run that arrives with the first block of a newly-built graph
+            is a startup artefact, and this is what lets it be treated as one.
+        */
+        void markChainReady (juce::int64 atMs) noexcept { chainReadyMs = atMs; }
 
         /** Folds one reading in, and says whether the user should be told. */
         [[nodiscard]] Escalation observe (const Sample& sample)
@@ -444,10 +466,10 @@ namespace lighthost::load
         [[nodiscard]] int    reportsThisEpisode() const noexcept { return reportsMade; }
 
     private:
-        /** True while this device is still settling in. */
+        /** True while this chain is still settling in. */
         [[nodiscard]] bool settling (juce::int64 atMs) const noexcept
         {
-            return atMs - sessionStartMs < kSettleMs;
+            return atMs - std::max (sessionStartMs, chainReadyMs) < kSettleMs;
         }
 
         [[nodiscard]] Escalation decideEscalation (const Sample& sample)
@@ -504,6 +526,7 @@ namespace lighthost::load
         Counts episode;
         Counts lastSeen;
         juce::int64 sessionStartMs = 0;
+        juce::int64 chainReadyMs   = 0;
         double peak              = 0.0;
         double current           = 0.0;
         double deadlineMs        = 0.0;

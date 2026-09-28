@@ -1222,6 +1222,13 @@ void IconMenu::onAllPluginsLoaded (int generation)
 
     juce::Logger::writeToLog ("IconMenu: loadActivePlugins complete");
 
+    // The graph is built and about to start carrying audio. The under-run a
+    // driver reports for that first block is a startup artefact, not news, so
+    // this is where the load monitor starts its settling window -- anchoring
+    // it on the device opening instead was measurably too early, because
+    // loading a real chain takes longer than the window itself.
+    loadMonitor.markChainReady (static_cast<juce::int64> (juce::Time::getMillisecondCounter()));
+
     if (applyInitiatedLoad)
     {
         applyInitiatedLoad = false;

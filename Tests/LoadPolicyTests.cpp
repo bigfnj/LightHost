@@ -215,6 +215,31 @@ namespace
                         "a real dropout after the device settled went unreported");
             }
 
+            beginTest ("the window runs from the chain being ready, not from the device opening");
+            {
+                // MEASURED. The first version of this anchored on the device
+                // session alone and STILL fired on every launch: loading a real
+                // chain took longer than the window, so by the time audio
+                // actually flowed the device had been open for well over three
+                // seconds and the under-run that came with the first block
+                // counted as news.
+                //
+                // FAILS IF: the anchor goes back to the device alone.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.0, 0, 0));
+
+                // Ten seconds of loading plugins, then the graph starts.
+                monitor.markChainReady (10000);
+
+                expect (! monitor.observe (sampleAt (10100, 0.0, 1, 1)).report,
+                        "the under-run that arrives with a newly-built graph raised an alarm, "
+                        "so a slow-loading chain cries wolf on every launch");
+
+                expect (monitor.observe (sampleAt (10000 + kSettleMs + 1, 0.0, 2, 2)).report,
+                        "a real dropout after the chain settled went unreported");
+            }
+
             beginTest ("a machine dropping continuously cannot fill the status sink");
             {
                 // The headline case. An hour of a misbehaving machine, into a
