@@ -300,10 +300,12 @@ namespace lighthost::metering
             constant was introduced to prevent, and the one that made 5.1.0 move
             the ballistics in here.
 
-            Call from prepareToPlay or audioDeviceAboutToStart, where JUCE has
-            the graph stopped. `decayPerBlock` is a plain float for that reason,
-            the same argument GainProcessor makes for rampTargetDb: the audio
-            thread is not running when this is written.
+            Call from prepareToPlay or audioDeviceAboutToStart. That used to be
+            the whole argument for `decayPerBlock` being a plain float -- JUCE
+            has the graph stopped there, so nothing is reading it. That holds
+            for DeviceTap and not for Probe, which borrows a Meter that a
+            still-live render sequence can be measuring into; see the member
+            itself, which is now an atomic.
 
             A non-positive rate or block size keeps the reference literal rather
             than producing a nonsense factor, because a meter that decays wrongly
@@ -313,25 +315,30 @@ namespace lighthost::metering
         {
             if (sampleRate <= 0.0 || blockSize <= 0)
             {
-                decayPerBlock = kPeakDecayPerBlock;
+                decayPerBlock.store (kPeakDecayPerBlock, std::memory_order_relaxed);
                 return;
             }
 
             const auto secondsPerBlock = static_cast<double> (blockSize) / sampleRate;
             const auto fallDb          = kPeakFallDbPerSecond * secondsPerBlock;
 
-            decayPerBlock = static_cast<float> (std::pow (10.0, -fallDb / 20.0));
+            decayPerBlock.store (static_cast<float> (std::pow (10.0, -fallDb / 20.0)),
+                                 std::memory_order_relaxed);
         }
 
         /** The factor in use, so a test can check the rate rather than trust it. */
-        [[nodiscard]] float getDecayPerBlock() const noexcept { return decayPerBlock; }
+        [[nodiscard]] float getDecayPerBlock() const noexcept
+        {
+            return decayPerBlock.load (std::memory_order_relaxed);
+        }
 
     private:
         void publish (float peak, float channelMeanSquare, bool measuredRms) noexcept
         {
             // Decay held here rather than in the UI, so every reader sees the
             // same ballistics and none can take the peak away from another.
-            const auto decayed = heldPeak.load (std::memory_order_relaxed) * decayPerBlock;
+            const auto decayed = heldPeak.load (std::memory_order_relaxed)
+                               * decayPerBlock.load (std::memory_order_relaxed);
             heldPeak.store (juce::jmax (peak, decayed), std::memory_order_relaxed);
 
             if (measuredRms)
@@ -368,13 +375,23 @@ namespace lighthost::metering
 
         /** Peak decay per block, for the rate and block size actually running.
 
-            Not an atomic, deliberately. It is written only by setTimebase,
-            which its own doc restricts to prepareToPlay and
-            audioDeviceAboutToStart -- both called by JUCE with the graph
-            stopped, so no audio thread is reading it at the time. Same rule
-            GainProcessor::rampTargetDb follows.
+            An atomic, and it did not used to be. The old reasoning was that
+            setTimebase is only reached from prepareToPlay and
+            audioDeviceAboutToStart, both called with the graph stopped -- true
+            of DeviceTap, and NOT true of Probe. A Probe borrows its Meter, so
+            two different AudioProcessors can share one: with the signal view
+            open, an Apply leaves the live render sequence holding the OLD
+            probes, still calling measure(), while graph.rebuild() prepares the
+            NEW probe on the message thread before the sequence is swapped.
+            JUCE's per-processor "the graph is stopped" argument does not reach
+            across two processors sharing one meter.
+
+            Benign in practice on the architectures this ships to -- a 4-byte
+            float does not tear, so a block reads either the old decay or the
+            new one -- but it is a data race, and the file next door already
+            static_asserts that this type is lock-free.
         */
-        float decayPerBlock = kPeakDecayPerBlock;
+        std::atomic<float> decayPerBlock { kPeakDecayPerBlock };
 
         std::atomic<float> heldPeak           { 0.0f };
         std::atomic<float> smoothedMeanSquare { 0.0f };

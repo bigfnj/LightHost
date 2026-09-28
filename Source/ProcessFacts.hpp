@@ -104,8 +104,12 @@ namespace lighthost::process
         processor group, matching on the number alone would answer confidently
         about the wrong core.
     */
+    // Not noexcept: efficiencyClasses allocates, so a bad_alloc here would
+    // become std::terminate rather than something a caller could handle. A
+    // promise the code cannot keep is the sort of thing this file exists to
+    // avoid.
     [[nodiscard]] inline CoreKind kindOf (const std::vector<CpuSet>& table,
-                                          ProcessorNumber processor) noexcept
+                                          ProcessorNumber processor)
     {
         const auto match = std::find_if (table.begin(), table.end(),
                                          [processor] (const CpuSet& entry)
@@ -135,7 +139,7 @@ namespace lighthost::process
         int efficiency  = 0;
     };
 
-    [[nodiscard]] inline Census censusOf (const std::vector<CpuSet>& table) noexcept
+    [[nodiscard]] inline Census censusOf (const std::vector<CpuSet>& table)
     {
         Census census;
         census.total = static_cast<int> (table.size());
@@ -172,18 +176,10 @@ namespace lighthost::process
         return {};
     }
 
-    [[nodiscard]] inline juce::String describe (CoreKind kind)
-    {
-        switch (kind)
-        {
-            case CoreKind::performance: return "a performance core";
-            case CoreKind::efficiency:  return "an efficiency core";
-            case CoreKind::unknown:     return "a core the system did not describe";
-            case CoreKind::uniform:     return "a core (this CPU has one class)";
-        }
-
-        return {};
-    }
+    // There was a describe(CoreKind) here returning "a performance core" and
+    // three friends. Nothing ever called it: the log line and the Preferences
+    // readout both want the one-character form, and four user-facing strings
+    // that cannot be printed are worse than none.
 
     [[nodiscard]] inline juce::String describe (const Census& census)
     {

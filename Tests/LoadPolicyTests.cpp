@@ -159,26 +159,60 @@ namespace
                 // people to ignore the status row.
                 Monitor monitor;
                 monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.5, 0, -1));   // settles the device
 
                 for (int i = 1; i < kMeasuredEscalationMin; ++i)
-                    expect (! monitor.observe (sampleAt (i * 500, 0.5, i, -1)).report,
+                    expect (! monitor.observe (sampleAt (kSettleMs + i * 500, 0.5, i, -1)).report,
                             "a measured dropout below the threshold was escalated");
 
-                expect (monitor.observe (sampleAt (kMeasuredEscalationMin * 500, 0.5,
+                expect (monitor.observe (sampleAt (kSettleMs + kMeasuredEscalationMin * 500, 0.5,
                                                    kMeasuredEscalationMin, -1)).report,
                         "the threshold was reached and nothing was reported");
             }
 
-            beginTest ("a driver-reported dropout is escalated at once");
+            beginTest ("a driver-reported dropout is escalated at once, once settled");
             {
                 // The hardware noticed, so it was audible.
                 Monitor monitor;
                 monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.1, 0, 0));
 
-                const auto escalation = monitor.observe (sampleAt (0, 0.5, 1, 1));
+                const auto escalation = monitor.observe (sampleAt (kSettleMs + 500, 0.5, 1, 1));
                 expect (escalation.report);
                 expect (escalation.message.contains ("Buffer Size"),
                         "the message does not tell the user what to do about it");
+            }
+
+            beginTest ("the under-run a device reports for its own opening is not an alarm");
+            {
+                // MEASURED, not hypothesised: every launch on the development
+                // machine produced dropouts=1 driver=1 inside the first poll,
+                // and the tray said "Audio is dropping out" on a healthy start.
+                //
+                // FAILS IF: the settling window goes. An alarm that fires on
+                // every single launch is one people learn to close without
+                // reading, which costs the real one its meaning.
+                Monitor monitor;
+                monitor.useSession ("a");
+
+                expect (! monitor.observe (sampleAt (0, 0.0, 1, 1)).report,
+                        "the under-run a device reports for opening itself raised an alarm, "
+                        "so the tray cries wolf on every launch");
+
+                expectEquals (monitor.dropouts().total(), 1,
+                              "the settling dropout was hidden rather than merely un-alarmed; "
+                              "it still belongs in the log and the readout");
+            }
+
+            beginTest ("a dropout after the settling window is still an alarm");
+            {
+                // The other half: settling must not become a permanent excuse.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.0, 1, 1));          // settling
+
+                expect (monitor.observe (sampleAt (kSettleMs + 1, 0.0, 2, 2)).report,
+                        "a real dropout after the device settled went unreported");
             }
 
             beginTest ("a machine dropping continuously cannot fill the status sink");
@@ -219,11 +253,12 @@ namespace
             {
                 Monitor monitor;
                 monitor.useSession ("a");
-                expect (monitor.observe (sampleAt (0, 0.5, 1, 1)).report);
+                (void) monitor.observe (sampleAt (0, 0.5, 0, 0));
+                expect (monitor.observe (sampleAt (kSettleMs + 500, 0.5, 1, 1)).report);
 
                 // Budget available and the spacing elapsed, but the count has
                 // not moved. Spacing alone would repeat a stale message.
-                expect (! monitor.observe (sampleAt (kRepeatMs + 1000, 0.5, 1, 1)).report,
+                expect (! monitor.observe (sampleAt (kRepeatMs + 10000, 0.5, 1, 1)).report,
                         "a message repeated about dropouts that had stopped");
             }
 
@@ -231,9 +266,10 @@ namespace
             {
                 Monitor monitor;
                 monitor.useSession ("a");
-                expect (monitor.observe (sampleAt (0, 0.5, 1, 1)).report);
+                (void) monitor.observe (sampleAt (0, 0.5, 0, 0));
+                expect (monitor.observe (sampleAt (kSettleMs + 500, 0.5, 1, 1)).report);
 
-                const auto later = kEpisodeQuietMs + 1000;
+                const auto later = kSettleMs + 500 + kEpisodeQuietMs + 1000;
                 const auto escalation = monitor.observe (sampleAt (later, 0.5, 2, 2));
 
                 expect (escalation.report, "a fresh incident an hour later went unreported");
@@ -292,6 +328,57 @@ namespace
                                          "measured=", "driverXruns=", "deadline=" })
                     expect (fields.contains (key),
                             juce::String ("the log line lost its ") + key + " field");
+            }
+
+            beginTest ("the core the audio thread ran on reaches the log line");
+            {
+                // FAILS IF: the core label is computed and then discarded, which
+                // is what happened for one commit -- DeviceTap sampled the
+                // processor every 64 blocks, ProcessFacts interpreted it, and
+                // the answer reached nothing a person could read. The whole
+                // point of the sampling is the one investigation it supports.
+                Monitor monitor;
+                monitor.useSession ("a");
+
+                auto sample = sampleAt (0, 0.4, 0, 0);
+                sample.coreLabel = "E";
+                (void) monitor.observe (sample);
+
+                expect (monitor.logFields().contains ("core=E"),
+                        "the audio thread's core was sampled and never reported, so the "
+                        "efficiency-core question still cannot be answered from a log");
+            }
+
+            beginTest ("no core label leaves no empty field behind");
+            {
+                // Empty off Windows, empty on a CPU with one core class, and
+                // empty until the thread has been sampled. "core=" with nothing
+                // after it reads like a field that failed.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.4, 0, 0));
+
+                expect (! monitor.logFields().contains ("core="),
+                        "an empty core label was printed as a field with no value");
+            }
+
+            beginTest ("the first report is the one that says what to do about it");
+            {
+                // FAILS IF: the first/last choice is keyed off "is this the
+                // last" rather than "is this the first". At a
+                // kMaxReportsPerEpisode of 1 -- a one-line edit to a constant
+                // documented as a tuning knob -- that makes the only message a
+                // user ever gets the one with no advice in it.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.5, 0, 0));
+
+                const auto first = monitor.observe (sampleAt (kSettleMs + 500, 0.5, 1, 1));
+                expect (first.report);
+                expect (first.message.contains ("Raise Buffer Size"),
+                        "the first dropout report does not tell the user what to try");
+                expect (! first.message.contains ("last report"),
+                        "the first report announced itself as the last one");
             }
 
             beginTest ("a monitor that has seen nothing says so rather than reporting zero");

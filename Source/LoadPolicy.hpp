@@ -91,6 +91,19 @@ namespace lighthost::load
         stays available for everything else that can go wrong. */
     inline constexpr int kMaxReportsPerEpisode = 2;
 
+    /** How long after a device opens a dropout is settling rather than news.
+
+        Opening a WASAPI device reports an under-run for the open itself.
+        Measured on the development machine: every single launch produced
+        `dropouts=1 driver=1` within the first poll, which escalated -- so the
+        tray said "Audio is dropping out" on a completely healthy start.
+
+        Dropouts inside this window are still COUNTED, and still shown in the
+        readout and the log. They just cannot raise an alarm, because an alarm
+        that fires on every launch is one people learn to close.
+    */
+    inline constexpr juce::int64 kSettleMs = 3000;
+
     /** Measured-only dropouts needed before the user is told.
 
         A driver-reported xrun escalates on the first one, because the hardware
@@ -197,6 +210,11 @@ namespace lighthost::load
                                                int dropoutsSoFar,
                                                std::optional<juce::int64> sinceLastDropoutMs) noexcept
     {
+        // The nullopt-with-dropouts combination cannot arise from Monitor:
+        // observe() sets lastDropoutMs on the same poll that first increments
+        // the count, and useSession clears both together. It is accepted here
+        // so the function stays total over its own argument types and can be
+        // exercised directly -- not because a caller produces it.
         if (dropoutsSoFar > 0)
         {
             if (sinceLastDropoutMs.has_value() && *sinceLastDropoutMs <= kRecentDropoutMs)
@@ -301,6 +319,8 @@ namespace lighthost::load
                 return false;
 
             sessionIdentity   = identity;
+            sessionStartMs    = 0;
+            coreLabel         = {};
             session           = {};
             episode           = {};
             lastSeen          = {};
@@ -340,6 +360,9 @@ namespace lighthost::load
             const auto measuredDelta = haveSeenSample ? deltaFrom (lastSeen.measured, now.measured)
                                                       : now.measured;
 
+            if (! haveSeenSample)
+                sessionStartMs = sample.atMs;
+
             lastSeen       = now;
             haveSeenSample = true;
 
@@ -358,13 +381,21 @@ namespace lighthost::load
 
             session.driver   += driverDelta;
             session.measured += measuredDelta;
-            episode.driver   += driverDelta;
-            episode.measured += measuredDelta;
+
+            // The episode is what decideEscalation reads, so a dropout inside
+            // the settling window lands in the session count -- visible in the
+            // readout and the log -- and nowhere the alarm can see it.
+            if (! settling (sample.atMs))
+            {
+                episode.driver   += driverDelta;
+                episode.measured += measuredDelta;
+            }
 
             current       = sample.loadProportion;
             peak          = std::max (peak, sample.loadProportion);
             deadlineMs    = sample.blockMs;
             driverReports = driverReportsDropouts (sample.deviceXrunTotal);
+            coreLabel     = sample.coreLabel;
 
             const auto since = lastDropoutMs.has_value()
                                  ? std::optional<juce::int64> (sample.atMs - *lastDropoutMs)
@@ -394,14 +425,31 @@ namespace lighthost::load
                  + " driver=" + juce::String (session.driver)
                  + " measured=" + juce::String (session.measured)
                  + " driverXruns=" + juce::String (driverReports ? "yes" : "no")
-                 + " deadline=" + juce::String (deadlineMs, 1) + "ms";
+                 + " deadline=" + juce::String (deadlineMs, 1) + "ms"
+                 // Only when there is one. It is empty off Windows, empty on a
+                 // CPU with a single core class, and empty until the audio
+                 // thread has been sampled -- and "core=" with nothing after it
+                 // reads like a field that failed rather than one that does not
+                 // apply here.
+                 + (coreLabel.isNotEmpty() ? " core=" + coreLabel : juce::String());
         }
 
+        /** For tests. Nothing shipped reads these: the readout and the log line
+            are what the peak and the counts reach a person through. They exist
+            so a test can assert the state behind those two rather than parse
+            the strings they produce.
+        */
         [[nodiscard]] double peakProportion()     const noexcept { return peak; }
         [[nodiscard]] Counts dropouts()           const noexcept { return session; }
         [[nodiscard]] int    reportsThisEpisode() const noexcept { return reportsMade; }
 
     private:
+        /** True while this device is still settling in. */
+        [[nodiscard]] bool settling (juce::int64 atMs) const noexcept
+        {
+            return atMs - sessionStartMs < kSettleMs;
+        }
+
         [[nodiscard]] Escalation decideEscalation (const Sample& sample)
         {
             const auto worthReporting = episode.driver > 0
@@ -425,8 +473,12 @@ namespace lighthost::load
             lastReportMs      = sample.atMs;
             totalAtLastReport = session.total();
 
-            return { true, reportsMade >= kMaxReportsPerEpisode ? lastMessage()
-                                                                : firstMessage() };
+            // Keyed off "is this the first" rather than "is this the last".
+            // Written the other way round, a kMaxReportsPerEpisode of 1 -- a
+            // one-line edit to a constant documented as a tuning knob -- would
+            // make firstMessage() unreachable, and it is the only one carrying
+            // the buffer deadline and what to do about it.
+            return { true, reportsMade == 1 ? firstMessage() : lastMessage() };
         }
 
         [[nodiscard]] juce::String firstMessage() const
@@ -451,9 +503,11 @@ namespace lighthost::load
         Counts session;
         Counts episode;
         Counts lastSeen;
+        juce::int64 sessionStartMs = 0;
         double peak              = 0.0;
         double current           = 0.0;
         double deadlineMs        = 0.0;
+        juce::String coreLabel;
         bool   driverReports     = false;
         bool   haveSeenSample    = false;
         int    reportsMade       = 0;

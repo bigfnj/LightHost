@@ -427,14 +427,19 @@ namespace lighthost::ui
         */
         void clearHot()
         {
-            if (hotRow < 0 && hotControl == Control::none)
+            // hotRow alone, and repaintRow unconditionally below. hoverAt is
+            // the only other writer and it forces hotControl to none whenever
+            // the row is negative, so "hotControl is set" implies "hotRow is
+            // valid" -- which made the other half of the old guard, and the
+            // >= 0 test below it, conditions that could not decide anything.
+            if (hotRow < 0)
                 return;
 
             const int previous = hotRow;
             hotRow     = -1;
             hotControl = Control::none;
             setMouseCursor (juce::MouseCursor::NormalCursor);
-            if (previous >= 0) repaintRow (previous);
+            repaintRow (previous);
         }
 
         /** Which row the pointer is over, or -1.

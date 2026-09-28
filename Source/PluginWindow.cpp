@@ -59,6 +59,19 @@ void PluginWindow::closeAllCurrentlyOpenWindows()
         // Gives the message queue one turn before the caller destroys the
         // processors these editors belonged to.
         //
+        // ON THE SHUTDOWN PATH IT GIVES NO TURN AT ALL, AND THAT IS A KNOWN
+        // DEFECT rather than a design. runDispatchLoopUntil is
+        // `while (! quitMessageReceived)` (juce_MessageManager.cpp:144), and
+        // that flag is set when the quit message is DISPATCHED and never
+        // reset. ~IconMenu runs from PluginHostApp::shutdown(), i.e. after the
+        // outer runDispatchLoop has already received the quit -- so the loop
+        // exits on its first check having dispatched nothing. The call from
+        // IconMenu::loadActivePlugins, mid-session, works exactly as described
+        // below; the one that most needs it does not. See BACKLOG.md; the fix
+        // is to close editors before the quit is received, which is a change to
+        // shutdown ordering and wants the soak this comment already asks for.
+        // OfflineRender.hpp records the same JUCE behaviour from the other end.
+        //
         // What it is for: a plugin's editor is its own UI toolkit, not ours.
         // Closing one can leave posted messages or COM releases outstanding that
         // want delivering before the AudioProcessor underneath goes away. This

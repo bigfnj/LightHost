@@ -445,6 +445,13 @@ IconMenu::~IconMenu()
     // audioDeviceIOCallback() into player/graph while they are being destroyed,
     // which is a guaranteed use-after-free on every shutdown path (visibly
     // crashes on system restart/shutdown where the OS disrupts audio in parallel).
+    // All three, not just the device manager. The two plugin lists are members
+    // whose ChangeBroadcaster destructor cancels any pending broadcast, so
+    // leaving them registered was safe only incidentally -- and the next person
+    // to move either list somewhere longer-lived would inherit a dangling
+    // listener with nothing in this destructor to point at.
+    knownPluginList.removeChangeListener (this);
+    activePluginList.removeChangeListener (this);
     deviceManager.removeChangeListener (this);
     deviceManager.removeAudioCallback (&deviceTap);
     player.setProcessor (nullptr);
@@ -1491,8 +1498,15 @@ void IconMenu::pollAudioLoad()
     // every device change, which is the one thing Monitor::useSession
     // documents must not happen. Monitor::observe already declines to fold in
     // a closed-device sample; this is the other half of the same rule.
-    if (sample.deviceOpen && loadMonitor.useSession (loadSessionIdentity()))
-        juce::Logger::writeToLog ("AudioLoad: new device session, counts restarted");
+    // Worded as a statement of fact rather than of change. useSession returns
+    // true the first time it is called as well as on a real change, so the
+    // startup poll took the "restarted" branch on every single run and logged
+    // that nothing had happened -- a false line in the one log a dropout
+    // investigation reads.
+    const auto identity = loadSessionIdentity();
+
+    if (sample.deviceOpen && loadMonitor.useSession (identity))
+        juce::Logger::writeToLog ("AudioLoad: measuring device session " + identity);
 
     if (const auto escalation = loadMonitor.observe (sample); escalation.report)
     {

@@ -350,7 +350,6 @@ private:
         IconMenu& owner;
     };
 
-    LoadPoll loadPoll { *this };
     lighthost::load::Monitor loadMonitor;
 
     void pollAudioLoad();
@@ -360,6 +359,13 @@ private:
 
     // Where failures go so the user can see them, rather than only the log file.
     lighthost::status::Sink status;
+
+    // Declared AFTER loadMonitor and status, so it is destroyed BEFORE them.
+    // timerCallback reaches into both, and ~IconMenu's explicit loadPoll.stop()
+    // should be the belt rather than the only thing holding this up. Declared
+    // before it, a poll that somehow outlived the stop would read a destroyed
+    // Monitor and report into a destroyed Sink.
+    LoadPoll loadPoll { *this };
 
     // Background plugin loading. Plugin instantiation must happen on the message
     // thread — JUCE loads the DLL and calls the plugin factory there no matter

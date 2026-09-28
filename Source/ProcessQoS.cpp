@@ -52,11 +52,16 @@ namespace
 
         std::vector<CpuSet> table;
 
-        for (ULONG offset = 0; offset < required;)
+        for (ULONG offset = 0; offset + sizeof (SYSTEM_CPU_SET_INFORMATION) <= required;)
         {
             const auto* record = reinterpret_cast<const SYSTEM_CPU_SET_INFORMATION*> (base + offset);
 
-            if (record->Size == 0)
+            // A zero Size would not advance; a Size running past the end of the
+            // reply would have this read a record that is not all there. Neither
+            // is believed to happen -- the check is here because a malformed
+            // kernel reply should stop the walk rather than read past the buffer,
+            // and closing it costs one comparison at startup.
+            if (record->Size == 0 || offset + record->Size > required)
                 break;
 
             if (record->Type == CpuSetInformation)

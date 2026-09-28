@@ -144,13 +144,21 @@ namespace lighthost::metering
             and 640 ms at 480, which is far finer than the question needs. */
         static constexpr juce::uint32 kProcessorStride = 64;
 
+        static_assert ((kProcessorStride & (kProcessorStride - 1)) == 0,
+                       "the stride is used as a bit mask, so it must be a power of two. "
+                       "A stride of 100 would give a mask of 99 and fire on a scattered "
+                       "subset of blocks, at no particular rate and with no build error.");
+
         juce::AudioIODeviceCallback& wrapped;
         Meter inputMeter;
         Meter outputMeter;
 
         // Written on the audio thread, read on the message thread.
         std::atomic<juce::uint32> lastProcessor { 0 };
-        juce::uint32 blockCounter = 0;   ///< audio thread only; not shared
+        /// Written on the audio thread, plus once in audioDeviceAboutToStart,
+        /// which JUCE orders before the first callback -- so two writers, never
+        /// concurrent, and not shared with the message thread.
+        juce::uint32 blockCounter = 0;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DeviceTap)
     };
