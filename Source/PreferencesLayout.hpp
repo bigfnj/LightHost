@@ -131,7 +131,7 @@ namespace lighthost::ui::prefs
             + m.sectionH + m.gap + m.rowH + m.gap                         // OUTPUT
             + m.meterH + m.gap                                            // output meter
             + m.sectionH + m.gap                                          // DEVICE SETTINGS label
-            + 4 * (m.rowH + m.gap)                                        // API, rate, buffer, latency
+            + 5 * (m.rowH + m.gap)                                        // API, rate, buffer, latency, load
             + m.buttonH + m.pad;                                          // Apply
 
         return aboveChain + belowChain;

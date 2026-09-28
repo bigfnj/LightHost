@@ -4,6 +4,7 @@
 #include "HostServices.hpp"
 #include "LookAndFeel.hpp"
 #include "OfflineRender.hpp"
+#include "LoadPolicy.hpp"
 #include "PluginChainStore.hpp"
 #include "PreferencesLayout.hpp"
 #include "SignalMetering.hpp"
@@ -148,6 +149,114 @@ private:
 // and the render must not be re-entered. Message thread only.
 static bool chainTestInFlight = false;
 
+//==============================================================================
+// The audio-load readout.
+//
+// A component rather than a pair of juce::Labels because it needs three things
+// a Label does not give: a timer, a colour that follows severity, and a
+// tooltip.
+//
+// POLLED, WHICH THE ROW ABOVE IT DELIBERATELY IS NOT. updateLatencyDisplay is
+// event-driven and says in as many words that a timer would burn cycles
+// forever to catch an event arriving twice a session. This number is the
+// opposite: it moves continuously and nothing broadcasts it, so there is
+// nothing to be driven by. It is polled at the rate the figure behind it
+// changes -- not at meter rate, which would be 24 wasted wakeups a second --
+// and only while it is on screen.
+//==============================================================================
+class LoadReadout final : public juce::Component,
+                          public juce::SettableTooltipClient,
+                          private juce::Timer,
+                          private lighthost::ui::VisibilityDrivenTimer
+{
+public:
+    LoadReadout()
+    {
+        setTooltip ("How much of each audio block the chain is using, the highest it has "
+                    "reached since this device was opened, and how many blocks missed "
+                    "their deadline.\n\n"
+                    "A dropout the driver reported is one the hardware noticed. A measured "
+                    "one only means a block overran, which a single scheduling hiccup can "
+                    "produce.\n\n"
+                    "The core is where the audio thread was last SEEN, sampled one block in "
+                    "64 -- where it has been, not where it is.");
+    }
+
+    ~LoadReadout() override { stopTimer(); }
+
+    void setSource (std::function<lighthost::load::Readout()> source)
+    {
+        readoutSource = std::move (source);
+        updateTimerState();
+    }
+
+    void visibilityChanged()        override { updateTimerState(); }
+    void parentHierarchyChanged()   override { updateTimerState(); }
+    void refreshTimerForVisibility() override { updateTimerState(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
+
+        if (shown.text.isEmpty())
+        {
+            g.setColour (findColour (juce::Label::textColourId).withAlpha (0.35f));
+            g.drawText ("--", getLocalBounds(), juce::Justification::centredLeft);
+            return;
+        }
+
+        g.setColour (colourFor (shown.severity));
+        g.drawText (shown.text, getLocalBounds(), juce::Justification::centredLeft);
+    }
+
+private:
+    [[nodiscard]] juce::Colour colourFor (lighthost::load::Severity severity) const
+    {
+        switch (severity)
+        {
+            case lighthost::load::Severity::hot:     return juce::Colour (lighthost::ui::LookAndFeel::kHot);
+            case lighthost::load::Severity::caution: return juce::Colour (lighthost::ui::LookAndFeel::kCaution);
+            case lighthost::load::Severity::ok:      break;
+        }
+
+        return findColour (juce::Label::textColourId).withAlpha (0.85f);
+    }
+
+    void updateTimerState()
+    {
+        if (isShowing() && readoutSource)
+            startTimer (lighthost::load::kPollMs);
+        else
+            stopTimer();
+    }
+
+    void timerCallback() override
+    {
+        // Re-checked rather than trusted: the same reason SignalMeter does it.
+        if (! isShowing() || ! readoutSource)
+        {
+            stopTimer();
+            return;
+        }
+
+        const auto next = readoutSource();
+
+        // Only when it actually moved. The figure behind this is an average,
+        // so it changes slightly on most polls and identically on many.
+        if (next.text != shown.text || next.severity != shown.severity)
+        {
+            shown = next;
+            repaint();
+        }
+    }
+
+    std::function<lighthost::load::Readout()> readoutSource;
+    lighthost::load::Readout shown;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LoadReadout)
+};
+
+
 class PreferencesContentComponent final : public juce::Component,
                                           public  prefs::HeightReportingPanel,
                                           private juce::ChangeListener
@@ -170,7 +279,8 @@ public:
         std::function<void (bool)> onSignalViewToggled,
         std::function<lighthost::metering::Meter* (int)> probeMeterAt,
         std::function<std::vector<juce::String>()> committedChainNames,
-        std::function<void (const juce::String&, const juce::String&)> onDevicesChosen)
+        std::function<void (const juce::String&, const juce::String&)> onDevicesChosen,
+        std::function<lighthost::load::Readout()> audioLoadReadout)
         : deviceManager (dm),
           knownPlugins   (knownPlugins_),
           laneTrim       (std::move (laneTrimIn)),
@@ -386,6 +496,13 @@ public:
         latencyValueLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
         latencyValueLabel.setJustificationType (juce::Justification::centredLeft);
         updateLatencyDisplay();
+
+        addAndMakeVisible (loadHeadLabel);
+        addAndMakeVisible (loadReadout);
+        loadHeadLabel.setText ("Audio load:", juce::dontSendNotification);
+        loadHeadLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
+        loadHeadLabel.setJustificationType (juce::Justification::centredRight);
+        loadReadout.setSource (std::move (audioLoadReadout));
 
         // ── Apply button ──────────────────────────────────────────────────────
         applyButton.setButtonText ("Apply");
@@ -806,6 +923,19 @@ public:
         }
         area.removeFromTop (kGap);
 
+        // Directly under Latency, because the two answer the same question
+        // from opposite ends: how much delay the chain adds, and how close
+        // it is to not fitting in the time it has. The readout takes the
+        // rest of the row rather than a fixed width -- its text is much
+        // longer than the latency figure and grows when dropouts appear.
+        {
+            constexpr int kLabelW = 90;
+            auto row = area.removeFromTop (kRowH);
+            loadHeadLabel.setBounds (row.removeFromLeft (kLabelW));
+            loadReadout.setBounds   (row.reduced (4, 2));
+        }
+        area.removeFromTop (kGap);
+
         // ── Buttons ───────────────────────────────────────────────────────────
         {
             auto row = area.removeFromTop (kBtnH);
@@ -941,6 +1071,8 @@ private:
     juce::ComboBox sampleRateCombo;
     juce::Label    bufferSizeHeadLabel;
     juce::ComboBox bufferSizeCombo;
+    juce::Label    loadHeadLabel;
+    LoadReadout    loadReadout;
     juce::Label    latencyHeadLabel;
     juce::Label    latencyValueLabel;
 
@@ -1789,6 +1921,7 @@ PreferencesWindow::PreferencesWindow (
     std::function<std::vector<juce::String>()> committedChainNames,
     std::function<void (const juce::String& inputName,
                         const juce::String& outputName)> onDevicesChosen,
+    std::function<lighthost::load::Readout()> audioLoadReadout,
     std::function<void()> onClose)
     : DocumentWindow ("Preferences",
                       juce::LookAndFeel::getDefaultLookAndFeel()
@@ -1814,7 +1947,8 @@ PreferencesWindow::PreferencesWindow (
         },
         std::move (probeMeterAt),
         std::move (committedChainNames),
-        std::move (onDevicesChosen));
+        std::move (onDevicesChosen),
+        std::move (audioLoadReadout));
 
     // Height budget. The authority is fixedLayoutHeight(), not this comment --
     // which had drifted 34px out of date within one release of being written,
@@ -1824,16 +1958,22 @@ PreferencesWindow::PreferencesWindow (
     //
     // Above the chain: 10 pad + 62 INPUT + 26 input meter + 34 virtual-input hint
     // when shown + 28 chain label = 160. Below it: 40 Add Plugin + 62 LANE TRIM +
-    // 62 OUTPUT + 26 output meter + 164 DEVICE SETTINGS including Latency + 50
-    // buttons and pad = 404. With the chain viewport at its 80px minimum that is
-    // 644 of content.
+    // 62 OUTPUT + 26 output meter + 198 DEVICE SETTINGS, being its label plus
+    // five rows -- API, rate, buffer, Latency, Audio load -- + 50 buttons and
+    // pad = 438. With the chain viewport at its 80px minimum that is 678 of
+    // content with the hint showing, 644 without it.
     //
     // The default height below is 650, which is the WINDOW including its native
-    // title bar -- so the shell gets roughly 619, under the 644 the layout wants,
+    // title bar -- so the shell gets roughly 619, under what the layout wants,
     // and the viewport scrolls. That is what it is for, and why adding a row no
     // longer means re-deriving a window size. Stated explicitly because comparing
     // 650 against 644 suggests the opposite conclusion, and the arithmetic in
     // this comment has already drifted once.
+    //
+    // It is safe to leave alone now in a way it was not before: the panel is
+    // re-heighted when an optional row appears, so the Apply button stays
+    // reachable by scrolling instead of being laid out past the bottom edge.
+    // See Source/PreferencesLayout.hpp.
     constexpr int kDefaultWidth  = 520;
     constexpr int kDefaultHeight = 650;
 

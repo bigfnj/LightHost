@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Lanes.hpp"
+#include "LoadPolicy.hpp"
 #include "SignalMetering.hpp"
 
 #include <juce_audio_utils/juce_audio_utils.h>
@@ -90,6 +91,14 @@ public:
             boxes and nothing else in the device path can say that. */
         std::function<void (const juce::String& inputName,
                             const juce::String& outputName)> onDevicesChosen,
+        /** The audio-load readout, polled while the window is on screen.
+
+            Polled, where the latency figure beside it is event-driven, and the
+            difference is the point: latency changes perhaps twice a session and
+            something broadcasts it, while this moves continuously and nothing
+            does. See LoadReadout.
+        */
+        std::function<lighthost::load::Readout()> audioLoadReadout,
         std::function<void()> onClose);
 
     ~PreferencesWindow() override;

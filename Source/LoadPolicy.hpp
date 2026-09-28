@@ -334,6 +334,7 @@ namespace lighthost::load
             coreLabel         = {};
             session           = {};
             episode           = {};
+            alarmable         = {};
             lastSeen          = {};
             peak              = 0.0;
             current           = 0.0;
@@ -409,8 +410,10 @@ namespace lighthost::load
             // readout and the log -- and nowhere the alarm can see it.
             if (! settling (sample.atMs))
             {
-                episode.driver   += driverDelta;
-                episode.measured += measuredDelta;
+                episode.driver    += driverDelta;
+                episode.measured  += measuredDelta;
+                alarmable.driver  += driverDelta;
+                alarmable.measured += measuredDelta;
             }
 
             current       = sample.loadProportion;
@@ -423,10 +426,16 @@ namespace lighthost::load
                                  ? std::optional<juce::int64> (sample.atMs - *lastDropoutMs)
                                  : std::nullopt;
 
+            // Severity is judged on the dropouts that could have raised an
+            // alarm, not on every one counted. A dropout inside the settling
+            // window is a startup artefact; colouring the readout amber for it
+            // would leave it amber for the whole session after a completely
+            // healthy launch, which is the same cry-wolf problem as the tray
+            // message, just quieter. The COUNT still shows every one.
             cached = { composeReadout (describeLoad (current, peak),
                                        describeDropouts (session, driverReports),
                                        sample.coreLabel),
-                       severityFor (current, session.total(), since) };
+                       severityFor (current, alarmable.total(), since) };
 
             return decideEscalation (sample);
         }
@@ -524,6 +533,7 @@ namespace lighthost::load
         juce::String sessionIdentity;
         Counts session;
         Counts episode;
+        Counts alarmable;   ///< session minus anything that arrived while settling
         Counts lastSeen;
         juce::int64 sessionStartMs = 0;
         juce::int64 chainReadyMs   = 0;

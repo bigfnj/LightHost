@@ -204,6 +204,23 @@ namespace
                               "it still belongs in the log and the readout");
             }
 
+            beginTest ("a settling dropout is counted but does not colour the readout");
+            {
+                // FAILS IF: severity is judged on every dropout counted. A
+                // healthy launch reports one under-run for the device opening,
+                // so the readout would sit amber for the rest of the session --
+                // the same cry-wolf problem as the tray message, just quieter.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.1, 1, 1));
+
+                expect (monitor.readout().severity == Severity::ok,
+                        "a healthy launch left the load readout permanently amber");
+                expect (monitor.readout().text.contains ("1 dropout"),
+                        "the settling dropout was hidden from the count as well as from "
+                        "the colour; it belongs in the count");
+            }
+
             beginTest ("a dropout after the settling window is still an alarm");
             {
                 // The other half: settling must not become a permanent excuse.

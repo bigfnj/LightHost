@@ -2462,6 +2462,17 @@ void IconMenu::showPreferences()
             if (auto* im = safe.getComponent())
                 im->recordRequestedDevices (inputName, outputName);
         },
+        [safe]() -> lighthost::load::Readout
+        {
+            // Read from IconMenu's own monitor rather than sampled here, so
+            // the numbers the user sees are the same ones that decided whether
+            // to escalate -- and so they keep accumulating while this window
+            // is shut, which is when the incident nobody is watching happens.
+            if (auto* im = safe.getComponent())
+                return im->getLoadReadout();
+
+            return {};
+        },
         [safe]()
         {
             if (auto* im = safe.getComponent())
