@@ -20,14 +20,29 @@ QUIET_END = 6.0     # seconds; the performer was asked to stay silent until here
 SPEAK_FROM = 6.5    # margin, so the first word is not counted into the quiet half
 
 
+def widen24(raw):
+    """Sign-extend packed 24-bit little-endian PCM into int32.
+
+    Light Host renders 24-bit WAVs, so without this every one of these tools
+    died on its own output with KeyError: 3. numpy has no 24-bit dtype, so the
+    top byte is read as int8 to get the sign extension for free.
+    """
+    b = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3)
+    return (b[:, 0].astype(np.int32)
+            | (b[:, 1].astype(np.int32) << 8)
+            | (b[:, 2].view(np.int8).astype(np.int32) << 16))
+
+
 def load(name):
     with wave.open(name, "rb") as w:
         rate, raw = w.getframerate(), w.readframes(w.getnframes())
         width, chans = w.getsampwidth(), w.getnchannels()
-    dt = {2: np.int16, 4: np.int32}[width]
-    v = np.frombuffer(raw, dtype=dt)
-    full = float(np.iinfo(dt).max)
-    clipped = int(np.count_nonzero(np.abs(v.astype(np.int64)) >= np.iinfo(dt).max - 1))
+    if width == 3:
+        v, full = widen24(raw), float(2 ** 23 - 1)
+    else:
+        dt = {2: np.int16, 4: np.int32}[width]
+        v, full = np.frombuffer(raw, dtype=dt), float(np.iinfo(dt).max)
+    clipped = int(np.count_nonzero(np.abs(v.astype(np.int64)) >= full - 1))
     a = v.astype(np.float64) / full
     if chans > 1:
         a = a.reshape(-1, chans).mean(axis=1)
