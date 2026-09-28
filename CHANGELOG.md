@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [5.6.1] — 2026-09-28
+
 ### Added — the Device API choices explain themselves
 
 Exclusive mode has always been in the Device API dropdown -- JUCE registers
