@@ -159,24 +159,20 @@ namespace
                         "confirmed to be in force");
             }
 
-            beginTest ("trimming is judged against the peak, not against an absolute");
+            beginTest ("the memory line reports the figures and interprets none of them");
             {
-                const juce::int64 mb = 1024 * 1024;
-
-                expect (looksTrimmed ({ true, 0, 20 * mb, 100 * mb }));
-                expect (! looksTrimmed ({ true, 0, 90 * mb, 100 * mb }));
-                expect (! looksTrimmed ({ false, 0, 20 * mb, 100 * mb }),
-                        "a reading that could not be taken is being treated as evidence");
-                expect (! looksTrimmed ({ true, 0, 0, 0 }),
-                        "a zero peak divided rather than declining to answer");
-            }
-
-            beginTest ("the memory line names all three figures");
-            {
+                // There was a trimmed=yes/no here, derived from the working set
+                // against its own peak. It read yes on every healthy run,
+                // because the peak is a one-off model load, and it produced a
+                // confident wrong diagnosis. The figures are reported raw now.
                 const MemoryFacts facts { true, 4312, 38 * 1024 * 1024, 52 * 1024 * 1024 };
                 const auto text = describe (facts);
 
-                for (const auto* key : { "pageFaults=", "workingSet=", "peakWorkingSet=", "trimmed=" })
+                expect (! text.contains ("trimmed"),
+                        "a predicate measured against a load-transient peak is back, and "
+                        "it is true of every healthy run");
+
+                for (const auto* key : { "pageFaults=", "workingSet=", "peakWorkingSet=" })
                     expect (text.contains (key),
                             juce::String ("the memory line lost its ") + key + " field");
 

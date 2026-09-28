@@ -156,6 +156,34 @@ Worth considering instead: a `-signal-view` startup flag beside
 `-preferences`. It would make this capturable from a script for ever, and the
 flag is two lines next to `startup::openPreferencesRequested`.
 
+### The 6%-load dropouts are unexplained
+
+`Source/LoadPolicy.hpp` measures them; nothing explains them.
+
+On the development machine, eight driver-reported dropouts arrived on a
+chain using 6% of its 10 ms block. Driver-reported means the hardware
+noticed, so they were audible. The chain had ninety per cent of its deadline
+spare, so it is not a capacity problem and a bigger buffer cannot help --
+which the dropout message now says rather than sending the user to the
+wrong setting.
+
+The memory theory was chased and is dead: see `DECISIONS.md`. The predicate
+that suggested it was true of every healthy run, a hard working-set minimum
+was measured to be ignored by Windows 11, and the page-fault deltas around
+the dropouts were 1119 and 93.
+
+**The next falsifiable measurement is the page-fault RATE**, not the count:
+faults per second between two consecutive polls, reported at the dropout.
+`MemoryFacts` is already sampled every poll, so this is a subtraction and a
+field, and `load::Monitor` already holds the previous reading for the
+dropout counters. If that is flat at a dropout, paging is ruled out properly
+rather than by argument.
+
+After that, the remaining suspects are all outside this application: a USB
+interface, its driver, the Windows shared-mode mixer, or the virtual cable
+on the output. Exclusive mode is the cheapest thing to try and costs no
+code.
+
 ### `--chain` cannot express "no plugins"
 
 `Source/OfflineRender.hpp`, `parseChain` and `renderFile`

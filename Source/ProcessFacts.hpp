@@ -226,13 +226,22 @@ namespace lighthost::process
     }
 
     //== Working set ===========================================================
-    /** Evidence for or against the working-set-trimming theory.
+    /** The memory figures, reported raw.
 
-        PageFaultCount alone settles nothing: it counts soft faults as well as
-        hard ones, cannot tell them apart, and only ever rises -- a measurement
-        that cannot fail the hypothesis. What actually evidences trimming is the
-        working set having fallen well below its own peak, which is in the same
-        struct and costs nothing extra to gather.
+        There was a looksTrimmed() predicate here, comparing the working set
+        against its own peak, and it was WRONG in a way worth recording: the
+        peak is dominated by a one-off model load, so in steady state the
+        comparison is true permanently and says nothing about paging. It read
+        "trimmed=yes" on every healthy run and led to a confident, incorrect
+        diagnosis. See DECISIONS.md.
+
+        PageFaultCount is equally unable to settle anything on its own -- it
+        counts soft faults as well as hard ones and only ever rises. The
+        quantity that would actually evidence a fault storm is its RATE around
+        a dropout, which nothing here computes yet.
+
+        So: the figures are logged and a person can read them. No predicate
+        claims to interpret them.
     */
     struct MemoryFacts
     {
@@ -241,21 +250,6 @@ namespace lighthost::process
         juce::int64 workingSetBytes     = 0;
         juce::int64 peakWorkingSetBytes = 0;
     };
-
-    /** True when the working set has fallen to less than `fraction` of its peak.
-
-        Judged against the peak rather than an absolute, because what counts as
-        a small working set depends entirely on the chain that is loaded.
-    */
-    [[nodiscard]] inline bool looksTrimmed (const MemoryFacts& facts,
-                                            double fraction = 0.5) noexcept
-    {
-        if (! facts.available || facts.peakWorkingSetBytes <= 0)
-            return false;
-
-        return static_cast<double> (facts.workingSetBytes)
-             < static_cast<double> (facts.peakWorkingSetBytes) * fraction;
-    }
 
     [[nodiscard]] inline juce::String asMegabytes (juce::int64 bytes)
     {
@@ -269,7 +263,6 @@ namespace lighthost::process
 
         return "pageFaults=" + juce::String (facts.pageFaults)
              + " workingSet=" + asMegabytes (facts.workingSetBytes)
-             + " peakWorkingSet=" + asMegabytes (facts.peakWorkingSetBytes)
-             + " trimmed=" + (looksTrimmed (facts) ? "yes" : "no");
+             + " peakWorkingSet=" + asMegabytes (facts.peakWorkingSetBytes);
     }
 }

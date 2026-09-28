@@ -512,16 +512,51 @@ namespace lighthost::load
             return { true, reportsMade == 1 ? firstMessage() : lastMessage() };
         }
 
+        /** True when the chain has plenty of the block left over.
+
+            The point of the distinction is that a bigger buffer only helps a
+            chain that is running out of time. Measured on the development
+            machine: eight driver-reported dropouts at 6% load with a peak of
+            10%, so the chain was finishing in a tenth of its deadline and
+            every word of the old advice was wrong.
+        */
+        [[nodiscard]] bool hasHeadroom() const noexcept
+        {
+            return peak > 0.0 && peak < kCautionProportion;
+        }
+
         [[nodiscard]] juce::String firstMessage() const
         {
             auto message = "Audio is dropping out: " + describeDropouts (session, driverReports)
                          + " since this device was opened.";
 
-            if (deadlineMs > 0.0)
-                message += " The chain is not finishing inside the "
-                         + juce::String (deadlineMs, 1) + " ms buffer.";
+            // The advice used to be "raise the buffer" unconditionally, which
+            // is right for a chain that cannot fit and actively misleading for
+            // one that is barely working. The load figure that decides it was
+            // already being measured and displayed; it just was not consulted.
+            if (! hasHeadroom())
+            {
+                if (deadlineMs > 0.0)
+                    message += " The chain is not finishing inside the "
+                             + juce::String (deadlineMs, 1) + " ms buffer.";
 
-            return message + " Raise Buffer Size in Preferences, or bypass a plugin.";
+                return message + " Raise Buffer Size in Preferences, or bypass a plugin.";
+            }
+
+            message += " The chain is only using " + asPercent (peak) + " of the";
+
+            if (deadlineMs > 0.0)
+                message += " " + juce::String (deadlineMs, 1) + " ms";
+
+            message += " buffer at its peak, so raising it will not help.";
+
+            // Deliberately does not name a cause. The first version of this
+            // named one -- Windows having paged the process out -- on the
+            // strength of a predicate that turned out to be true of every
+            // healthy run. A message that guesses wrong is worse than one
+            // that says where to look.
+            return message + " Something outside the chain is interrupting the audio"
+                             " thread; the log has the figures.";
         }
 
         [[nodiscard]] juce::String lastMessage() const

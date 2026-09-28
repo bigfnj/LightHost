@@ -114,7 +114,7 @@ buffer, not more threads.
 
 ---
 
-## Hard working-set minimum — deferred 2026-09-28
+## Hard working-set minimum — deferred 2026-09-28, and the trigger was wrong
 
 ### What was asked
 
@@ -144,6 +144,57 @@ peak", which is the correlation the decision actually needs.
 
 A `trimmed=yes` in an `AudioLoad [dropout]` line. That is the whole trigger,
 and it is deliberately one grep.
+
+### It appeared to fire, and the trigger was faulty
+
+Recorded at length because the mistake is more useful than the entry was.
+
+Within hours of shipping, this appeared in a real log:
+
+    AudioLoad [dropout]: load=6% peak=10% dropouts=8 driver=8 measured=0
+      deadline=10.0ms workingSet=41.9MB peakWorkingSet=665.7MB trimmed=yes
+
+Eight driver-reported dropouts on a chain using 6% of its block, with
+`trimmed=yes`. It reads like the trigger firing exactly as designed, and it
+is not.
+
+**`looksTrimmed` compared the working set against its own PEAK, and the peak
+is a one-off model load.** A neural denoiser allocates ~665 MB while loading
+and settles at ~80 MB for the rest of the session. So the predicate was true
+permanently, on every healthy run, from the moment the chain finished
+loading. It could not distinguish a paged-out process from a normal one,
+which means it could never have been evidence of anything.
+
+**The fix was then built and measured not to work.**
+`SetProcessWorkingSetSizeEx` with `QUOTA_LIMITS_HARDWS_MIN_ENABLE` was
+applied at a 192 MB floor and read back as in force --
+`min=192MB max=768MB flags=0x9` -- and Windows trimmed the process to 77 MB
+anyway, within sixty seconds, and held it there:
+
+    t+30s 189MB   t+60s 77MB   t+90s 77MB   t+120s 79MB   t+150s 79MB
+
+So on Windows 11 a hard working-set minimum is accepted, reported as set,
+and ignored for an idle process. That is worth knowing and is the reason
+this entry now exists twice over.
+
+**And the page faults were never there either.** The deltas between the
+dropout lines were 1119 and 93 faults. A fault storm inside a 10 ms deadline
+is not 93 faults.
+
+All of it is reverted: no floor, no predicate, and the memory figures are
+logged raw for a person to read.
+
+### What would actually change the answer now
+
+Not a working-set comparison. The falsifiable quantity is the page-fault
+**rate** around a dropout -- faults per second between two consecutive
+readings -- which nothing computes yet and which would be a small addition
+to `load::Monitor`, since the figures are already sampled every poll.
+
+Until something measures that, the 6%-load dropouts on this machine remain
+unexplained. Driver-reported xruns on a USB interface at a tenth of the
+available block point at the device or its driver rather than at Light Host,
+and exclusive mode is the cheapest thing to try.
 
 ---
 

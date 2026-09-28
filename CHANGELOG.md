@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+### Fixed — a memory check that was true of every healthy run
+
+5.6.0 logged `trimmed=yes/no`, derived from the working set against its own
+peak. The peak is a one-off model load — a neural denoiser allocates ~665 MB
+loading and settles at ~80 MB — so the check was true permanently, on every
+healthy run, from the moment a chain finished loading. It could not tell a
+paged-out process from a normal one.
+
+It was convincing enough to produce a wrong diagnosis within hours of
+shipping, and to get a fix built on top of it. That fix was then measured
+not to work either: `SetProcessWorkingSetSizeEx` with a hard 192 MB minimum
+was accepted and read back as in force (`flags=0x9`), and Windows trimmed
+the process to 77 MB within a minute anyway. The page-fault deltas around
+the dropouts were 1119 and 93 — not a fault storm.
+
+All of it is gone. The memory figures are logged raw and nothing claims to
+interpret them. `DECISIONS.md` records the measurements, because "a hard
+working-set minimum is ignored on Windows 11" is worth knowing.
+
+### Fixed — a chain with headroom is no longer told to raise its buffer
+
+The dropout message said "The chain is not finishing inside the 10.0 ms
+buffer. Raise Buffer Size in Preferences, or bypass a plugin" whatever the
+load was. At 6% load every word of that is wrong, and it sends the user to
+a setting that cannot help.
+
+The load figure that decides it was already being measured and displayed; it
+just was not consulted. A chain with headroom is now told so, and — when the
+process has been paged out — told what the likelier cause is instead.
+
 ### Fixed — the Preferences window opens at a size its own layout fits in
 
 It opened about 31 px shorter than the layout needed, so a default run

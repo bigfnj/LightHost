@@ -357,6 +357,7 @@ private:
     [[nodiscard]] lighthost::load::Sample takeLoadSample() const;
     void logAudioLoad (const juce::String& contextLabel) const;
 
+
     // Where failures go so the user can see them, rather than only the log file.
     lighthost::status::Sink status;
 

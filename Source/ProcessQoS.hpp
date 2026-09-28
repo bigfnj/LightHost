@@ -52,4 +52,5 @@ namespace lighthost::process
 
     /** Page faults and the working set, for the dropout log line. */
     [[nodiscard]] MemoryFacts memoryFacts();
+
 }

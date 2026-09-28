@@ -179,8 +179,8 @@ namespace
 
                 const auto escalation = monitor.observe (sampleAt (kSettleMs + 500, 0.5, 1, 1));
                 expect (escalation.report);
-                expect (escalation.message.contains ("Buffer Size"),
-                        "the message does not tell the user what to do about it");
+                expect (escalation.message.contains ("dropping out"),
+                        "the message does not say what happened");
             }
 
             beginTest ("the under-run a device reports for its own opening is not an alarm");
@@ -255,6 +255,44 @@ namespace
 
                 expect (monitor.observe (sampleAt (10000 + kSettleMs + 1, 0.0, 2, 2)).report,
                         "a real dropout after the chain settled went unreported");
+            }
+
+            beginTest ("a chain with headroom is not told to raise its buffer");
+            {
+                // MEASURED, and the reason this branch exists: eight
+                // driver-reported dropouts at 6% load with a 10% peak. The
+                // chain was finishing in a tenth of its deadline, and the
+                // advice said "the chain is not finishing inside the buffer.
+                // Raise Buffer Size" -- every word of it wrong.
+                //
+                // FAILS IF: the advice goes back to being unconditional.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.06, 0, 0));
+
+                const auto escalation = monitor.observe (sampleAt (kSettleMs + 500, 0.06, 1, 1));
+
+                expect (escalation.report);
+                expect (! escalation.message.contains ("Raise Buffer Size"),
+                        "a chain using a tenth of its block was told to raise the buffer, "
+                        "which cannot help and sends the user the wrong way");
+                expect (escalation.message.contains ("will not help"),
+                        "the message does not say that raising the buffer is not the answer");
+            }
+
+            beginTest ("a chain that is out of time still is told to raise its buffer");
+            {
+                // The other half. This branch is the common case and must not
+                // be lost to the one above.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.95, 0, 0));
+
+                const auto escalation = monitor.observe (sampleAt (kSettleMs + 500, 0.95, 1, 1));
+
+                expect (escalation.message.contains ("Raise Buffer Size"),
+                        "a chain at 95% of its deadline was not told the one thing that "
+                        "would help");
             }
 
             beginTest ("a machine dropping continuously cannot fill the status sink");
@@ -411,11 +449,13 @@ namespace
                 // kMaxReportsPerEpisode of 1 -- a one-line edit to a constant
                 // documented as a tuning knob -- that makes the only message a
                 // user ever gets the one with no advice in it.
+                // A loaded chain, so this exercises the branch that HAS advice
+                // to give. The headroom branch is covered separately above.
                 Monitor monitor;
                 monitor.useSession ("a");
-                (void) monitor.observe (sampleAt (0, 0.5, 0, 0));
+                (void) monitor.observe (sampleAt (0, 0.95, 0, 0));
 
-                const auto first = monitor.observe (sampleAt (kSettleMs + 500, 0.5, 1, 1));
+                const auto first = monitor.observe (sampleAt (kSettleMs + 500, 0.95, 1, 1));
                 expect (first.report);
                 expect (first.message.contains ("Raise Buffer Size"),
                         "the first dropout report does not tell the user what to try");
