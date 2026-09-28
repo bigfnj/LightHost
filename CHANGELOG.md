@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+### Added — the Device API choices explain themselves
+
+Exclusive mode has always been in the Device API dropdown -- JUCE registers
+it unconditionally alongside shared, low-latency, DirectSound and ASIO -- and
+nothing in the application said what any of them meant. So the one setting
+most likely to fix a dropout was sitting in plain sight, unexplained, behind
+a label ("Device API") that is jargon.
+
+A tooltip rather than a second control. Exclusive mode is one of several
+device *types* in JUCE's model, not a boolean, so a toggle beside the combo
+would be a second thing to keep in step with it and would have nothing
+sensible to show when the type is ASIO.
+
+It also says the part that bites: in exclusive mode nothing else on the
+machine can use that device while Light Host holds it.
+
 ### Fixed — a memory check that was true of every healthy run
 
 5.6.0 logged `trimmed=yes/no`, derived from the working set against its own

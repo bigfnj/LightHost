@@ -464,6 +464,31 @@ public:
         deviceTypeHeadLabel.setText ("Device API:", juce::dontSendNotification);
         deviceTypeHeadLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
         deviceTypeHeadLabel.setJustificationType (juce::Justification::centredRight);
+
+        // "Device API" is jargon, and until now nothing in the application
+        // said what the choices meant -- so the one setting most likely to
+        // fix a dropout was sitting in plain sight, unexplained. A tooltip
+        // rather than a second control: exclusive mode is one of several
+        // device TYPES in JUCE's model, not a boolean, so a toggle beside
+        // this combo would be a second thing to keep in step with it and
+        // would have nothing sensible to show when the type is ASIO.
+        deviceTypeCombo.setTooltip (
+            "How Light Host reaches the audio device.\n\n"
+            "Windows Audio - shared with everything else on the machine. The "
+            "Windows mixer and its resampler sit in the path.\n\n"
+            "Windows Audio (Exclusive Mode) - Light Host takes the device for "
+            "itself. No mixer and no resampling, which often means fewer "
+            "dropouts and less latency. NOTHING ELSE CAN USE THAT DEVICE while "
+            "Light Host holds it.\n\n"
+            "Windows Audio (Low Latency Mode) - still shared, but asks Windows "
+            "for a shorter period. Less latency, and less room for a chain to "
+            "overrun, so it is the wrong direction if you are already dropping "
+            "out.\n\n"
+            "DirectSound - a compatibility path. Slower than the others; no "
+            "reason to choose it unless the rest fail.\n\n"
+            "ASIO - only if your interface ships its own driver. Usually the "
+            "lowest latency available.\n\n"
+            "Changing this takes effect on Apply, and re-opens the device.");
         sampleRateHeadLabel.setText ("Sample Rate:", juce::dontSendNotification);
         sampleRateHeadLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (13.0f)));
         sampleRateHeadLabel.setJustificationType (juce::Justification::centredRight);
