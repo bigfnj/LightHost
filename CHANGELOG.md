@@ -4,7 +4,141 @@
 
 ## [Unreleased]
 
-Nothing yet.
+### Added — the audio load, its dropouts and the core it ran on are measured
+
+Light Host could not say whether audio was actually dropping out. "It gets
+bad when the machine is busy" was the whole of the evidence available, and a
+plugin eating CPU, the host wasting it, and Windows parking the audio thread
+on an efficiency core all present identically when nothing is measured.
+
+The measurement turned out to cost nothing. `AudioDeviceManager` already
+wraps every registered audio callback in an
+`AudioProcessLoadMeasurer::ScopedTimer`, so `getCpuUsage()` and
+`getXRunCount()` already describe `DeviceTap` and everything under it. There
+is no audio-thread code behind the load figures at all: `LoadPolicy.hpp` is
+reached from a 2 Hz poll on the message thread.
+
+Two things it has to undo. `AudioDeviceManager::getXRunCount()` returns
+`jmax(0, deviceXRuns)` plus its own measured count, and WASAPI reports −1
+when there is no input device — so **a driver that reports no under-runs was
+indistinguishable from one reporting zero**, which made an unmonitored run
+look like a clean one. Reading the device directly as well makes the split
+exact, and the two halves are shown apart because they mean different things:
+a driver-reported dropout is a glitch the hardware noticed, while a measured
+one only says a block overran. And the counters can go *down*, because JUCE
+resets the measurer on any device start, so a plain subtraction would have
+hidden every dropout until the total climbed back past its old value.
+
+Reporting is budgeted at two messages per episode, five minutes apart, with a
+quiet minute starting a new episode. `status::Sink` remembers eight problems
+and has no dismiss, so an unbudgeted version would have evicted everything
+else the user had been told — the feature reporting the trouble destroying
+the evidence of everything else. A driver-reported dropout escalates on the
+first one; a measured one needs five, because at a 2.7 ms buffer a single
+scheduling hiccup produces one and false alarms teach people to ignore the
+status row.
+
+### Fixed — Windows no longer schedules Light Host as a background process
+
+Windows parks a process with no visible window on efficiency cores and
+clock-gates it. On a hybrid CPU that is not a saving, it is a dropout: the
+MMCSS `"Pro Audio"` registration JUCE already makes for the WASAPI thread
+cannot override a process-level power-throttling directive.
+
+The opt-out is read back rather than assumed, because without the read-back
+the check is "we called an API" — the class of gate this project has
+repeatedly found green for months while being incapable of failing. Measured
+on the development machine at `ecoQosOptOut=applied verified=yes`,
+`cores=20 classes=2 (8 performance, 12 efficiency)`, so the process really
+was a throttling candidate and now is not. Windows can still legitimately
+refuse inside a job object or under machine policy; that is logged and goes
+no further, because there is nothing the user can do about it.
+
+`DeviceTap` also publishes which processor the audio thread was last seen on,
+one block in 64, so the log can say whether it was a performance or an
+efficiency core. Sampled rather than read every block: the answer does not
+change between adjacent blocks, and a per-block platform call in the one
+cross-platform hot path would be a cost every user pays forever for a
+diagnostic.
+
+### Fixed — denormals are flushed for the whole audio callback
+
+JUCE defines `ScopedNoDenormals` and never uses it — not in
+`AudioProcessorPlayer`, not in `AudioProcessorGraph` — and neither did Light
+Host, so every audio callback ran with the default MXCSR. A denormal reaching
+a filter or reverb tail can cost an order of magnitude per operation on x86,
+which presents as exactly the load-and-dropout symptom the metering above
+exists to measure.
+
+Not claimed as a measured improvement. `tools/render-regression.sh` does not
+exercise this path at all, because an offline render drives the graph
+directly and never constructs a `DeviceTap`.
+
+### Added — five checks that could not be fired now can be
+
+All five were carried in `BACKLOG.md` as gaps, and each was confirmed to fail
+before being believed.
+
+`Vault::write`'s flush check was reachable only on a real I/O failure,
+because `write` built its own `FileOutputStream`. It now takes a named
+`SinkFactory`, defaulted to the production `fileSink`, with a test-only
+`Vault::withSink` beside it. The test that matters **reproduces the accident
+rather than describing it**: a sink that writes every byte and then lies
+about the flush gets its complete temporary renamed over a good preset, which
+is what a full disk would do to the only copy of it.
+
+`deletePluginStates` split into `eraseEach`, which never stops early, and
+`deletionReport`. The *order* of the calls is asserted and not merely the
+count — a `return` where the `continue` is leaves the failure count correct
+and the run abandoned, so counting alone would not have caught it. Neither
+user-visible string changed.
+
+The `getCommittedChainNames` cap became `nodeids::cappedToProbes`. The
+33-plugin chain the backlog said this needed turns out to be a
+`std::vector`. The assertion that the *tail* goes rather than the head is the
+one that matters: dropping from the front renumbers every surviving position
+against the probe it is paired with, so every signal-view row would be
+labelled with the wrong plugin.
+
+`deviceChoiceIsUserMade` became `device::DeviceChoiceFlag` and
+`decideDeviceApply`. One verb sets the flag and one clears it, and the
+clearing verb names its precondition in its own signature. The rule the whole
+feature rests on is now asserted against JUCE rather than assumed: filling a
+combo with `dontSendNotification` really does not fire `onChange`.
+
+### Fixed — the chain list no longer remembers a hover onto a row that has gone
+
+`AudioChainListComponent::setRows` reset the drag and the pressed state and
+not the hover. Cosmetic today, because `isHot` is only ever consulted for a
+row index that exists — and fixed anyway, because leaving one of the three
+resets behind is how the next control added there inherits a bug nobody
+chose. `mouseMove` and `mouseExit` are now thin wrappers over `hoverAt` and
+`clearHot`, which also removes a body that was written out twice.
+
+### Added — the denoiser under load is a measurement rather than an argument
+
+`DECISIONS.md` keeps Salvor over Alt Denoiser on latency alone — 10 ms
+against 40 ms, the same DeepFilterNet3 model underneath — and records the
+reversal trigger in as many words: *"Revisit if artifacts are ever audible
+under load."* Nothing could fire that trigger.
+
+`tools/cpu-load.ps1` makes "under load" a dial, and reports cores
+*delivered* rather than threads asked for, because those are not the same
+number: nineteen threads delivered 9.09 cores on a box that idles at 24–38%
+of its twenty. `tools/denoiser-ab.ps1` sweeps candidate by load level by
+repeat and reports medians and spread — statistical rather than a hash,
+because `DECISIONS.md` records Salvor as not repeatable run to run, so
+`render-regression.sh`'s model does not transfer. It refuses a verdict when
+the spread cannot separate the candidates.
+
+It has not been run against a real voice take, because there is none on this
+machine and none was invented.
+
+### Fixed — the analysis tools can read what Light Host renders
+
+Both Python tools mapped sample width to a numpy dtype with
+`{2: int16, 4: int32}`, and Light Host writes 24-bit WAVs, so each of them
+died on the application's own output with `KeyError: 3`.
 
 ---
 

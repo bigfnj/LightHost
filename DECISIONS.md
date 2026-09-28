@@ -13,6 +13,140 @@ is no, and what would change it.
 
 ---
 
+## GPU offload and VRAM — declined 2026-09-28
+
+### What was asked
+
+Whether Light Host could be made to cope better under system load by moving
+work onto the GPU and using VRAM — "hardware acceleration", and loading the
+processing into video memory the way some applications do.
+
+### Why the answer is no
+
+Three walls, any one of which is on its own fatal.
+
+**Light Host does not do the DSP.** The plugins do, and they are closed
+third-party binaries. Nothing here can move someone else's VST3 onto a GPU.
+The only signal processing this application owns is the lane trims, the
+summing the graph does, and the metering — microseconds of work per block.
+There is nothing there to accelerate.
+
+**Audio is a latency problem, not a throughput problem.** At 48 kHz with a
+128-sample buffer there are 2.67 ms of wall clock to do everything, every
+block, forever. A GPU round trip — upload, kernel launch, download, sync —
+costs tens to hundreds of microseconds *when the GPU is idle*, and WDDM gives
+compute work **no real-time scheduling guarantee**: the kernel queues behind
+display frames and whatever else is drawing. So the failure mode is that it
+adds jitter in exactly the scenario this was proposed to fix. GPUs win on
+throughput with large batches; audio needs a tiny batch, right now, every
+time.
+
+**VRAM answers a question nothing here is asking.** Nothing in a microphone
+chain is memory-bound. A gate, an EQ and a compressor do not have a working
+set worth moving.
+
+### Where the GPU legitimately does appear in audio
+
+Recorded so the next person asking gets the honest version rather than a flat
+no. Offline or faster-than-real-time rendering, where latency does not matter.
+ML denoise with large buffers in a dedicated pipeline — which is what NVIDIA
+Broadcast and RTX Voice are, and they are a separate audio endpoint with tens
+of milliseconds of buffering, not a plugin inside a 2.67 ms callback. And
+drawing the interface, which is real but which this application already keeps
+cheap: the meters run at 25 Hz and only while something is on screen.
+
+### What would change the answer
+
+One thing, and it is not ours to change. Salvor wraps DeepFilterNet3, so the
+denoiser is the single component in a typical chain that genuinely could run
+on a GPU or on this machine's NPU. If a denoiser ships with a GPU or NPU
+backend, using it is a plugin choice rather than a host change. The host-side
+alternative is to move denoising out of the chain entirely and into a virtual
+audio device upstream of Light Host, accepting its latency — which is a
+different application, not a change to this one.
+
+---
+
+## Parallel lane rendering — deferred 2026-09-28
+
+### What was asked
+
+JUCE's `AudioProcessorGraph` renders on one thread. Light Host supports four
+parallel lanes with automatic delay compensation, and they are rendered
+sequentially — on a machine with twenty cores, one of them. Whether the lanes
+should be rendered concurrently.
+
+### Why the answer is not yet
+
+The claim is true. There is no thread pool anywhere in
+`juce_audio_processors_headless/processors/juce_AudioProcessorGraph.cpp`, so a
+four-lane chain costs the sum of its lanes rather than the longest of them.
+And lanes are independent between the split and the sum, which is exactly the
+shape that parallelises.
+
+It is still the wrong thing to build first, for three reasons.
+
+**Nothing has measured that it would help.** The reported symptom is trouble
+*under load* — contention — rather than a chain that cannot fit in its buffer
+on an idle machine. A serial chain of three plugins, which is what a typical
+microphone setup is, gets nothing at all from lane parallelism: there is one
+lane. The instrumentation added in 5.6.0 is what turns this from an argument
+into a number.
+
+**The failure mode is the one already being complained about.** A real-time
+thread pool has to be lock-free, allocation-free, and bounded in its
+spin-waiting, and its worker threads need the same MMCSS registration and core
+placement as the audio thread or they become the new bottleneck. Getting any
+of that subtly wrong produces rare, unreproducible clicks. Trading a
+measurable load problem for an intermittent one nobody can reproduce is a bad
+trade even when the throughput argument is sound.
+
+**It would change how every chain renders, not just parallel ones.** The
+serial path is the one almost every user is on.
+
+### What would change the answer
+
+A measured `AudioLoad` line showing sustained load above roughly 70% *with two
+or more lanes actually carrying plugins*. That is the case where the work
+exists, is parallel, and does not fit — and none of the three is true today.
+If the load is high with one lane, the answer is a smaller chain or a bigger
+buffer, not more threads.
+
+---
+
+## Hard working-set minimum — deferred 2026-09-28
+
+### What was asked
+
+Whether Light Host should pin its pages with `SetProcessWorkingSetSizeEx` and
+`QUOTA_LIMITS_HARDWS_MIN_ENABLE`, on the theory that a tray application idle
+for hours has its working set trimmed by Windows and then takes soft page
+faults inside the audio callback when it is next needed.
+
+### Why the answer is not yet
+
+The theory is plausible and entirely unmeasured. Pinning pages against an
+unmeasured theory takes memory away from the rest of the machine permanently,
+in exchange for a benefit nobody has observed.
+
+What made it tempting is a number that cannot settle it.
+`PROCESS_MEMORY_COUNTERS::PageFaultCount` counts soft faults as well as hard
+ones, cannot distinguish them, and only ever rises — so it can never fail the
+hypothesis, which makes it the wrong instrument however convenient it is.
+
+5.6.0 gathers the falsifiable version instead: `WorkingSetSize` against
+`PeakWorkingSetSize`, exposed as `process::looksTrimmed`, and logged **at the
+moment of a dropout** rather than on a timer. That turns "a dropout happened"
+into "a dropout happened while the working set was at 36 MB against a 52 MB
+peak", which is the correlation the decision actually needs.
+
+### What would change the answer
+
+A `trimmed=yes` in an `AudioLoad [dropout]` line. That is the whole trigger,
+and it is deliberately one grep.
+
+---
+
 ## Always-on metering probes — declined 2026-09-16
 
 ### What was asked
