@@ -38,6 +38,69 @@ first one; a measured one needs five, because at a 2.7 ms buffer a single
 scheduling hiccup produces one and false alarms teach people to ignore the
 status row.
 
+It shows up in Preferences as an `Audio load` row under Latency —
+`34% (peak 61%) · no dropouts · core P` — polled while the window is open,
+where the Latency row beside it is deliberately event-driven. Latency changes
+perhaps twice a session and something broadcasts it; this moves continuously
+and nothing does.
+
+**The first version of this cried wolf on every launch**, and the fix is worth
+recording because the first attempt at it also failed. Opening an audio device
+reports an under-run for the open itself, so a completely healthy start
+produced `dropouts=1 driver=1` and a tray message. A settling window anchored
+on the device session did not help: loading a real chain takes longer than the
+window, so by the time audio actually flowed the device had been open for well
+over three seconds. The window now runs from the later of the device session
+starting and the chain finishing loading, and the dropouts inside it are
+counted and displayed but cannot raise an alarm or colour the readout.
+
+### Fixed — a status message no longer pushes the Apply button off the bottom
+
+Reachable at the default window size, and the trigger is a plugin failing to
+load. The panel wants 644 px of content in a shell about 619 px tall, so the
+chain viewport — the only section that stretches — is already at its 80 px
+floor before a status message arrives. Showing the status row grew the height
+the layout needed and called `resized()`, which only divides up the height the
+panel **already has**. The Apply button was laid out below the panel's bottom
+edge, and because nothing re-ran the viewport, it could not be scrolled to
+either.
+
+`Source/PreferencesLayout.hpp` now owns the budget and the plumbing, and the
+re-height hook is installed by the viewport's own constructor — the missing
+wiring is exactly what caused this, so it must not be something a caller can
+forget. The arithmetic moved with it and is asserted, including a test that
+doubling every metric doubles the answer, which catches a literal creeping back
+into the sum.
+
+The smoke test asserts the re-height path runs, and that assertion does fire.
+It cannot assert the defect itself: the self-test seeds its status message
+before the window's first layout, so the hidden-to-shown flip never happens.
+Recorded in `BACKLOG.md` rather than trusted.
+
+### Changed — the chain list is 8 px wider when no scrollbar is showing
+
+The one visible side effect of the above. Three call sites computed a
+viewport's content width by hand and two disagreed: the chain list subtracted
+the scrollbar's width whether or not a bar was shown. Settings, Lane and the
+drag handle are measured from the right edge, so on a short chain they now sit
+8 px further right. That is the list using the width it has.
+
+### Fixed — a data race on the meter decay rate
+
+`Meter::decayPerBlock` was a plain float, justified on the grounds that
+`setTimebase` is only reached with the graph stopped. True of `DeviceTap`, and
+not true of `Probe`, which borrows its meter: with the signal view open, an
+Apply leaves the live render sequence measuring through the old probes while
+`graph.rebuild()` prepares the new one on the message thread. Benign on the
+architectures this ships to — a 4-byte float does not tear — and a race
+regardless.
+
+### Changed — the signal view moved to its own header
+
+`PreferencesWindow.cpp` goes from 2694 lines to 1907. The move is what makes
+the signal view's two never-asserted rules testable, on the same grounds
+`AudioChainList.hpp` was lifted in 5.4.0.
+
 ### Fixed — Windows no longer schedules Light Host as a background process
 
 Windows parks a process with no visible window on efficiency cores and

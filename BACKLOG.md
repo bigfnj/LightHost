@@ -1,7 +1,15 @@
 # Backlog
 
-Open items after 5.4.0. They are written to be picked up cold: what is wrong,
+Open items after 5.6.0. They are written to be picked up cold: what is wrong,
 where, why it matters, and what the fix is.
+
+The eleven items open after 5.5.0 are all closed -- see "How 5.6.0's eleven
+were cleared" below. What is open here is new, and most of it was found by two
+read-only audits run over the work in this release rather than by using the
+application.
+
+**Nothing here blocks a release and nothing here is known to corrupt anything.**
+One item is a real defect on a real path and is called out first.
 
 ## Where things live, if you are new or returning
 
@@ -38,6 +46,216 @@ The pattern from the last three passes held again: of the work done for 5.4.0,
 **five of the defects fixed had no backlog entry at all** -- they were found
 while fixing the ones that did. Auditing a change, not only the thing it
 changed, is what keeps finding them.
+
+---
+
+## Open
+
+### The 50 ms grace pump does nothing on the shutdown path
+
+`Source/PluginWindow.cpp`, `closeAllCurrentlyOpenWindows`
+
+**The most serious thing in this file.** The pump exists so a plugin editor's
+posted messages and COM releases are delivered before the graph destroys the
+`AudioProcessor` they belonged to. On the shutdown path it delivers nothing.
+
+`MessageManager::runDispatchLoopUntil` is `while (! quitMessageReceived)`
+(`juce_MessageManager.cpp:144`), and that flag is set when the quit message is
+*dispatched* and never reset. `~IconMenu` runs from
+`PluginHostApp::shutdown()`, i.e. after the outer `runDispatchLoop` has already
+received the quit -- so the loop exits on its first check having dispatched
+nothing. The call from `IconMenu::loadActivePlugins`, mid-session, works
+exactly as documented; the one that most needs it does not.
+
+Confirmed against the vendored JUCE. `OfflineRender.hpp` already records the
+same JUCE behaviour from the other end, and guards against it with
+`pacingAbandoned`.
+
+Presents as an intermittent crash or hang at exit with a plugin editor open --
+the path 5.4.0's "quitting from the tray with a Settings window open" fix was
+written for. Not reproduced here; VST2 and browser-hosting editors are the
+likely triggers.
+
+The fix is to close editors **before** the quit is received -- from
+`systemRequestedQuit`, or a pre-quit hook on `IconMenu` that does what
+`~IconMenu` already does first (cancel the async updater, detach the processor
+listeners) so a latency report during the pump cannot rewire a graph that is
+about to be cleared. That is a change to shutdown ordering, and the comment in
+that file already sets the bar for touching it: a soak across real VST2 and
+browser-hosting editors, not an argument. The comment now states the defect
+rather than claiming the grace turn.
+
+### The DOES NOT FIT smoke assertion cannot fire
+
+`Source/SelfTest.hpp`, `checkAfterStartup`
+
+5.6.0 fixed the layout defect where a status row appearing pushed the Apply
+button below the panel's bottom edge, and added two smoke assertions: that the
+re-height funnel ran, and that no layout reported `DOES NOT FIT`.
+
+**The first fires and the second cannot.** `IconMenu::showPreferencesWindow`
+seeds the status message from `status.mostRecent()` as the window opens, so on
+a self-test run the row is visible from the first layout and the
+hidden-to-shown *flip* the defect needs never happens. Mutating the re-height
+back out leaves the smoke test green -- checked.
+
+Listed rather than left implied, because a check nobody can fire is a check
+nobody should trust without knowing that. It is kept as a runtime canary: it
+will fire for a real user whose window is short and whose plugin fails after
+Preferences is already open. The arithmetic half of the defect *is* asserted
+headlessly in `Tests/PreferencesLayoutTests.cpp`, and so is the viewport
+plumbing; what stays unasserted is the single call from `optionalRowsChanged`
+to the hook.
+
+Making it fireable means a self-test that opens Preferences before any problem
+is reported, which contradicts the seeded-failing-plugin the rest of the
+self-test is built on.
+
+### Four new things the suite cannot exercise
+
+Same discipline as the 5.4.0 list below.
+
+- **`LoadReadout` has no assertions.** Same four blockers as the two
+  `PreferencesContentComponent` gaps the 5.4.0 round recorded: it is defined in
+  a `.cpp` the test target does not compile, and reaching it needs the panel.
+  The policy behind it is fully tested; what is unasserted is that the timer
+  stops when hidden and repaints only on a change. Mitigated by its being a
+  line-for-line copy of `SignalMeter`, whose `VisibilityDrivenTimer` half
+  `Tests/VisibilityTimerTests.cpp` does cover.
+- **The four Win32 queries in `ProcessQoS.cpp` cannot be exercised.** There is
+  no seam to make `SetProcessInformation` fail, the CPU-set table is whatever
+  the runner has, and `GetProcessMemoryInfo` reports the test process. The
+  `verified=` read-back is what keeps this from being a gate that cannot fail,
+  and the `ProcessQoS [startup]` marker proves the path ran -- not that the
+  opt-out took effect on a machine that refused it.
+- **`DeviceTap`'s 1-in-64 processor sampling is unasserted.** `DeviceTap.hpp`
+  needs `juce_audio_devices`, which the test target deliberately does not link.
+  Making it testable means extracting an increment and a mask. The power-of-two
+  invariant the mask depends on is now a `static_assert`, which is the half
+  that could actually be got wrong.
+- **`ScopedNoDenormals` has no reachable assertion**, for the same reason, and
+  `tools/render-regression.sh` does not cover it either: an offline render
+  drives the graph directly and never constructs a `DeviceTap`.
+
+### `--chain` cannot express "no plugins"
+
+`Source/OfflineRender.hpp`, `parseChain` and `renderFile`
+
+`--chain ""` is trimmed to empty, and an empty override means "use the saved
+live chain" -- which on this machine contains a denoiser. So there is no way to
+ask the renderer for a dry reference, and `tools/denoiser-ab.ps1` uses the
+input take itself instead. That is *accurate* today, because with no plugin the
+path is input, lane gain at 0 dB, output -- but it is accurate by luck rather
+than by construction, and it compares a 16-bit take against 24-bit renders.
+
+The fix is `std::optional<juce::StringArray>` for the override, where
+`nullopt` means "use the live chain" and an empty array means "no plugins".
+Four call sites in `renderFile` branch on `isEmpty()` today.
+
+### Three findings from the denoiser harness
+
+- **The Python analysis tools reject `WAVE_FORMAT_EXTENSIBLE`.** Python's
+  `wave` module raises `unknown format: 65534`, and that is what `ffmpeg`
+  writes by default for a stereo 24-bit file. Light Host's own renders are
+  plain PCM and read fine after the 24-bit fix, so this bites only on takes
+  from other tools. The fix is to parse the extensible header's `SubFormat`
+  rather than trusting `wFormatTag`.
+- **Launching the built executable intermittently fails with a sharing
+  violation** -- "the process cannot access the file because it is being used
+  by another process", three times during one session, never reproducibly. The
+  build tree is inside a OneDrive-synced folder, which is the obvious suspect.
+  `denoiser-ab.ps1` retries with a backoff and says in its comment that this is
+  not a fix.
+- **Salvor's run-to-run variance may be far larger than `DECISIONS.md`
+  records.** Two renders of one input at zero load differed by 12.6 dB in the
+  quiet section on a non-voice take. If a real voice take behaves anything like
+  that, `-Repeats 5` is not enough and the harness will refuse a verdict rather
+  than guess. Needs a real take to settle; there is none on this machine.
+
+### Two defensive notes in the signal view
+
+Both found while extracting `Source/SignalView.hpp`, both unreachable today.
+
+- **`SignalViewRows::beginWatching` starts the timer whenever `taps` is
+  non-empty**, regardless of whether any tap carries a meter. A column whose
+  taps all have null meters would run a 25 Hz callback that reads nothing and
+  never repaints -- idle cost in a tray app, which is the promise this class is
+  built around. Unreachable because the two device meters are always non-null.
+- **Its early return is `if (! watches.empty()) return;`** -- using "do we hold
+  watches" to answer "are we already watching". Those diverge exactly when no
+  tap has a meter, and it is the same conflation of the two halves of
+  "watching" that item 10 was about, one function along.
+
+### Two suspected, neither reproduced
+
+- **The tray menu resolves plugin actions by index.** `timerCallback` builds
+  `kDeleteOffset + i` from a `getTimeSortedList()` snapshot and
+  `menuInvocationCallback` passes the bare index on to `handleDeletePlugin` /
+  `handleMovePlugin`, which re-read the list. This is the pattern
+  `AudioChainListComponent` abandoned in 5.4.0 in favour of identity
+  resolution, with a comment explaining that a bounds check does not say the
+  row is the same row. Exposure is much lower here -- the popup is modal and
+  every path that resets `sortedPluginCache` needs user input -- and no
+  reachable case was constructed. Fix is to capture `identityOf` when the menu
+  is built.
+- **`confirmDeletePluginStates` checks its `SafePointer` once** and then makes
+  three calls, the middle of which enters a nested modal dispatch loop via
+  `closeAllCurrentlyOpenWindows()`. The trailing `reportStatus` is a use across
+  an async hop with no re-check. Safe today only because the only thing that
+  destroys `IconMenu` is `PluginHostApp::shutdown()`, which cannot run from
+  inside a nested loop -- a property of another file.
+
+### `recordRequestedDevices` cannot report whether it wrote
+
+`Source/IconMenu.cpp`, and `device::DeviceChoiceFlag::clearIfRecorded`
+
+`clearIfRecorded` documents "clears the flag if, and only if, the record was
+actually written", and no caller can supply a truthful argument:
+`recordRequestedDevices` returns `void` and swallows the `flushSettings`
+outcome, so Apply passes `true` unconditionally. An Apply whose settings write
+failed therefore forgets that the user made a choice -- the exact failure that
+function's own doc warns about, reached from the one direction it cannot see.
+
+The fix is small: return `bool` from `recordRequestedDevices`, threaded from
+`saveIfNeeded()`, and pass it through. Left for a pass that can exercise a
+failing settings write, because the value of the change is entirely in that
+path.
+
+### One unmeasured optimisation, recorded so it is not rediscovered
+
+`IconMenu::onPluginInstanceReady` copies the whole `activePluginList.getTypes()`
+array and re-hashes every identity once per plugin loaded -- O(n²) descriptions
+copied and O(n²) hashes per chain load. Irrelevant at realistic chain lengths
+(under 32) and never measured. The `stillWanted` scan it does this for may be
+entirely redundant: `handleDeletePlugin` and `applyPluginChain` both call
+`cancelPluginLoading()`, which bumps the generation that the guard three lines
+above already checks.
+
+---
+
+## How 5.6.0's eleven were cleared
+
+All eleven items open after 5.5.0 are closed, and every new assertion was
+confirmed to fail before being believed.
+
+| Item | How |
+|---|---|
+| `committedChainNamesFn` unasserted | Extracted as `ui::signalViewRowNames`. The rule that had never been asserted -- a null callback is the only fallback, an empty *result* is not -- now goes red on the plausible mis-fix. |
+| `deviceChoiceIsUserMade` unasserted | Became `device::DeviceChoiceFlag` and `decideDeviceApply`. Record and clear are computed once and asserted equal across all sixteen inputs, and the JUCE behaviour the whole feature rests on is asserted against a real `ComboBox`. |
+| `Vault::write`'s `getStatus()` untestable | A named `SinkFactory` behind a test-only `Vault::withSink`. The test reproduces the accident: a sink that writes every byte and lies about the flush gets its temporary renamed over a good preset. |
+| `deletePluginStates` count untestable | Split into `eraseEach` and `deletionReport`. The *order* of the calls is asserted, not just the count -- an early `return` leaves the count correct. |
+| `getCommittedChainNames` cap untestable | `nodeids::cappedToProbes`. The 33-plugin chain turned out to be a `std::vector`, and the assertion that the tail goes rather than the head is the one that matters. |
+| `setStatusMessage` pushes Apply off the bottom | `Source/PreferencesLayout.hpp`: a `HeightReportingPanel` interface and a `PanelViewport` that installs the re-height hook in its own constructor. See the open item above for the honest limit on the smoke half. |
+| `updateChainListHeight` subtracts the scrollbar unconditionally | `prefs::contentSizeFor`, now used by all three sites that had their own copy. One user-visible effect: the chain list is 8 px wider with no bar shown. |
+| `chooseChainTestOutput` destroys its own chooser | One `MessageManager::callAsync` hop. This removes the dependence on `FileChooser::finished`'s internals rather than guarding it, so there is no surviving invariant to test -- the "do not simplify this back" comment is the guard. |
+| `setRows` does not reset the hover | `clearHot()`, and `mouseMove`/`mouseExit` became thin wrappers over named verbs so the body is not written out twice. |
+| `setTaps` clears watches without stopping the timer | `endWatching()`, then restart when showing. The cost -- one tick up to 40 ms late on a showing column -- is stated rather than hidden. |
+| `updateChainListHeight` early-returns with no width | Gone with `contentSizeFor`, which has no zero-width return: the width is cosmetic until first layout, the height decides the scroll extent. |
+
+**The pattern held for a fifth pass.** Of the defects fixed in 5.6.0, the two
+that mattered most had no backlog entry at all: the tray alarm firing on every
+launch, and the audio-load readout being unreachable from the application.
+Both were found by auditing the change rather than the thing it changed.
 
 ---
 
@@ -226,7 +444,13 @@ without the other goes red.
 ---
 
 
-## Testability
+## Testability (historical -- all cleared in 5.6.0)
+
+Kept because the reasoning is worth reading, and because the conclusion it
+reached turned out to be wrong in an instructive way: it judged the fix by the
+size of the class, and the right move was to extract the two *policies* as free
+functions, which the entry itself names as an option and then talks itself out
+of. Both are now asserted. See the 5.6.0 table above.
 
 Two gaps, both in `PreferencesContentComponent`, and both for the same reason.
 
@@ -275,7 +499,12 @@ nobody should trust without saying so.
 
 ---
 
-## Hardening
+## Hardening (historical)
+
+The four open notes that sat at the end of this section -- the status row
+pushing Apply off the bottom, the unconditional scrollbar subtraction, the
+self-destroying file chooser, and the stale hover -- are all closed in 5.6.0.
+See the table above.
 
 - **FIXED 2026-09-18: `tools/audio-endpoints.ps1` reports instead of throwing.**
   Every method on all four COM interfaces now carries `[PreserveSig]`, and the

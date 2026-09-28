@@ -513,13 +513,26 @@ If the host disappears without a message, the log is the first place to look.
 ### When audio breaks up under load
 
 Light Host measures whether it is missing its deadline and tells you rather
-than leaving you to guess. Two things to read.
+than leaving you to guess. Three things to read.
+
+**The `Audio load` row** in Preferences, under Latency:
+
+```
+Audio load:   34% (peak 61%)  -  no dropouts  -  core P
+```
+
+How much of each audio block the chain is using, the highest it has reached
+since this device was opened, and how many blocks missed their deadline. It
+turns amber past 70% and red past 90%, or as soon as a dropout happens that was
+not part of starting up.
 
 **The Preferences status row** says so when dropouts start, once at the
 beginning of an episode and once more if it continues — deliberately not every
 few seconds, because the status row remembers eight problems and cannot be
 dismissed, so a bad afternoon would otherwise wipe out everything else it had
-to tell you.
+to tell you. The first few seconds after a chain loads are exempt: opening an
+audio device reports an under-run for the open itself, and an alarm that fires
+on every launch is one you learn to close without reading.
 
 **The log** carries an `AudioLoad` line at startup, on every device change, and
 at the moment of any dropout:

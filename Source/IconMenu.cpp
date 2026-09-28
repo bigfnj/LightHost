@@ -861,14 +861,21 @@ void IconMenu::createLaneGainNodes()
 
     for (int lane = 0; lane < lighthost::kNumLanes; ++lane)
     {
-        // Trimmed BEFORE it is handed to the graph, not after. addNode prepares
-        // the node, and gain::Processor::prepareToPlay seeds the ramp from
-        // whatever gain is set at that instant -- so adding first and trimming
-        // after left the ramp seeded at 0 dB and made the first block sweep
-        // from unity DOWN to the stored trim, which is the fade that
-        // prepareToPlay's own comment says it exists to prevent. Reachable
-        // whenever the chain is built in one call stack, i.e. every startup and
-        // every Apply that adds a plugin.
+        // Trimmed BEFORE it is handed to the graph, not after.
+        // gain::Processor::prepareToPlay seeds the ramp from whatever gain is
+        // set at that instant -- so adding first and trimming after left the
+        // ramp seeded at 0 dB and made the first block sweep from unity DOWN
+        // to the stored trim, which is the fade that prepareToPlay's own
+        // comment says it exists to prevent. Reachable whenever the chain is
+        // built in one call stack, i.e. every startup and every Apply that
+        // adds a plugin.
+        //
+        // The reason this comment used to give -- "addNode prepares the node"
+        // -- stopped being true when the addNode below moved to
+        // UpdateKind::none: topologyChanged returns before applySettings for
+        // that kind, so the prepare now happens at the later graph.rebuild().
+        // Setting the gain first is still right, just for the plainer reason
+        // that it is right whenever the prepare happens.
         auto trim = std::make_unique<lighthost::gain::Processor>();
         trim->setGainDb (store.readLaneGainDb (lane));
 

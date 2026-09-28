@@ -3,6 +3,7 @@
 #include "AudioChainList.hpp"
 #include "LookAndFeel.hpp"
 #include "NodeIds.hpp"
+#include "PreferencesLayout.hpp"
 #include "SignalMetering.hpp"
 #include "UiMetrics.hpp"
 #include "VisibilityTimers.hpp"
@@ -983,16 +984,14 @@ namespace lighthost::ui
         */
         void updateRowsSize()
         {
-            if (rowViewport.getWidth() <= 0)
-                return;
+            // The third of three call sites that used to compute this by hand,
+            // and the one the other two were measured against. The zero-width
+            // early return went with it: it skipped the HEIGHT as well as the
+            // width, and the height is what decides the scroll extent.
+            const auto size = lighthost::ui::prefs::contentSizeFor (
+                                  rowViewport, rows.getPreferredHeight());
 
-            const int preferred = rows.getPreferredHeight();
-            const bool needsBar = preferred > rowViewport.getHeight();
-            const int width     = rowViewport.getWidth()
-                                - (needsBar ? rowViewport.getScrollBarThickness() : 0);
-
-            rows.setSize (juce::jmax (1, width),
-                          juce::jmax (rowViewport.getHeight(), preferred));
+            rows.setSize (size.x, size.y);
         }
 
         // Declared before the viewport so the viewport is torn down first, while
