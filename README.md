@@ -12,7 +12,7 @@ to a virtual cable, and every application on the machine hears your processed
 voice. Set it up once and forget it is running.
 
 <p align="center">
-  <img src="docs/images/lighthost-main.png" alt="The Light Host Preferences window: input device with a level meter and clip badge, an audio chain of three plugins each with a lane and a settings button, lane trims for the four lanes, output device with its own meter, and device settings ending in the latency readout" width="520">
+  <img src="docs/images/lighthost-main.png" alt="The Light Host Preferences window: input device with a level meter and clip badge, an audio chain of three plugins each with a lane and a settings button, lane trims for the four lanes, output device with its own meter, and device settings ending in the latency and audio-load readouts" width="560">
 </p>
 
 ---
@@ -217,7 +217,7 @@ under a 94 ms plugin chain is a number that misleads if it is the only one on
 screen — which is the pair of rows in the shot below.
 
 <p align="center">
-  <img src="docs/images/device-settings-zoomin.png" alt="The Device Settings section: Device API set to Windows Audio, sample rate 48 kHz, buffer size 480 samples at 10.0 ms, and beneath them the latency row reading 94.0 ms plugins plus 20.0 ms device equals 114.0 ms" width="520">
+  <img src="docs/images/device-settings-zoomin.png" alt="The Device Settings section: Device API set to Windows Audio, sample rate 48 kHz, buffer size 480 samples at 10.0 ms, then the latency row reading 96.0 ms plugins plus 20.0 ms device equals 116.0 ms, and below it the audio load reading 6 percent with a peak of 8 percent, one dropout, and core P" width="560">
 </p>
 
 It is a readout, not a setting. Plugin latency is inherent to the plugins, and on

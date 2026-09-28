@@ -137,6 +137,25 @@ Same discipline as the 5.4.0 list below.
   `tools/render-regression.sh` does not cover it either: an offline render
   drives the graph directly and never constructs a `DeviceTap`.
 
+### One README screenshot still shows 5.4.0
+
+`docs/images/signal-view.png`
+
+It has `v5.4.0` in its corner and a DEVICE SETTINGS block that ends at
+Latency, so it is missing the Audio load row. The hero shot and the
+device-settings zoom-in were re-captured for 5.6.0; this one was not, because
+it needs the signal view open and that is a click rather than a command line.
+Two scripted attempts toggled it open and shut again rather than landing
+once.
+
+The signal view itself has not changed, so what is stale is the frame around
+it. Capture it by hand on a console session -- which `BACKLOG.md` already
+records as the only way that works, after two RDP attempts failed.
+
+Worth considering instead: a `-signal-view` startup flag beside
+`-preferences`. It would make this capturable from a script for ever, and the
+flag is two lines next to `startup::openPreferencesRequested`.
+
 ### `--chain` cannot express "no plugins"
 
 `Source/OfflineRender.hpp`, `parseChain` and `renderFile`

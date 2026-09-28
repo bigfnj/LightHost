@@ -2027,9 +2027,29 @@ PreferencesWindow::PreferencesWindow (
                      jmax (400, desktop.getHeight()));
 
     // The size setContentOwned already worked out, not the content numbers
-    // again. Passing those a second time is what shrank the content by the
-    // frame's height on every open.
-    centreWithSize (getWidth(), getHeight());
+    // again -- passing those a second time is what shrank the content by the
+    // frame's height on every open -- and never bigger than the screen it is
+    // opening on.
+    //
+    // The clamp is not theoretical. JUCE works in logical pixels, so a 1080p
+    // display at 150% scaling is 1280x720 of them, and this layout is taller
+    // than that. Without it the default asks for more than the desktop and
+    // the constrainer slams the window to full height. Scaling is one of the
+    // manual checks in RELEASING.md and it cannot be performed on the machine
+    // this was written on, which is 2560x1440 at 100% -- so the arithmetic
+    // has to be right rather than observed.
+    //
+    // userBounds, not the total bounds: the taskbar is not somewhere a window
+    // should open under. (userArea is the same figure and is deprecated in
+    // JUCE 9.) The primary display rather than the union of all of them,
+    // because a window centred across two monitors is worse than a window
+    // that is slightly too short.
+    const auto* primary = Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    const auto work = primary != nullptr ? primary->userBounds.toNearestInt()
+                                         : juce::Rectangle<int> (0, 0, 1024, 768);
+
+    centreWithSize (jmin (getWidth(),  work.getWidth()),
+                    jmin (getHeight(), work.getHeight()));
     setVisible (true);
 }
 
