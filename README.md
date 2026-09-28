@@ -510,6 +510,51 @@ mutation and device switching. Each run starts with a
 
 If the host disappears without a message, the log is the first place to look.
 
+### When audio breaks up under load
+
+Light Host measures whether it is missing its deadline and tells you rather
+than leaving you to guess. Two things to read.
+
+**The Preferences status row** says so when dropouts start, once at the
+beginning of an episode and once more if it continues — deliberately not every
+few seconds, because the status row remembers eight problems and cannot be
+dismissed, so a bad afternoon would otherwise wipe out everything else it had
+to tell you.
+
+**The log** carries an `AudioLoad` line at startup, on every device change, and
+at the moment of any dropout:
+
+```
+AudioLoad [dropout]: load=97% peak=100% dropouts=37 driver=31 measured=6
+  driverXruns=yes deadline=2.7ms core=E pageFaults=91233 workingSet=36.1MB
+  peakWorkingSet=52.4MB trimmed=yes
+```
+
+`driver` and `measured` are counted apart because they mean different things.
+A **driver** dropout is a glitch the hardware noticed, so it was audible. A
+**measured** one only says the callback took longer than its block, which a
+single scheduling hiccup can produce at a small buffer and which the driver may
+have absorbed. `driverXruns=no` means this driver does not report under-runs at
+all — which is not the same as reporting none, and is worth knowing before you
+trust a clean-looking count.
+
+What to try, in the order that usually pays:
+
+1. **Raise Buffer Size.** The single biggest lever, and the whole trade is
+   latency. `deadline=` in the log is how long a block has to finish in.
+2. **Try `Windows Audio (Exclusive Mode)`** in the *Device API* combo. Shared
+   mode puts the Windows mixer and its resampler in your path; exclusive mode
+   does not. No other setting has to change.
+3. **Bypass plugins one at a time** and watch `peak=`. A neural denoiser is
+   usually the most expensive thing in a voice chain by a wide margin.
+4. **Drop from 96 kHz to 48 kHz** if you are at the higher rate. It roughly
+   halves the work.
+
+`core=E` means the audio thread was last seen on an efficiency core on a hybrid
+CPU. Light Host already opts out of the Windows power throttling that causes
+that (`ProcessQoS [startup]` records whether it took), so an `E` here alongside
+dropouts is worth reporting as a bug rather than something to tune around.
+
 ---
 
 ## Known limitations
