@@ -101,6 +101,7 @@ target_sources(LightHost PRIVATE
     Source/SettingsKeys.hpp
     Source/OfflineRender.hpp
     Source/PluginStateVault.hpp
+    Source/PreferencesLayout.hpp
     Source/DeviceTap.hpp
     Source/SignalMetering.hpp
     Source/SignalView.hpp
@@ -293,6 +294,7 @@ if(LIGHTHOST_BUILD_TESTS)
 
     target_sources(LightHostTests PRIVATE
         Source/AudioChainList.hpp
+        Source/PreferencesLayout.hpp
         Source/SignalView.hpp
         Source/PluginWindow.cpp
         Tests/TestMain.cpp
@@ -313,6 +315,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/PluginStateTests.cpp
         Tests/PluginStateVaultTests.cpp
         Tests/PluginWindowTests.cpp
+        Tests/PreferencesLayoutTests.cpp
         Tests/ProcessFactsTests.cpp
         Tests/SampleRatePolicyTests.cpp
         Tests/SelfTestChecksTests.cpp

@@ -259,6 +259,22 @@ namespace lighthost::selftest
         // The Preferences window is built during the run. Reaching this line means
         // every control in it was constructed and laid out without faulting or
         // asserting, which nothing else in an automated run checks.
+        // The status row appearing is what grows the panel, and the seeded
+        // plugin fails to load on every smoke run, so this path really does
+        // execute on all three platforms.
+        //
+        // The positive marker has to be here too. Without it the DOES NOT FIT
+        // check below would pass by never running -- the same trap the GUI
+        // minimise test guards with its own PLATFORM DECLINED marker.
+        if (! log.contains ("Preferences: optional rows changed"))
+            failures.add ("the optional-row re-height path never ran, so the check below "
+                          "proves nothing");
+
+        if (log.contains ("DOES NOT FIT"))
+            failures.add ("a status message made the Preferences layout taller than the "
+                          "panel it was laid out in; the Apply button is below the bottom "
+                          "edge and cannot be scrolled to");
+
         if (! log.contains ("opening Preferences window"))
             failures.add ("the Preferences window was never built");
 

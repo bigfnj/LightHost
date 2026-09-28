@@ -69,6 +69,7 @@ public:
             "Problem: Plugin load failed: SelfTest Plugin",
             "loadActivePlugins complete",
             "signal view opened; inserting probes",
+            "Preferences: optional rows changed (status=1), panel 700 of 644 -- fits",
             "opening Preferences window"
         };
 

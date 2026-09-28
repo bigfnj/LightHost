@@ -110,6 +110,7 @@ int main (int argc, char** argv)
                                        "Metering", "NodeIds", "OfflineRender",
                                        "PluginChain", "PluginScan", "PluginState",
                                        "PluginStateVault", "PluginWindow",
+                                       "PreferencesLayout",
                                        "ProcessFacts", "SampleRate", "SelfTest",
                                        "SettingsKeys", "SignalView",
                                        "StartupFlags", "Status",

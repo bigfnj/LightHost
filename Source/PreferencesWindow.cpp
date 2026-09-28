@@ -5,6 +5,7 @@
 #include "LookAndFeel.hpp"
 #include "OfflineRender.hpp"
 #include "PluginChainStore.hpp"
+#include "PreferencesLayout.hpp"
 #include "SignalMetering.hpp"
 #include "SignalView.hpp"
 #include "UiMetrics.hpp"
@@ -15,6 +16,7 @@
 using namespace juce;
 
 namespace metrics = lighthost::ui::metrics;
+namespace prefs   = lighthost::ui::prefs;
 
 // The chain list moved to Source/AudioChainList.hpp so it could be unit tested;
 // see that file's banner. The two names this file uses most are pulled in here
@@ -147,6 +149,7 @@ private:
 static bool chainTestInFlight = false;
 
 class PreferencesContentComponent final : public juce::Component,
+                                          public  prefs::HeightReportingPanel,
                                           private juce::ChangeListener
 {
 public:
@@ -583,41 +586,42 @@ public:
 
         statusLabel.setText (show ? "Problem: " + message : juce::String(),
                              juce::dontSendNotification);
+        const bool wasShowing = statusLabel.isVisible();
+
         statusLabel.setVisible (show);
         showLogButton.setVisible (show);
 
-        resized();
+        // Through the funnel only when the row actually appeared or vanished:
+        // the fixed height moves on a flip, not on every status report.
+        if (show != wasShowing)
+            optionalRowsChanged();
+        else
+            resized();
+    }
+
+    /** Which optional rows are on screen right now. */
+    [[nodiscard]] prefs::OptionalRows optionalRows() const
+    {
+        prefs::OptionalRows rows;
+        rows.status = statusLabel.isVisible();
+
+        #if JUCE_WINDOWS
+        rows.virtualInputHint = virtualInputHint.isVisible();
+        #endif
+
+        return rows;
     }
 
     /** Height of everything except the chain viewport, which is the only section
-        that stretches. Depends on which optional rows are showing.
+        that stretches.
+
+        The sum lives in PreferencesLayout.hpp, where it is asserted. It was
+        written out here, agreeing with resized() below only by care -- and the
+        comment beside it had already drifted by 34 pixels once.
     */
     [[nodiscard]] int fixedLayoutHeight() const
     {
-        #if JUCE_WINDOWS
-        const int hintH = virtualInputHint.isVisible() ? kRowH + kGap : 0;
-        #else
-        const int hintH = 0;
-        #endif
-
-        const int statusH = statusLabel.isVisible() ? kRowH + kGap : 0;
-
-        const int aboveChain = kPad
-            + statusH                           // status row, when something failed
-            + kSectH + kGap + kRowH + kGap     // INPUT
-        + metrics::meterHeight + kGap      // input meter
-            + hintH                             // virtual-input hint, when shown
-            + kSectH + kGap;                    // AUDIO CHAIN label
-
-        const int belowChain = kGap + kRowH + kGap           // Add Plugin row
-            + kSectH + kGap + kRowH + kGap                    // LANE TRIM
-            + kSectH + kGap + kRowH + kGap                    // OUTPUT
-        + metrics::meterHeight + kGap                     // output meter
-            + kSectH + kGap + kRowH + kGap + kRowH + kGap + kRowH + kGap
-            + kRowH + kGap                                    // DEVICE SETTINGS
-            + kBtnH + kPad;
-
-        return aboveChain + belowChain;
+        return prefs::fixedLayoutHeight (kMetrics, optionalRows());
     }
 
     /** The shortest this panel can be laid out at without a section losing its
@@ -625,9 +629,51 @@ public:
         a window too short for the layout scrolls instead of quietly eating the
         Apply button.
     */
-    [[nodiscard]] int getPreferredHeight() const
+    [[nodiscard]] int getPreferredHeight() const override
     {
-        return fixedLayoutHeight() + kMinChainH;
+        return prefs::preferredHeight (kMetrics, optionalRows());
+    }
+
+    /** Relays out, having first asked the owner to re-height this panel.
+
+        EVERY OPTIONAL ROW GOES THROUGH HERE. resized() alone is not enough: it
+        divides up the height the panel ALREADY has, and the chain viewport is
+        the only elastic section -- so once that is at its floor there is
+        nothing left to take a new row from, and the Apply button is laid out
+        below the bottom edge with nothing re-running the viewport so it could
+        be scrolled to.
+
+        No re-entrancy guard, deliberately. resized() calls only
+        updateChainListHeight(), and nothing in the layout path changes the
+        visibility of either optional row. The one thing that does --
+        rebuildDeviceCombos into updateVirtualInputHint -- is reached from
+        changeListenerCallback, never from resized(). A second piece of state
+        to keep correct, for a loop that cannot start, is a cost with no
+        benefit.
+    */
+    void optionalRowsChanged()
+    {
+        const auto before = getLocalBounds();
+
+        if (onPreferredHeightChanged != nullptr)
+            onPreferredHeightChanged();
+
+        // setSize only calls resized() when the bounds actually moved, and they
+        // do not when the window is already tall enough. So relay out here in
+        // exactly the case the owner did not.
+        if (getLocalBounds() == before)
+            resized();
+
+        // For the smoke test, which is the only automated exercise of this
+        // path: its seeded plugin fails to load, so a real status message
+        // lands on a real window on all three platforms. Suppressed before the
+        // first layout, where the panel has no size to report.
+        if (getWidth() > 0)
+            juce::Logger::writeToLog (
+                juce::String ("Preferences: optional rows changed (status=")
+                + (statusLabel.isVisible() ? "1" : "0") + "), panel "
+                + juce::String (getHeight()) + " of " + juce::String (getPreferredHeight())
+                + (getHeight() >= getPreferredHeight() ? " -- fits" : " -- DOES NOT FIT"));
     }
 
     void resized() override
@@ -848,12 +894,16 @@ private:
 
     // Layout metrics, shared by resized() and the height it reports to its
     // scrolling viewport, so the two cannot disagree.
-    static constexpr int kPad       = 10;
-    static constexpr int kSectH     = 22;
-    static constexpr int kRowH      = 28;
-    static constexpr int kGap       = 6;
-    static constexpr int kBtnH      = 40;
-    static constexpr int kMinChainH = 80;
+    // One struct, so the height report and resized() cannot hold different
+    // numbers. The aliases below keep resized() reading as it always did.
+    static constexpr prefs::Metrics kMetrics {};
+
+    static constexpr int kPad       = kMetrics.pad;
+    static constexpr int kSectH     = kMetrics.sectionH;
+    static constexpr int kRowH      = kMetrics.rowH;
+    static constexpr int kGap       = kMetrics.gap;
+    static constexpr int kBtnH      = kMetrics.buttonH;
+    static constexpr int kMinChainH = kMetrics.minChainH;
 
     // Push-button widths. The height is shared application-wide and lives in
     // UiMetrics.hpp; only the widths are local, and they differ solely because
@@ -1011,7 +1061,10 @@ private:
         {
             virtualInputHint.setVisible (shouldShow);
             getCableButton.setVisible   (shouldShow);
-            resized();   // the hint occupies a layout row only while visible
+
+            // The hint occupies a layout row only while visible, so this takes
+            // the same re-height path the status row does.
+            optionalRowsChanged();
         }
         #endif
     }
@@ -1297,7 +1350,23 @@ private:
                 const auto input = fc.getResult();
                 if (input == juce::File() || ! input.existsAsFile()) return;
 
-                safe->chooseChainTestOutput (input);
+                // One hop through the message loop before the second chooser
+                // opens. Opening it REPLACES chainTestChooser, which destroys
+                // `fc` from inside its own completion callback. That survives
+                // today only because juce::FileChooser::finished copies the
+                // callback out before invoking it and touches nothing
+                // afterwards -- an internal detail of a vendored class, not a
+                // contract, and a JUCE bump could change it.
+                //
+                // The hop does not guard that detail, it removes the dependence
+                // on it: by the time the second chooser is built, this callback
+                // has returned and `fc` is no longer on the stack. It costs one
+                // message-loop turn. DO NOT SIMPLIFY THIS BACK.
+                juce::MessageManager::callAsync ([safe, input]
+                {
+                    if (safe != nullptr)
+                        safe->chooseChainTestOutput (input);
+                });
             });
     }
 
@@ -1504,12 +1573,14 @@ private:
 
     void updateChainListHeight()
     {
-        if (chainViewport.getWidth() <= 0) return;
-        const int preferred = chainList.getPreferredHeight();
-        const int minH      = chainViewport.getHeight();
-        chainList.setSize (
-            chainViewport.getWidth() - chainViewport.getScrollBarThickness(),
-            juce::jmax (minH, preferred));
+        // Through contentSizeFor, which subtracts the scrollbar only when a bar
+        // will actually be shown. This used to subtract it unconditionally, and
+        // it is the one place this file's two viewport patterns disagreed. It
+        // also used to bail out entirely while the viewport had no width,
+        // leaving the list at its previous HEIGHT -- the half that matters.
+        const auto size = prefs::contentSizeFor (chainViewport,
+                                                 chainList.getPreferredHeight());
+        chainList.setSize (size.x, size.y);
     }
 
     void showAddPluginMenu()
@@ -1630,38 +1701,16 @@ private:
 // which is nothing, and the Apply button disappears. Raising the window's minimum
 // height fixes that until the next section is added and the arithmetic has to be
 // redone. Scrolling retires the problem instead.
+//
+// The class itself is now prefs::PanelViewport in Source/PreferencesLayout.hpp,
+// so the re-height hook is installed by the viewport's own constructor rather
+// than by whoever builds it. That wiring is the thing that was missing: an
+// optional row appearing grew the height the panel needed and nothing told the
+// viewport, so the panel was laid out inside its old height and the Apply
+// button went below the bottom edge -- unreachable, because the viewport did
+// not know it had more to scroll either.
 //==============================================================================
-class PreferencesPanelViewport final : public juce::Viewport
-{
-public:
-    explicit PreferencesPanelViewport (PreferencesContentComponent* panelToOwn)
-        : panel (panelToOwn)
-    {
-        setViewedComponent (panel, true);   // the viewport owns it
-        setScrollBarsShown (true, false);
-    }
-
-    void resized() override
-    {
-        juce::Viewport::resized();
-
-        if (panel == nullptr)
-            return;
-
-        // The scrollbar's width is decided from the height the panel wants, which
-        // does not depend on the width, so this cannot oscillate.
-        const int preferred = panel->getPreferredHeight();
-        const bool needsScrollBar = preferred > getHeight();
-        const int width = getWidth() - (needsScrollBar ? getScrollBarThickness() : 0);
-
-        panel->setSize (juce::jmax (200, width), juce::jmax (getHeight(), preferred));
-    }
-
-    PreferencesContentComponent* panel = nullptr;
-
-private:
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PreferencesPanelViewport)
-};
+using PreferencesPanelViewport = prefs::PanelViewport<PreferencesContentComponent>;
 
 //==============================================================================
 // PreferencesShell
