@@ -219,11 +219,24 @@ namespace lighthost::selftest
         if (! log.contains ("Light Host"))
             failures.add ("log is missing the startup banner");
 
+        // Logged before IconMenu exists, so it is checked in the order it is
+        // written. Present on every platform -- off Windows it records that the
+        // opt-out does not apply -- so the marker proves the path ran rather
+        // than proving the opt-out took.
+        if (! log.contains ("ProcessQoS [startup]"))
+            failures.add ("the process QoS settings were never logged, so the EcoQoS "
+                          "opt-out did not run and this build may be scheduled onto "
+                          "efficiency cores");
+
         if (! log.contains ("IconMenu: constructing"))
             failures.add ("IconMenu never reported construction");
 
         if (! log.contains ("AudioConfig [startup]"))
             failures.add ("audio configuration was never logged, so device init did not complete");
+
+        if (! log.contains ("AudioLoad [startup]"))
+            failures.add ("the audio load was never logged, so the load poll is not "
+                          "running and a dropout would go unreported");
 
         if (! log.contains ("migrated chain settings"))
             failures.add ("the seeded 4.0.3 chain was not reported as migrated");

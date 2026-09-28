@@ -104,14 +104,14 @@ int main (int argc, char** argv)
     // X11 limit that forces PluginWindowGui to be Windows and macOS only: that
     // one creates a DocumentWindow, and JUCE's X11 backend cannot make a window
     // from a console app at all.
-    const juce::StringArray headless { "AudioChainList",
+    const juce::StringArray headless { "AudioChainList", "AudioLoad",
                                        "ConfirmPolicy", "DevicePolicy", "Gain",
                                        "GraphRender", "GraphTopology", "InstanceName",
                                        "Metering", "NodeIds", "OfflineRender",
                                        "PluginChain", "PluginScan", "PluginState",
                                        "PluginStateVault", "PluginWindow",
-                                       "SampleRate", "SelfTest", "SettingsKeys",
-                                       "StartupFlags", "Status",
+                                       "ProcessFacts", "SampleRate", "SelfTest",
+                                       "SettingsKeys", "StartupFlags", "Status",
                                        "VisibilityTimers" };
 
     const juce::StringArray needsDisplay { "PluginWindowGui", "VisibilityTimersGui" };

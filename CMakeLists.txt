@@ -93,6 +93,10 @@ target_sources(LightHost PRIVATE
     Source/ConfirmPolicy.hpp
     Source/HostServices.hpp
     Source/DevicePolicy.hpp
+    Source/LoadPolicy.hpp
+    Source/ProcessFacts.hpp
+    Source/ProcessQoS.hpp
+    Source/ProcessQoS.cpp
     Source/PluginScan.hpp
     Source/SettingsKeys.hpp
     Source/OfflineRender.hpp
@@ -299,6 +303,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/GraphRenderTests.cpp
         Tests/GraphTopologyTests.cpp
         Tests/InstanceNameTests.cpp
+        Tests/LoadPolicyTests.cpp
         Tests/NodeIdTests.cpp
         Tests/OfflineRenderTests.cpp
         Tests/PluginChainStoreTests.cpp
@@ -306,6 +311,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/PluginStateTests.cpp
         Tests/PluginStateVaultTests.cpp
         Tests/PluginWindowTests.cpp
+        Tests/ProcessFactsTests.cpp
         Tests/SampleRatePolicyTests.cpp
         Tests/SelfTestChecksTests.cpp
         Tests/SettingsKeysTests.cpp

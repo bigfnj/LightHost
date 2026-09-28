@@ -6,6 +6,7 @@
 #include "LookAndFeel.hpp"
 #include "OfflineRender.hpp"
 #include "PluginScan.hpp"
+#include "ProcessQoS.hpp"
 #include "SelfTest.hpp"
 #include "StartupFlags.hpp"
 
@@ -102,6 +103,19 @@ public:
 
         if (instanceNameWarning.isNotEmpty())
             juce::Logger::writeToLog (instanceNameWarning);
+
+        // After the logger, because the whole value of the call is knowing
+        // whether it took -- and a message written before this point goes
+        // nowhere, which is the trap instanceNameWarning above exists to dodge.
+        //
+        // BEFORE the render and scan returns, and unconditional for every mode.
+        // Render is the mode that most needs full clock: it paces itself
+        // against real time and reports whether it kept up, and an efficiency
+        // core would corrupt exactly that number. Scan loads plugin DLLs and is
+        // CPU-bound. Putting it here also keeps it clear of the "EVERY MODE
+        // THAT DOES WORK AND EXITS BELONGS IN THIS LIST" trap that
+        // moreThanOneInstanceAllowed already records as having bitten once.
+        logProcessQoS();
 
         // A render is not an application run: no audio device, no tray icon, no
         // Preferences, and above all nothing written back. It reads the chain the
@@ -296,6 +310,29 @@ private:
         shell, and a result that only lands in a log file is a result nobody
         reads.
     */
+    /** Asks Windows not to throttle this process, and records what happened.
+
+        A member rather than a file-scope free function: a new non-static free
+        function in a .cpp needs a declaration in a header in scope or Clang
+        fails the build on -Wmissing-prototypes, and HostServices.hpp is
+        deliberately kept to the two accessors it already lends out.
+
+        A refusal is logged and goes no further. Windows can legitimately deny
+        this inside a job object or under machine policy, there is nothing the
+        user can do about it, and the status sink is for things they can act on.
+    */
+    void logProcessQoS() const
+    {
+        const auto qos     = lighthost::process::leaveEcoQoS();
+        const auto census  = lighthost::process::censusOf (lighthost::process::systemCpuSets());
+
+        juce::Logger::writeToLog ("ProcessQoS [startup]: "
+                                  + lighthost::process::describe (qos)
+                                  + " " + lighthost::process::describe (census)
+                                  + " " + lighthost::process::describe (
+                                              lighthost::process::memoryFacts()));
+    }
+
     void runScan()
     {
         auto* settings = appProperties->getUserSettings();

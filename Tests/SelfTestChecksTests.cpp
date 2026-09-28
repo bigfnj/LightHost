@@ -61,8 +61,10 @@ public:
         const juce::StringArray startupMarkers
         {
             "Light Host 5.2.0 starting",
+            "ProcessQoS [startup]: ecoQosOptOut=n/a (not Windows) cores=unknown memory=n/a",
             "IconMenu: constructing",
             "AudioConfig [startup] 48000 Hz, 480 samples",
+            "AudioLoad [startup]: device=none",
             "migrated chain settings (1 plugin)",
             "Problem: Plugin load failed: SelfTest Plugin",
             "loadActivePlugins complete",

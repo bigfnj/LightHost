@@ -9,6 +9,7 @@
 // the same reason: a samplerate::Budget is a member, held by value.
 #include "GainProcessor.hpp"
 #include "HostServices.hpp"
+#include "LoadPolicy.hpp"
 #include "DeviceTap.hpp"
 #include "NodeIds.hpp"
 #include "PluginStateVault.hpp"
@@ -198,6 +199,15 @@ public:
     [[nodiscard]] lighthost::metering::Meter& getInputMeter()  noexcept { return deviceTap.getInputMeter(); }
     [[nodiscard]] lighthost::metering::Meter& getOutputMeter() noexcept { return deviceTap.getOutputMeter(); }
 
+    /** The audio-load readout, for the Preferences UI.
+
+        Folded by IconMenu's own always-on poll rather than by the panel, so the
+        counts the user reads are the same ones that decided whether to escalate
+        -- and so they go on accumulating while the window is shut, which is
+        when the incident nobody is watching happens.
+    */
+    [[nodiscard]] lighthost::load::Readout getLoadReadout() const;
+
     /** The stored trim for a lane, in decibels. For the Preferences UI. */
     [[nodiscard]] float getLaneGainDb (int lane) const;
 
@@ -318,6 +328,35 @@ private:
     // the second of those is the half decide() cannot see, so it lives in the
     // Budget rather than here. See Source/SampleRatePolicy.hpp.
     lighthost::samplerate::Budget sampleRateBudget;
+
+    /** The always-on audio-load poll.
+
+        A member rather than a second juce::Timer base: IconMenu already derives
+        from Timer for the tray menu's one-shot, and a class cannot derive from
+        it twice. Always on rather than driven by the Preferences window,
+        because a machine dropping audio while the window is shut is exactly the
+        case worth reporting -- the same trade DECISIONS.md settled for the
+        always-on device meters.
+    */
+    struct LoadPoll final : private juce::Timer
+    {
+        explicit LoadPoll (IconMenu& ownerToUse) : owner (ownerToUse) {}
+
+        void start() { startTimer (lighthost::load::kPollMs); }
+        void stop()  { stopTimer(); }
+
+        void timerCallback() override { owner.pollAudioLoad(); }
+
+        IconMenu& owner;
+    };
+
+    LoadPoll loadPoll { *this };
+    lighthost::load::Monitor loadMonitor;
+
+    void pollAudioLoad();
+    [[nodiscard]] juce::String loadSessionIdentity() const;
+    [[nodiscard]] lighthost::load::Sample takeLoadSample() const;
+    void logAudioLoad (const juce::String& contextLabel) const;
 
     // Where failures go so the user can see them, rather than only the log file.
     lighthost::status::Sink status;

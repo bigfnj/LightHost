@@ -366,6 +366,13 @@ IconMenu::IconMenu()
 
     logAudioConfig ("startup");
 
+    // One reading before the line is written, or it reports "device=none" for
+    // a device that is open -- a startup diagnostic that says nothing is worse
+    // than none, because it looks like it answered.
+    pollAudioLoad();
+    logAudioLoad ("startup");
+    loadPoll.start();
+
     // Known plugins
     if (auto savedPluginList = getAppProperties().getUserSettings()->getXmlValue (lighthost::keys::pluginList))
         knownPluginList.recreateFromXml (*savedPluginList);
@@ -425,6 +432,11 @@ IconMenu::~IconMenu()
     // Clearing it costs the last few shutdown reports their UI, which is the
     // right trade: they still reach the log, and there is no window left to
     // read them in.
+    // Before status.onChange is cleared, and before anything else: a poll
+    // firing mid-teardown would report into a half-destroyed Preferences
+    // window, which is the exact hazard the comment above describes.
+    loadPoll.stop();
+
     status.onChange = nullptr;
 
     // Detach the audio callback FIRST — deviceManager outlives player and graph
@@ -1416,6 +1428,89 @@ void IconMenu::logAudioConfig (const juce::String& contextLabel) const
         + " buf=" + juce::String (bufSize) + " samples");
 }
 
+//==============================================================================
+lighthost::load::Readout IconMenu::getLoadReadout() const
+{
+    return loadMonitor.readout();
+}
+
+/** What makes two device sessions the same one.
+
+    Rate and buffer size are in here, not just the device name, because the
+    load proportion is measured against the block deadline: 88% at 480 samples
+    and 88% at 128 samples are not the same reading and must not share a peak
+    hold. JUCE resets the measurer behind them on any device start anyway.
+*/
+juce::String IconMenu::loadSessionIdentity() const
+{
+    const auto setup = deviceManager.getAudioDeviceSetup();
+
+    return deviceManager.getCurrentAudioDeviceType()
+         + "|" + setup.inputDeviceName
+         + "|" + setup.outputDeviceName
+         + "|" + juce::String (setup.sampleRate, 0)
+         + "|" + juce::String (setup.bufferSize);
+}
+
+lighthost::load::Sample IconMenu::takeLoadSample() const
+{
+    auto* device = deviceManager.getCurrentAudioDevice();
+
+    lighthost::load::Sample sample;
+    sample.deviceOpen     = device != nullptr;
+    sample.loadProportion = deviceManager.getCpuUsage();
+    sample.xrunTotal      = deviceManager.getXRunCount();
+
+    // Read from the device DIRECTLY as well. The manager's own accessor folds a
+    // -1 away with jmax(0, ...) (juce_AudioDeviceManager.cpp:1379), which makes
+    // "this driver does not report under-runs" look identical to "it reports
+    // zero" -- and those are different things to tell a user.
+    sample.deviceXrunTotal = device != nullptr ? device->getXRunCount() : -1;
+
+    if (device != nullptr)
+    {
+        const auto rate = device->getCurrentSampleRate();
+
+        if (rate > 0.0)
+            sample.blockMs = device->getCurrentBufferSizeSamples() * 1000.0 / rate;
+    }
+
+    const auto packed = deviceTap.getLastProcessor();
+
+    if (lighthost::process::isSampled (packed))
+        sample.coreLabel = lighthost::process::shortName (
+                               lighthost::process::kindOf (lighthost::process::systemCpuSets(),
+                                                           lighthost::process::unpackProcessor (packed)));
+
+    sample.atMs = static_cast<juce::int64> (juce::Time::getMillisecondCounter());
+    return sample;
+}
+
+void IconMenu::pollAudioLoad()
+{
+    if (loadMonitor.useSession (loadSessionIdentity()))
+        juce::Logger::writeToLog ("AudioLoad: new device session, counts restarted");
+
+    if (const auto escalation = loadMonitor.observe (takeLoadSample()); escalation.report)
+    {
+        // Logged beside the report rather than instead of it: this is the line
+        // that makes the working-set-trimming theory decidable, and it is only
+        // worth gathering at the moment something actually went wrong.
+        logAudioLoad ("dropout");
+        status.report (escalation.message);
+    }
+}
+
+void IconMenu::logAudioLoad (const juce::String& contextLabel) const
+{
+    auto line = "AudioLoad [" + contextLabel + "]: " + loadMonitor.logFields();
+
+    if (contextLabel == "dropout")
+        line += " " + lighthost::process::describe (lighthost::process::memoryFacts());
+
+    juce::Logger::writeToLog (line);
+}
+
 void IconMenu::autoMatchSampleRate()
 {
     auto* device = deviceManager.getCurrentAudioDevice();
@@ -1643,6 +1738,10 @@ void IconMenu::changeListenerCallback (ChangeBroadcaster* changed)
         juce::Logger::writeToLog ("IconMenu: audio device change handled for type "
                                   + deviceManager.getCurrentAudioDeviceType());
         logAudioConfig ("device-change");
+
+        // Before the next poll notices the new session identity and restarts
+        // the counts, so this line describes the device that just went away.
+        logAudioLoad ("device-change");
 
         // Before the write below, which is what the comparison is against.
         reportDeviceSubstitutionIfAny ("device-change");
