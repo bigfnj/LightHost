@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [5.6.0] — 2026-09-28
+
 ### Added — the audio load, its dropouts and the core it ran on are measured
 
 Light Host could not say whether audio was actually dropping out. "It gets
