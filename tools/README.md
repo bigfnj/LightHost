@@ -32,8 +32,8 @@ else, the link is the documentation and this table is only the signpost.
 ## Measuring a real microphone chain
 
 These are how the clipping and denoiser figures quoted in the README and
-CHANGELOG were arrived at. They need a real capture device, so none of them can
-run in CI.
+CHANGELOG were arrived at. They need a real capture device, or a take recorded
+from one, so none of them can run in CI.
 
 | Script | What it does |
 |---|---|
@@ -44,13 +44,23 @@ run in CI.
 | [`show-capture-levels.ps1`](show-capture-levels.ps1) | Reads every capture endpoint's level as both a slider percentage and dB, with its range and mute state |
 | [`set-capture-level.ps1`](set-capture-level.ps1) | Sets one named endpoint's capture level in dB and reads it back |
 | [`measure-idle-cpu.ps1`](measure-idle-cpu.ps1) | Measures CPU used while tray-resident with no window open, because "costs nothing while idle" is a claim about cost |
+| [`cpu-load.ps1`](cpu-load.ps1) | Spins a chosen number of CPU-bound threads for a bounded time, so "under load" is a dial setting and not whatever else the machine happened to be doing. Reports cores *delivered*, which on a busy box is well under the threads asked for |
+| [`denoiser-ab.ps1`](denoiser-ab.ps1) | Sweeps each denoiser candidate against a dry reference at several load levels, repeats every combination, and reports medians and spread. Exists to fire or clear the reversal trigger recorded in [DECISIONS](../DECISIONS.md) for keeping Salvor over Alt Denoiser |
+| [`score-sections.py`](score-sections.py) | Scores one render against a dry reference section by section, so noise removed and voice damaged stay two numbers rather than one sum. Borrows `load`, `db` and `stats` from `analyse-voice-headroom.py` so the two cannot drift apart |
 
 ## Dependencies
 
-`voice-headroom.sh` needs `ffmpeg`. The two Python scripts need `numpy`. All
-four `.ps1` files are Windows-only. Three of them -- `audio-endpoints.ps1`,
+`voice-headroom.sh` needs `ffmpeg`. The three Python scripts need `numpy`. All
+six `.ps1` files are Windows-only. Three of them -- `audio-endpoints.ps1`,
 `show-capture-levels.ps1` and `set-capture-level.ps1` -- compile a small block
 of C# at run time to reach the WASAPI endpoint interfaces, which PowerShell
-does not expose; `measure-idle-cpu.ps1` needs none, because a process's
-`TotalProcessorTime` is already a PowerShell property. None of them needs an
-elevated shell.
+does not expose; `measure-idle-cpu.ps1` and `cpu-load.ps1` need none, because a
+process's `TotalProcessorTime` is already a PowerShell property and a runspace
+pool is already a PowerShell type. None of them needs an elevated shell.
+
+`denoiser-ab.ps1` needs more than any of the others, and checks for all of it
+before spending an hour rather than after: a Release build to render through,
+an interpreter that has `numpy` (it tries `-Python`, then `$env:TOOLBOX_PYTHON`,
+then `python3` and `python`, and prints every one it tried), and an input take.
+It will not invent a take. `tools/*.wav` is gitignored, so a fresh clone has
+none and there is nothing to copy -- record one with `voice-headroom.sh` first.
