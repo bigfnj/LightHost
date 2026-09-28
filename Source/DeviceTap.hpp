@@ -60,6 +60,24 @@ namespace lighthost::metering
                                                int numSamples,
                                                const juce::AudioIODeviceCallbackContext& context) override
         {
+            // Flush-to-zero and denormals-are-zero, for everything below this
+            // line: the meters, the graph, and every hosted plugin.
+            //
+            // JUCE defines ScopedNoDenormals and then never uses it --  not in
+            // AudioProcessorPlayer, not in AudioProcessorGraph -- so until now
+            // this application ran the whole audio callback with the default
+            // MXCSR. A denormal reaching a filter or reverb tail can cost an
+            // order of magnitude per operation on x86, which presents exactly
+            // as the load-and-dropout symptom the metering beside this measures.
+            // Measuring for that without fixing it would have produced a
+            // diagnosis pointing at the wrong thing.
+            //
+            // This sets a thread-level flag that third-party plugin code then
+            // runs under. That is what every DAW does and what a VST host is
+            // expected to do, but it IS a behaviour change to code we do not
+            // own, which is why it is its own commit.
+            const juce::ScopedNoDenormals noDenormals;
+
             inputMeter.measure (inputChannelData, numInputChannels, numSamples);
 
             wrapped.audioDeviceIOCallbackWithContext (inputChannelData, numInputChannels,
