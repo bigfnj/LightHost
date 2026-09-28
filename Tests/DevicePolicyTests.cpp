@@ -3,6 +3,12 @@
 
 #include <juce_core/juce_core.h>
 
+// For the one assertion that is about JUCE rather than about us: that filling
+// a combo with dontSendNotification really does not fire onChange. Available
+// to this target transitively through juce_audio_processors, the same way
+// AudioChainListTests reaches it.
+#include <juce_gui_basics/juce_gui_basics.h>
+
 //==============================================================================
 // Noticing that the open audio device is not the one that was asked for.
 //
@@ -397,6 +403,166 @@ public:
             expect (message->contains ("Mic Chain INPUT"));
             expect (message->contains ("Speakers (Dock)"));
             expect (message->contains ("Output"));
+        }
+
+        //======================================================================
+        // The "a person picked a device" flag, and the Apply decision built on
+        // it. Both rules of the 5.3.0 fix rested on reading the code until
+        // now: that only a combo onChange sets the flag, and that it clears
+        // only after the record is actually written.
+        //======================================================================
+        using lighthost::device::ApplyInputs;
+        using lighthost::device::DeviceChoiceFlag;
+        using lighthost::device::decideDeviceApply;
+
+        beginTest ("a fresh flag is not a user choice");
+        {
+            const DeviceChoiceFlag flag;
+            expect (! flag.isUserMade());
+        }
+
+        beginTest ("a failed record leaves the choice standing");
+        {
+            // FAILS IF: the clear becomes unconditional. An Apply that could
+            // not write the record would forget the user's choice, and the
+            // next launch would report the substituted device as the one they
+            // asked for -- the feature inverting itself.
+            DeviceChoiceFlag flag;
+            flag.noteUserChoice();
+
+            expect (! flag.clearIfRecorded (false));
+            expect (flag.isUserMade(),
+                    "an Apply that could not write the record forgot the user's choice");
+
+            expect (flag.clearIfRecorded (true));
+            expect (! flag.isUserMade());
+        }
+
+        beginTest ("populating a combo without notification does not record a device choice");
+        {
+            // The rule the whole feature rests on, asserted against JUCE
+            // rather than assumed. rebuildDeviceCombos fills the combos on
+            // every device change; if any of those calls notified, the host
+            // would record substituted devices as user choices and nothing
+            // else in the codebase would notice.
+            DeviceChoiceFlag flag;
+            juce::ComboBox combo;
+            combo.onChange = [&flag] { flag.noteUserChoice(); };
+
+            combo.addItem ("Microphone", 1);
+            combo.addItem ("Line In", 2);
+            combo.clear (juce::dontSendNotification);
+            combo.addItem ("Microphone", 1);
+            combo.addItem ("Line In", 2);
+            combo.setSelectedId (2, juce::dontSendNotification);
+
+            expect (! flag.isUserMade(),
+                    "filling the device combos counted as the user choosing a device, so a "
+                    "substituted device will be recorded as the one they asked for");
+
+            combo.setSelectedId (1, juce::sendNotificationSync);
+            expect (flag.isUserMade(), "a real combo change did not register as a choice");
+        }
+
+        const auto baseInputs = []
+        {
+            ApplyInputs inputs;
+            inputs.inputCombo       = "Microphone";
+            inputs.outputCombo      = "Speakers";
+            inputs.availableInputs  = { "Microphone", "Line In" };
+            inputs.availableOutputs = { "Speakers", "Cable Input" };
+            inputs.openInput        = "Line In";
+            inputs.openOutput       = "Cable Input";
+            inputs.hasRecorder      = true;
+            return inputs;
+        };
+
+        beginTest ("an Apply pressed for another reason does not change the devices");
+        {
+            // FAILS IF: the userChose guard goes. A user who only ever picked
+            // an output had a microphone opened for them by an Apply they
+            // pressed to change a plugin.
+            auto inputs = baseInputs();
+            inputs.userChose = false;
+
+            const auto decision = decideDeviceApply (inputs);
+            expect (! decision.writeInputName,
+                    "an incidental Apply changed the input device");
+            expect (! decision.writeOutputName);
+        }
+
+        beginTest ("an incidental Apply still writes a device that is already open");
+        {
+            auto inputs = baseInputs();
+            inputs.userChose  = false;
+            inputs.inputCombo = inputs.openInput;
+
+            expect (decideDeviceApply (inputs).writeInputName);
+        }
+
+        beginTest ("a placeholder is never written");
+        {
+            // FAILS IF: the "(" clause goes. "(no input devices)" would be
+            // recorded as a request, asking for a device that cannot exist and
+            // reporting a substitution on every launch afterwards.
+            auto inputs = baseInputs();
+            inputs.userChose       = true;
+            inputs.inputCombo      = "(no input devices)";
+            inputs.availableInputs = { "(no input devices)" };
+
+            expect (! decideDeviceApply (inputs).writeInputName,
+                    "a placeholder was written into the device setup as a real device");
+        }
+
+        beginTest ("a name the device type does not offer is never written");
+        {
+            auto inputs = baseInputs();
+            inputs.userChose  = true;
+            inputs.inputCombo = "A Device From Another Driver";
+
+            expect (! decideDeviceApply (inputs).writeInputName);
+        }
+
+        beginTest ("no recorder means no record and no clear");
+        {
+            auto inputs = baseInputs();
+            inputs.userChose   = true;
+            inputs.hasRecorder = false;
+
+            const auto decision = decideDeviceApply (inputs);
+            expect (! decision.recordChoice);
+            expect (! decision.clearUserChoice,
+                    "the choice was forgotten without ever being recorded");
+        }
+
+        beginTest ("record and clear never disagree");
+        {
+            // FAILS IF: the two are ever computed separately again. Every
+            // combination, because the relationship is the rule -- not any one
+            // case of it.
+            for (const bool chose : { false, true })
+            {
+                for (const bool recorder : { false, true })
+                {
+                    for (const bool inputOffered : { false, true })
+                    {
+                        for (const bool outputOffered : { false, true })
+                        {
+                            auto inputs = baseInputs();
+                            inputs.userChose   = chose;
+                            inputs.hasRecorder = recorder;
+
+                            if (! inputOffered)  inputs.availableInputs.clear();
+                            if (! outputOffered) inputs.availableOutputs.clear();
+
+                            const auto decision = decideDeviceApply (inputs);
+                            expect (decision.recordChoice == decision.clearUserChoice,
+                                    "the record and the clear were decided separately, so one "
+                                    "can happen without the other");
+                        }
+                    }
+                }
+            }
         }
     }
 };

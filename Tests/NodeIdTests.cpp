@@ -4,6 +4,7 @@
 #include <juce_core/juce_core.h>
 
 #include <set>
+#include <vector>
 
 //==============================================================================
 // The reserved node-id scheme, and the container behaviour that keeps the
@@ -240,6 +241,66 @@ public:
 
             list.removeType (pd);
             expectEquals (list.getNumTypes(), 0);
+        }
+
+        //======================================================================
+        // The probe cap. Sized against nodeids::maxProbes throughout and never
+        // against the literal 32, for the same reason the node-id ceiling test
+        // above is: the number is allowed to change, the relationship is not.
+        //======================================================================
+        const auto namesNumbering = [] (int count)
+        {
+            std::vector<juce::String> names;
+
+            for (int i = 0; i < count; ++i)
+                names.push_back ("plugin " + juce::String (i));
+
+            return names;
+        };
+
+        beginTest ("a chain under the probe cap is left alone");
+        {
+            const auto capped = lighthost::nodeids::cappedToProbes (
+                                    namesNumbering (lighthost::nodeids::maxProbes - 1));
+
+            expectEquals (static_cast<int> (capped.size()), lighthost::nodeids::maxProbes - 1);
+            expectEquals (capped.back(), juce::String ("plugin ")
+                                           + juce::String (lighthost::nodeids::maxProbes - 2));
+        }
+
+        beginTest ("a chain sitting exactly on the probe cap keeps every position");
+        {
+            // FAILS IF: the comparison is >= rather than >. A legitimate
+            // 32-plugin chain would silently lose its last plugin from the
+            // signal view, which is the one place a user would look to find out
+            // whether that plugin is doing anything.
+            const auto capped = lighthost::nodeids::cappedToProbes (
+                                    namesNumbering (lighthost::nodeids::maxProbes));
+
+            expectEquals (static_cast<int> (capped.size()), lighthost::nodeids::maxProbes);
+        }
+
+        beginTest ("a chain past the probe cap loses its tail, not its head");
+        {
+            // FAILS IF: the truncation drops from the front. Every surviving
+            // position would then be renumbered against the probe it is paired
+            // with, so every row in the signal view would be labelled with the
+            // wrong plugin -- the exact failure getCommittedChainNames exists
+            // to prevent, reached from the other side.
+            const auto capped = lighthost::nodeids::cappedToProbes (
+                                    namesNumbering (lighthost::nodeids::maxProbes + 5));
+
+            expectEquals (static_cast<int> (capped.size()), lighthost::nodeids::maxProbes);
+            expectEquals (capped.front(), juce::String ("plugin 0"),
+                          "the cap dropped from the front, so every row is now labelled "
+                          "with a different plugin than the one it meters");
+            expectEquals (capped.back(), juce::String ("plugin ")
+                                           + juce::String (lighthost::nodeids::maxProbes - 1));
+        }
+
+        beginTest ("an empty chain caps to an empty chain");
+        {
+            expect (lighthost::nodeids::cappedToProbes (std::vector<juce::String> {}).empty());
         }
     }
 };

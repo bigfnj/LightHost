@@ -170,6 +170,7 @@ namespace lighthost::ui
             dragSourceRow = -1;
             dropLine      = -1;
             clearPressed();
+            clearHot();
             repaint();
         }
 
@@ -300,8 +301,8 @@ namespace lighthost::ui
         // Pointer handling, split from the juce::MouseEvent overrides.
         //
         // The overrides below unpack the event and do nothing else. Everything
-        // that decides something lives in these three, because a unit test can
-        // call them: building a juce::MouseEvent needs a MouseInputSource, an
+        // that decides something lives in these, because a unit test can call
+        // them: building a juce::MouseEvent needs a MouseInputSource, an
         // originator component, a mouse-down position and a mouse-down time,
         // none of which say anything about the arm/fire/cancel contract being
         // checked, and all of which would have to be kept correct by hand.
@@ -393,6 +394,57 @@ namespace lighthost::ui
             }
         }
 
+        /** Updates which control the pointer is over. */
+        void hoverAt (juce::Point<int> position)
+        {
+            const int  row = rowAt (position);
+            const auto ctl = (row >= 0) ? controlAt (position, row) : Control::none;
+
+            if (row == hotRow && ctl == hotControl)
+                return;
+
+            const int previous = hotRow;
+            hotRow     = row;
+            hotControl = ctl;
+
+            setMouseCursor (ctl == Control::none ? juce::MouseCursor::NormalCursor
+                                                 : juce::MouseCursor::PointingHandCursor);
+
+            // Only the rows whose appearance changed, rather than the whole list.
+            if (previous >= 0) repaintRow (previous);
+            if (hotRow  >= 0)  repaintRow (hotRow);
+        }
+
+        /** Forgets which control the pointer was over.
+
+            Cosmetic today: isHot is only ever consulted for a row index below
+            rows.size(), so a stale index never matches, and repaintRow off the
+            end of the list is a no-op. Reset anyway, because "the list was
+            replaced, so nothing is hovered" is the same statement the drag and
+            pressed resets beside it already make -- and leaving one of the
+            three behind is how the next control added here inherits a bug
+            nobody chose.
+        */
+        void clearHot()
+        {
+            if (hotRow < 0 && hotControl == Control::none)
+                return;
+
+            const int previous = hotRow;
+            hotRow     = -1;
+            hotControl = Control::none;
+            setMouseCursor (juce::MouseCursor::NormalCursor);
+            if (previous >= 0) repaintRow (previous);
+        }
+
+        /** Which row the pointer is over, or -1.
+
+            For tests. Nothing shipped reads it -- paint asks isHot per row --
+            and it is the only way to see that setRows forgot the hover as well
+            as the drag.
+        */
+        [[nodiscard]] int getHotRow() const noexcept { return hotRow; }
+
         void releaseAt (juce::Point<int> position)
         {
             if (pressedControl == Control::settings)
@@ -468,37 +520,8 @@ namespace lighthost::ui
         void mouseDrag (const juce::MouseEvent& e) override { dragTo (e.getPosition()); }
         void mouseUp   (const juce::MouseEvent& e) override { releaseAt (e.getPosition()); }
 
-        void mouseMove (const juce::MouseEvent& e) override
-        {
-            const int  row = rowAt (e.getPosition());
-            const auto ctl = (row >= 0) ? controlAt (e.getPosition(), row) : Control::none;
-
-            if (row == hotRow && ctl == hotControl)
-                return;
-
-            const int previous = hotRow;
-            hotRow     = row;
-            hotControl = ctl;
-
-            setMouseCursor (ctl == Control::none ? juce::MouseCursor::NormalCursor
-                                                 : juce::MouseCursor::PointingHandCursor);
-
-            // Only the rows whose appearance changed, rather than the whole list.
-            if (previous >= 0) repaintRow (previous);
-            if (hotRow  >= 0)  repaintRow (hotRow);
-        }
-
-        void mouseExit (const juce::MouseEvent&) override
-        {
-            if (hotRow < 0 && hotControl == Control::none)
-                return;
-
-            const int previous = hotRow;
-            hotRow     = -1;
-            hotControl = Control::none;
-            setMouseCursor (juce::MouseCursor::NormalCursor);
-            if (previous >= 0) repaintRow (previous);
-        }
+        void mouseMove (const juce::MouseEvent& e) override { hoverAt (e.getPosition()); }
+        void mouseExit (const juce::MouseEvent&)      override { clearHot(); }
 
         //==========================================================================
         void paint (juce::Graphics& g) override

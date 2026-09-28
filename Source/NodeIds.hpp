@@ -4,6 +4,8 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <vector>
+
 //==============================================================================
 // The reserved graph node ids, in one place.
 //
@@ -52,5 +54,28 @@ namespace lighthost::nodeids
     {
         return NodeID { 1'000'100u
                         + static_cast<juce::uint32> (juce::jlimit (0, maxProbes - 1, index)) };
+    }
+
+    /** Truncates a per-chain-position list to the number of positions that can
+        carry a probe.
+
+        Generic because the rule is about POSITIONS rather than about names. The
+        signal view pairs a name to a probe one for one, so a list longer than
+        maxProbes gives chain position 33 a labelled row with a null meter --
+        which the update loop skips and the painter therefore draws at the floor
+        for ever. A permanently silent row is a worse answer than no row:
+        maxProbes above says a position past the cap "just stops being probed",
+        and a row reading silence says the plugin is passing nothing.
+
+        The TAIL is what goes. Dropping from the front would renumber every
+        surviving position against the probes they are paired with.
+    */
+    template <typename T>
+    [[nodiscard]] std::vector<T> cappedToProbes (std::vector<T> perPosition)
+    {
+        if (perPosition.size() > static_cast<size_t> (maxProbes))
+            perPosition.resize (static_cast<size_t> (maxProbes));
+
+        return perPosition;
     }
 }

@@ -676,6 +676,55 @@ public:
             expect (empty.getRows().empty());
             expectEquals (changes, 0);
         }
+
+        //======================================================================
+        // The hover, which setRows used to leave pointing at a row that had
+        // gone. Cosmetic today -- isHot is only asked about rows that exist --
+        // and reset anyway, because the drag and pressed resets beside it make
+        // the same statement and leaving one of the three behind is how the
+        // next control added here inherits a bug nobody chose.
+        //======================================================================
+        beginTest ("replacing the list forgets which row the pointer was over");
+        {
+            AudioChainListComponent list;
+            list.setRows (rowsFor ({ "A", "B", "C" }));
+            list.setSize (kWidth, 3 * AudioChainListComponent::kRowHeight);
+
+            list.hoverAt (checkboxPoint (2));
+            expectEquals (list.getHotRow(), 2);
+
+            list.setRows (rowsFor ({ "X" }));
+            expectEquals (list.getHotRow(), -1,
+                          "the list was replaced and the hover survived, pointing at a "
+                          "row that no longer exists");
+        }
+
+        beginTest ("leaving the list forgets the hover");
+        {
+            AudioChainListComponent list;
+            list.setRows (rowsFor ({ "A", "B" }));
+            list.setSize (kWidth, 2 * AudioChainListComponent::kRowHeight);
+
+            list.hoverAt (checkboxPoint (1));
+            expectEquals (list.getHotRow(), 1);
+
+            list.clearHot();
+            expectEquals (list.getHotRow(), -1);
+        }
+
+        beginTest ("hovering above the first row is not a row");
+        {
+            // FAILS IF: the p.y < 0 guard goes. Integer division truncates
+            // toward zero, so a y of -10 gives row 0 -- the same defect already
+            // fixed on the press path, one door along.
+            AudioChainListComponent list;
+            list.setRows (rowsFor ({ "A", "B" }));
+            list.setSize (kWidth, 2 * AudioChainListComponent::kRowHeight);
+
+            list.hoverAt ({ 60, -10 });
+            expectEquals (list.getHotRow(), -1,
+                          "a pointer above the list is hovering the first row");
+        }
     }
 };
 

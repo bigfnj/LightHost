@@ -276,4 +276,116 @@ namespace lighthost::device
 
         return requestedFrom (deviceSetup);
     }
+
+    //==========================================================================
+    /** The "a person picked a device" flag.
+
+        A type rather than a bare bool because the whole of the 5.3.0 device fix
+        is a two-rule state machine, and a bare bool leaves both rules in prose.
+        ONE verb sets it and ONE clears it, and the clearing verb names its
+        precondition in its own signature.
+
+        What goes wrong without the rules: recording unconditionally inverts the
+        feature. Startup reports a substitution, the user opens Preferences to
+        look at it, presses Apply for any reason at all, and the SUBSTITUTE is
+        written down as the thing they asked for -- after which nothing can ever
+        notice it again.
+    */
+    class DeviceChoiceFlag
+    {
+    public:
+        /** Called ONLY from a device combo's onChange.
+
+            Nothing else can: there is no other mutator and the member is
+            private. rebuildDeviceCombos populates the combos with
+            dontSendNotification, so the host cannot set this on the user's
+            behalf -- a claim about JUCE, and therefore asserted rather than
+            assumed, in DevicePolicyTests.
+        */
+        void noteUserChoice() noexcept { userChose = true; }
+
+        [[nodiscard]] bool isUserMade() const noexcept { return userChose; }
+
+        /** Clears the flag if, and only if, the record was actually written.
+
+            Returns what it did, so a caller cannot silently mean the other
+            thing. An Apply that could not write the record must not forget that
+            a choice was made, or the next launch reports the substituted device
+            as the one the user asked for.
+        */
+        bool clearIfRecorded (bool recordWasWritten) noexcept
+        {
+            if (! recordWasWritten)
+                return false;
+
+            userChose = false;
+            return true;
+        }
+
+    private:
+        bool userChose = false;
+    };
+
+    /** Everything the Apply path needs to know to decide about devices. */
+    struct ApplyInputs
+    {
+        juce::String      inputCombo;
+        juce::String      outputCombo;
+        juce::StringArray availableInputs;
+        juce::StringArray availableOutputs;
+        juce::String      openInput;    ///< what the setup already holds
+        juce::String      openOutput;
+        bool              userChose   = false;
+        bool              hasRecorder = false;   ///< onDevicesChosenFn is wired
+    };
+
+    struct ApplyDecision
+    {
+        bool writeInputName  = false;
+        bool writeOutputName = false;
+        bool recordChoice    = false;   ///< write REQUESTEDDEVICES
+        bool clearUserChoice = false;   ///< always equal to recordChoice
+    };
+
+    /** Whether a combo entry may be written into the device setup at all.
+
+        The first two clauses are isDeviceChoice, which this used to spell out
+        again at the Apply site. The third is the one that is specific to Apply:
+        the input and output lists are unioned across every device type so they
+        are not empty before the type is switched, so a name can be offered by
+        the combo and not exist under the type being applied.
+    */
+    [[nodiscard]] inline bool acceptableForApply (const juce::String& name,
+                                                  const juce::StringArray& available)
+    {
+        return isDeviceChoice (name) && available.contains (name);
+    }
+
+    /** What an Apply should do about the two device names.
+
+        A name is written when the user chose it, OR when it is the device
+        already open -- the second half matters because an Apply pressed for
+        some other reason must not change the devices. Without it, a user who
+        only ever picked an output had a microphone opened for them by an Apply
+        they pressed to change a plugin.
+
+        recordChoice and clearUserChoice are computed in ONE place and returned
+        as two fields, so "the flag clears only after the record is written"
+        stops being a comment and becomes something a test can hold to.
+    */
+    [[nodiscard]] inline ApplyDecision decideDeviceApply (const ApplyInputs& inputs)
+    {
+        ApplyDecision decision;
+
+        decision.writeInputName = acceptableForApply (inputs.inputCombo, inputs.availableInputs)
+                               && (inputs.userChose || inputs.inputCombo == inputs.openInput);
+
+        decision.writeOutputName = acceptableForApply (inputs.outputCombo, inputs.availableOutputs)
+                                && (inputs.userChose || inputs.outputCombo == inputs.openOutput);
+
+        decision.recordChoice    = inputs.userChose && inputs.hasRecorder;
+        decision.clearUserChoice = decision.recordChoice;
+
+        return decision;
+    }
 }

@@ -978,23 +978,18 @@ std::vector<juce::String> IconMenu::getCommittedChainNames()
     // happening to agree.
     const auto sorted = getTimeSortedList();
 
-    // Capped at the same limit getProbeMeter enforces, so the two stay the same
-    // length. refreshSignalView pairs them one to one; uncapped, chain position
-    // 33 and up got a labelled row whose meter is null, which the update loop
-    // skips and the painter therefore draws at kFloorDb for ever. A permanent
-    // silent row is a worse answer than no row: IconMenu.hpp says a position
-    // past the cap "just stops being probed", and a row reading silence says
-    // the plugin is passing nothing.
-    const auto limit = juce::jmin (static_cast<size_t> (sorted->size()),
-                                   static_cast<size_t> (lighthost::nodeids::maxProbes));
+    const auto count = static_cast<size_t> (sorted->size());
 
     std::vector<juce::String> names;
-    names.reserve (limit);
+    names.reserve (count);
 
-    for (size_t i = 0; i < limit; ++i)
+    for (size_t i = 0; i < count; ++i)
         names.push_back ((*sorted)[i].name);
 
-    return names;
+    // Capped at the same limit getProbeMeter enforces, so the two stay the same
+    // length. The reasoning, and the assertions, are in NodeIds.hpp beside the
+    // limit itself -- it was written out here, where nothing could exercise it.
+    return lighthost::nodeids::cappedToProbes (std::move (names));
 }
 
 lighthost::gain::Processor* IconMenu::laneGainProcessor (int lane)
@@ -2164,13 +2159,11 @@ void IconMenu::confirmDeletePluginStates()
             // Says what happened, which the old unconditional "Deleted saved
             // plugin states" could not: it was true of a run in which every
             // single delete failed.
-            if (failed == 0)
-                safe->reportStatus ("Deleted saved plugin states");
-            else
-                safe->reportStatus ("Could not delete " + juce::String (failed)
-                                    + (failed == 1 ? " plugin's saved state."
-                                                   : " plugins' saved states.")
-                                    + " Something else is holding the files open.");
+            //
+            // The wording now lives in PluginStateVault.hpp, unchanged, so a
+            // headless test can assert it. It cannot be asserted from here:
+            // this is a callback from a native message box.
+            safe->reportStatus (lighthost::state::deletionReport (failed));
         });
 }
 
@@ -2184,24 +2177,47 @@ int IconMenu::deletePluginStates()
 
     const auto vault = stateVault();
 
-    int failed = 0;
+    // Staged first, in a pass of its own: clearing the un-migrated legacy blob
+    // is an edit to the settings document and has nothing to do with whether
+    // the .lhs file can be deleted, so it must happen for every plugin
+    // regardless of what the erase pass reports.
+    std::vector<juce::String> identities;
+    identities.reserve (list.size());
 
     for (const auto& plugin : list)
     {
-        const auto identity = ChainStore::identityOf (plugin);
-
         store.stageState (plugin, {});   // clears any un-migrated legacy blob
+        identities.push_back (ChainStore::identityOf (plugin));
+    }
 
-        if (forgetPluginState (vault, identity))
-            continue;
+    // forgetPluginState, not vault.erase: the fingerprint cache that decides
+    // whether the next save is skipped as unchanged has to be cleared with the
+    // file, or a later save would compare against bytes that are gone.
+    const auto outcome = lighthost::state::eraseEach (
+        identities,
+        [this, &vault] (const juce::String& identity)
+        {
+            return forgetPluginState (vault, identity);
+        });
 
-        ++failed;
-        juce::Logger::writeToLog ("Could not delete saved state for " + plugin.name);
+    // The log names the plugin, not the identity hash, because the identity is
+    // a hash of four description fields and means nothing to the person
+    // reading a log to find out which plugin is being held open.
+    for (const auto& identity : outcome.failedIdentities)
+    {
+        const auto named = std::find_if (list.begin(), list.end(),
+                                         [&identity] (const juce::PluginDescription& plugin)
+                                         {
+                                             return ChainStore::identityOf (plugin) == identity;
+                                         });
+
+        juce::Logger::writeToLog ("Could not delete saved state for "
+                                  + (named != list.end() ? named->name : identity));
     }
 
     store.commit();
     flushSettings (*settings, "clearing saved plugin states");
-    return failed;
+    return outcome.failed;
 }
 
 void IconMenu::savePluginStates()
