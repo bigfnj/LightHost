@@ -103,6 +103,7 @@ target_sources(LightHost PRIVATE
     Source/PluginStateVault.hpp
     Source/DeviceTap.hpp
     Source/SignalMetering.hpp
+    Source/SignalView.hpp
     Source/SelfTest.hpp
     Source/StartupFlags.hpp
     Source/UiMetrics.hpp
@@ -292,6 +293,7 @@ if(LIGHTHOST_BUILD_TESTS)
 
     target_sources(LightHostTests PRIVATE
         Source/AudioChainList.hpp
+        Source/SignalView.hpp
         Source/PluginWindow.cpp
         Tests/TestMain.cpp
         Tests/VisibilityTimerTests.cpp
@@ -317,6 +319,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/SettingsKeysTests.cpp
         Tests/StartupFlagsTests.cpp
         Tests/SignalMeteringTests.cpp
+        Tests/SignalViewTests.cpp
         Tests/StatusSinkTests.cpp
         Tests/StubProcessors.hpp
     )

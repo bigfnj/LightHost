@@ -111,7 +111,8 @@ int main (int argc, char** argv)
                                        "PluginChain", "PluginScan", "PluginState",
                                        "PluginStateVault", "PluginWindow",
                                        "ProcessFacts", "SampleRate", "SelfTest",
-                                       "SettingsKeys", "StartupFlags", "Status",
+                                       "SettingsKeys", "SignalView",
+                                       "StartupFlags", "Status",
                                        "VisibilityTimers" };
 
     const juce::StringArray needsDisplay { "PluginWindowGui", "VisibilityTimersGui" };

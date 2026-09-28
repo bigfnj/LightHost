@@ -452,6 +452,16 @@ private:
                              ? result.declaredLatency * 1000.0 / result.sampleRate : 0.0);
             std::printf ("  frames written   : %lld\n", (long long) result.framesWritten);
 
+            // Printed on every paced render, not only when it fell behind.
+            // It used to appear solely inside the NOTE below, so a healthy run
+            // reported no denominator at all -- which left anything parsing
+            // this output unable to tell "kept pace over 900 blocks" from
+            // "the field is missing", and the denoiser sweep had to print a
+            // dash where a zero belonged.
+            if (result.wasPaced)
+                std::printf ("  blocks           : %d behind of %d\n",
+                             result.blocksBehind, result.blocksTotal);
+
             std::printf ("  realtime factor  : %.3f%s\n",
                          result.realtimeFactor,
                          // blocksTotal only counts up when pacing, so zero means

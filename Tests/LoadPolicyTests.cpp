@@ -255,6 +255,28 @@ namespace
                         "a closed device is being drawn as a problem");
             }
 
+            beginTest ("a device closing for a moment does not throw away the peak");
+            {
+                // Devices close briefly during a change, and the peak measured
+                // just before is the number that explains what happened. This
+                // is half the rule; the other half is in IconMenu::pollAudioLoad,
+                // which must not name a session from a setup with no device in
+                // it -- doing so restarted the peak on every device change.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.95, 4, 4));
+
+                Sample closed;
+                closed.deviceOpen = false;
+                (void) monitor.observe (closed);
+
+                expect (monitor.peakProportion() > 0.9,
+                        "a momentary device close discarded the peak that explains "
+                        "what just went wrong");
+                expectEquals (monitor.dropouts().total(), 4,
+                              "a momentary device close discarded the dropout count");
+            }
+
             beginTest ("the log line names every field");
             {
                 // FAILS IF: a field is dropped and the smoke test's substring

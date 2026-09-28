@@ -1483,10 +1483,18 @@ lighthost::load::Sample IconMenu::takeLoadSample() const
 
 void IconMenu::pollAudioLoad()
 {
-    if (loadMonitor.useSession (loadSessionIdentity()))
+    const auto sample = takeLoadSample();
+
+    // Only while a device is actually open. A device closes for a moment
+    // during a change, and the setup it leaves behind names nothing -- so
+    // naming the session from that would restart the peak and the counts on
+    // every device change, which is the one thing Monitor::useSession
+    // documents must not happen. Monitor::observe already declines to fold in
+    // a closed-device sample; this is the other half of the same rule.
+    if (sample.deviceOpen && loadMonitor.useSession (loadSessionIdentity()))
         juce::Logger::writeToLog ("AudioLoad: new device session, counts restarted");
 
-    if (const auto escalation = loadMonitor.observe (takeLoadSample()); escalation.report)
+    if (const auto escalation = loadMonitor.observe (sample); escalation.report)
     {
         // Logged beside the report rather than instead of it: this is the line
         // that makes the working-set-trimming theory decidable, and it is only
