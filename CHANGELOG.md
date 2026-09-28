@@ -4,7 +4,26 @@
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed — the Preferences window opens at a size its own layout fits in
+
+It opened about 31 px shorter than the layout needed, so a default run
+started already scrolling with the Apply button clipped and the chain list
+showing two and a bit plugins of three.
+
+The cause was a two-line bug rather than a bad number. `shell->setSize` sized
+the **content** to 520×650, and `centreWithSize` then set the **window** to
+the same two numbers — so the content lost the frame's height, every time. The
+window is now sized around the content rather than the other way round.
+
+The default itself is derived instead of chosen: everything the layout needs
+*with* a status row, plus three chain rows. The status row is reserved even
+though it is not showing, because it appears exactly when something has gone
+wrong, and a default that fits only the healthy case starts scrolling at the
+worst possible moment. Until then the slack shows as a little extra room in
+the chain list.
+
+Both properties are asserted, and the comment that used to hold this
+arithmetic — which had already drifted twice — is gone.
 
 ---
 

@@ -1974,26 +1974,46 @@ PreferencesWindow::PreferencesWindow (
     // pad = 438. With the chain viewport at its 80px minimum that is 678 of
     // content with the hint showing, 644 without it.
     //
-    // The default height below is 650, which is the WINDOW including its native
-    // title bar -- so the shell gets roughly 619, under what the layout wants,
-    // and the viewport scrolls. That is what it is for, and why adding a row no
-    // longer means re-deriving a window size. Stated explicitly because comparing
-    // 650 against 644 suggests the opposite conclusion, and the arithmetic in
-    // this comment has already drifted once.
-    //
-    // It is safe to leave alone now in a way it was not before: the panel is
-    // re-heighted when an optional row appears, so the Apply button stays
+    // A window shorter than that scrolls rather than losing its lower
+    // sections, which is what the viewport is for -- and since the panel is
+    // now re-heighted when an optional row appears, the Apply button stays
     // reachable by scrolling instead of being laid out past the bottom edge.
     // See Source/PreferencesLayout.hpp.
-    constexpr int kDefaultWidth  = 520;
-    constexpr int kDefaultHeight = 650;
+    //
+    // These are the size of the CONTENT, not of the window. The window is
+    // whatever the content plus its frame comes to, worked out below rather
+    // than guessed -- which is what went wrong before: the same two numbers
+    // were used for the shell and then again for the window, so the content
+    // silently lost the title bar's height and opened about 31px short of its
+    // own layout. Every default run therefore started already scrolling, with
+    // the Apply button clipped.
+    //
+    // Derived from the layout rather than chosen, so it cannot drift the way
+    // the prose beside it twice has. The height is "everything the layout
+    // needs WITH a status row, plus three chain rows" -- a status row because
+    // that is the state the application is in when the user most needs to
+    // read this window, and three rows because a typical voice chain is a
+    // gate, a denoiser and a compressor.
+    //
+    // Below this it still works and simply scrolls. This is about not landing
+    // there on first open.
+    constexpr int kDefaultContentWidth = 670;
+
+    constexpr int kDefaultChainRowsVisible = 3;   // gate, denoiser, compressor
+
+    constexpr int kDefaultContentHeight =
+        prefs::defaultContentHeight (prefs::Metrics {},
+                                     AudioChainListComponent::kRowHeight,
+                                     kDefaultChainRowsVisible);
 
     // The panel lives inside a viewport that never sizes it below the height its
     // layout needs, so a short window scrolls rather than losing its lower
     // sections. The minimum below is now about comfort, not correctness.
     auto* shell = new PreferencesShell (content);
-    shell->setSize (kDefaultWidth, kDefaultHeight);
+    shell->setSize (kDefaultContentWidth, kDefaultContentHeight);
 
+    // resizeToFitWhenContentChangesSize, so this sizes the window around the
+    // content rather than the other way round.
     setContentOwned (shell, true);
     setUsingNativeTitleBar (true);
     setResizable (true, false);
@@ -2005,7 +2025,11 @@ PreferencesWindow::PreferencesWindow (
     setResizeLimits (440, 400,
                      jmax (440, desktop.getWidth()),
                      jmax (400, desktop.getHeight()));
-    centreWithSize (kDefaultWidth, kDefaultHeight);
+
+    // The size setContentOwned already worked out, not the content numbers
+    // again. Passing those a second time is what shrank the content by the
+    // frame's height on every open.
+    centreWithSize (getWidth(), getHeight());
     setVisible (true);
 }
 

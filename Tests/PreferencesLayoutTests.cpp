@@ -103,6 +103,42 @@ namespace
                         "it does not fit");
             }
 
+            beginTest ("the default window height fits a status row without scrolling");
+            {
+                // The default used to be a literal that lost the title bar's
+                // height, so every first open started already scrolling with
+                // the Apply button clipped. It is derived now, and this is what
+                // it has to be true of.
+                //
+                // FAILS IF: the default stops reserving room for the status
+                // row. That row appears exactly when something has gone wrong,
+                // which is when the window most needs to be readable.
+                constexpr int chainRowHeight = 36;
+                const auto def = defaultContentHeight (m, chainRowHeight, 3);
+
+                expect (layoutFits (m, { true, false }, def),
+                        "the default height does not fit a status row, so the window "
+                        "starts scrolling the moment a plugin fails to load");
+
+                expect (layoutFits (m, {}, def),
+                        "the default height does not even fit the healthy layout");
+            }
+
+            beginTest ("the default leaves room for the chain rows it promises");
+            {
+                constexpr int chainRowHeight = 36;
+                const auto def = defaultContentHeight (m, chainRowHeight, 3);
+
+                expect (chainViewportHeight (m, { true, false }, def) >= 3 * chainRowHeight,
+                        "a three-plugin chain does not fit the chain list at the default "
+                        "size with a status row showing -- which is the case the default "
+                        "was sized for");
+
+                // And with no status row the slack goes to the chain list,
+                // rather than anywhere it would look like a gap.
+                expect (chainViewportHeight (m, {}, def) > chainViewportHeight (m, { true, false }, def));
+            }
+
             beginTest ("the budget is built from the metrics, not from literals");
             {
                 // Doubling every metric must move the answer, or something in

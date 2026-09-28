@@ -167,6 +167,25 @@ namespace lighthost::ui::prefs
         return panelHeight >= preferredHeight (m, rows);
     }
 
+    /** The content height a freshly-opened Preferences window should get.
+
+        Derived rather than chosen, because the literal it replaces went stale
+        twice. It reserves room for a status row that is NOT showing yet: that
+        row appears exactly when something has gone wrong, which is when the
+        user most needs to read this window, and a default that fits only the
+        healthy case starts scrolling at the worst moment.
+
+        The slack shows as a little extra space in the chain list until then,
+        which is the right place for it to go.
+    */
+    [[nodiscard]] constexpr int defaultContentHeight (const Metrics& m,
+                                                      int chainRowHeight,
+                                                      int chainRowsVisible) noexcept
+    {
+        return fixedLayoutHeight (m, { true, false })
+             + chainRowHeight * chainRowsVisible;
+    }
+
     //==========================================================================
     /** A panel whose height its owner has to ask for. */
     struct HeightReportingPanel
