@@ -4,6 +4,7 @@
 #include "HostServices.hpp"
 #include "LookAndFeel.hpp"
 #include "OfflineRender.hpp"
+#include "DevicePolicy.hpp"
 #include "LoadPolicy.hpp"
 #include "PluginChainStore.hpp"
 #include "PreferencesLayout.hpp"
@@ -325,7 +326,7 @@ public:
         // sample rate and buffer size, so pressing it for any of those would
         // have recorded the substitute as the request and silenced the
         // substitution report for ever.
-        inputDeviceCombo.onChange  = [this] { deviceChoiceIsUserMade = true; };
+        inputDeviceCombo.onChange  = [this] { deviceChoice.noteUserChoice(); };
 
         #if JUCE_WINDOWS
         // Processing audio from other applications needs a third-party virtual
@@ -447,7 +448,7 @@ public:
 
         // See the input combo above for why this flag is the only honest
         // signal available.
-        outputDeviceCombo.onChange = [this] { deviceChoiceIsUserMade = true; };
+        outputDeviceCombo.onChange = [this] { deviceChoice.noteUserChoice(); };
         outputChannelLabel.setText ("", juce::dontSendNotification);  // set by rebuildDeviceCombos
         outputChannelLabel.setFont (juce::Font (juce::FontOptions{}.withHeight (12.0f)));
         outputChannelLabel.setJustificationType (juce::Justification::centredRight);
@@ -964,8 +965,11 @@ private:
         recorded. False means every device name on screen was put there by
         rebuildDeviceCombos, which reflects what is OPEN -- after a fallback,
         the substitute.
+
+        A type rather than a bool, so the two rules of the 5.3.0 fix are
+        asserted rather than described. See lighthost::device::DeviceChoiceFlag.
     */
-    bool deviceChoiceIsUserMade = false;
+    lighthost::device::DeviceChoiceFlag deviceChoice;
 
     juce::ComboBox inputDeviceCombo;
     juce::Label    inputChannelLabel;
@@ -1271,7 +1275,7 @@ private:
         const auto outName  = outputDeviceCombo.getText();
         // Snapshotted with the rest, for the same reason: reading it live
         // inside the lambda would see whatever the combos did after the click.
-        const bool deviceChosen = deviceChoiceIsUserMade;
+        const bool deviceChosen = deviceChoice.isUserMade();
         const int  rateId   = sampleRateCombo.getSelectedId();
         const int  bufId    = bufferSizeCombo.getSelectedId();
         // The chain, the bypass flags and the lane assignments are one value and
@@ -1335,21 +1339,27 @@ private:
                     // guard passed it straight through. An output-only user
                     // who opened Preferences to change the buffer size got a
                     // microphone opened for them.
-                    const auto acceptable = [] (const juce::String& name,
-                                                const juce::StringArray& available)
-                    {
-                        return name.isNotEmpty()
-                            && ! name.startsWith ("(")     // a placeholder, not a device
-                            && available.contains (name);
-                    };
+                    // The decision itself is in DevicePolicy.hpp, where every
+                    // one of its cases is asserted -- including the one that
+                    // matters most, that the record and the clear can never
+                    // disagree. It used to be these four lines plus a lambda
+                    // whose first two clauses were device::isDeviceChoice
+                    // written out a second time.
+                    lighthost::device::ApplyInputs decisionInputs;
+                    decisionInputs.inputCombo       = inName;
+                    decisionInputs.outputCombo      = outName;
+                    decisionInputs.availableInputs  = availableInputs;
+                    decisionInputs.availableOutputs = availableOutputs;
+                    decisionInputs.openInput        = setup.inputDeviceName;
+                    decisionInputs.openOutput       = setup.outputDeviceName;
+                    decisionInputs.userChose        = deviceChosen;
+                    decisionInputs.hasRecorder      = safe != nullptr
+                                                        && safe->onDevicesChosenFn != nullptr;
 
-                    if (acceptable (inName, availableInputs)
-                        && (deviceChosen || inName == setup.inputDeviceName))
-                        setup.inputDeviceName = inName;
+                    const auto decision = lighthost::device::decideDeviceApply (decisionInputs);
 
-                    if (acceptable (outName, availableOutputs)
-                        && (deviceChosen || outName == setup.outputDeviceName))
-                        setup.outputDeviceName = outName;
+                    if (decision.writeInputName)  setup.inputDeviceName  = inName;
+                    if (decision.writeOutputName) setup.outputDeviceName = outName;
                 }
 
                 auto* device = dm.getCurrentAudioDevice();
@@ -1404,9 +1414,10 @@ private:
                 {
                     safe->onDevicesChosenFn (setup.inputDeviceName, setup.outputDeviceName);
 
-                    // Cleared only after the record is written, so a failed
-                    // Apply does not quietly forget that a choice was made.
-                    safe->deviceChoiceIsUserMade = false;
+                    // Cleared only after the record is written. The flag names
+                    // that precondition in its own signature, so a caller
+                    // cannot silently mean the other thing.
+                    safe->deviceChoice.clearIfRecorded (true);
                 }
 
                 // 3. Plugin chain + bypass states
