@@ -12,15 +12,15 @@ rather than offering "something outside the chain is interrupting the audio
 thread" -- which is true and sends the user nowhere.
 
 On WASAPI a driver-reported dropout is
- on the **capture** buffer
-(): the input stream arriving broken, before
-the chain has run at all. JUCE's  reads the input device and
-nothing else. On ASIO it is a driver overload instead -- a different
+`AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY` on the **capture** buffer
+(`juce_WASAPI_windows.cpp:1024`): the input stream arriving broken, before
+the chain has run at all. JUCE's `getXRunCount` reads the input device and
+nothing else. On ASIO it is a driver overload instead — a different
 mechanism with the same conclusion, which is why the wording names the
 device rather than the mechanism.
 
 Found while tracing thirty dropouts on a chain using 16% of its block. All
-thirty were .
+thirty were `driver=30 measured=0`.
 
 ---
 
