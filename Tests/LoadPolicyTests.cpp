@@ -280,6 +280,44 @@ namespace
                         "the message does not say that raising the buffer is not the answer");
             }
 
+            beginTest ("a dropout the device reported points at the device");
+            {
+                // MEASURED: thirty dropouts, driver=30 measured=0, on a chain
+                // using 16% of its block. Every one came from the input
+                // device's own capture stream, before the chain ran -- so the
+                // useful thing to say is "look at the device", not "something
+                // outside the chain", which sends the user nowhere.
+                //
+                // FAILS IF: the driver/measured split stops steering the
+                // advice, and a hardware fault reads like a host problem.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.06, 0, 0));
+
+                const auto escalation = monitor.observe (sampleAt (kSettleMs + 500, 0.06, 4, 4));
+
+                expect (escalation.message.contains ("device reported"),
+                        "every dropout came from the device and the message did not say "
+                        "so, leaving the user looking at the wrong half of the system");
+                expect (escalation.message.contains ("upstream of the chain"));
+            }
+
+            beginTest ("a measured dropout with headroom does not blame the device");
+            {
+                // The other side of that branch: nothing was reported by the
+                // driver, so the device is not the thing to point at.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.06, 0, -1));
+
+                const auto escalation = monitor.observe (
+                    sampleAt (kSettleMs + 500, 0.06, kMeasuredEscalationMin, -1));
+
+                expect (escalation.report);
+                expect (! escalation.message.contains ("device reported"),
+                        "a dropout the device never reported was blamed on the device");
+            }
+
             beginTest ("a chain that is out of time still is told to raise its buffer");
             {
                 // The other half. This branch is the common case and must not

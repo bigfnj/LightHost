@@ -4,7 +4,23 @@
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed — a dropout the device reported now points at the device
+
+When every dropout in a session was reported by the driver and none was
+measured, the chain did not cause any of them, and the message says so
+rather than offering "something outside the chain is interrupting the audio
+thread" -- which is true and sends the user nowhere.
+
+On WASAPI a driver-reported dropout is
+ on the **capture** buffer
+(): the input stream arriving broken, before
+the chain has run at all. JUCE's  reads the input device and
+nothing else. On ASIO it is a driver overload instead -- a different
+mechanism with the same conclusion, which is why the wording names the
+device rather than the mechanism.
+
+Found while tracing thirty dropouts on a chain using 16% of its block. All
+thirty were .
 
 ---
 

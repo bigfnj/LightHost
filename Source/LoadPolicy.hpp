@@ -550,11 +550,27 @@ namespace lighthost::load
 
             message += " buffer at its peak, so raising it will not help.";
 
-            // Deliberately does not name a cause. The first version of this
-            // named one -- Windows having paged the process out -- on the
-            // strength of a predicate that turned out to be true of every
-            // healthy run. A message that guesses wrong is worse than one
+            // Which way to point depends on who reported the dropout, and
+            // that is a fact rather than a guess.
+            //
+            // A driver-reported one came from the device. On WASAPI it is
+            // AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY on the CAPTURE buffer
+            // (juce_WASAPI_windows.cpp:1024) -- the input stream arriving
+            // broken, before the chain has run at all. On ASIO it is the
+            // driver reporting an overload. Different mechanisms, same
+            // conclusion: the device said so, and the chain did not cause it.
+            //
+            // This deliberately does not name a single culprit. An earlier
+            // version named one -- Windows having paged the process out -- on
+            // the strength of a predicate that turned out to be true of every
+            // healthy run, and a message that guesses wrong is worse than one
             // that says where to look.
+            if (session.measured == 0 && session.driver > 0)
+                return message + " The audio device reported every one of them itself,"
+                                 " so the interruption is upstream of the chain: the"
+                                 " device, its cable or hub, or something else sharing"
+                                 " that connection.";
+
             return message + " Something outside the chain is interrupting the audio"
                              " thread; the log has the figures.";
         }
