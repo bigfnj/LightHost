@@ -1539,19 +1539,23 @@ void IconMenu::pollAudioLoad()
     if (sample.deviceOpen && loadMonitor.useSession (identity))
         juce::Logger::writeToLog ("AudioLoad: measuring device session " + identity);
 
-    if (const auto escalation = loadMonitor.observe (sample); escalation.report)
-    {
-        // Logged beside the report rather than instead of it: this is the line
-        // that makes the working-set-trimming theory decidable, and it is only
-        // worth gathering at the moment something actually went wrong.
+    const auto escalation = loadMonitor.observe (sample);
+
+    // Independent decisions, and the Monitor makes both. The log records
+    // every arrival (spaced, with cumulative counts), because that is where a
+    // pattern gets found; the tray is told within a budget, because it is
+    // where people stop reading once it repeats itself.
+    if (escalation.log)
         logAudioLoad ("dropout");
+
+    if (escalation.report)
         status.report (escalation.message);
-    }
 }
 
 void IconMenu::logAudioLoad (const juce::String& contextLabel) const
 {
-    auto line = "AudioLoad [" + contextLabel + "]: " + loadMonitor.logFields();
+    auto line = "AudioLoad [" + contextLabel + "]: " + loadMonitor.logFields()
+              + " at=" + juce::Time::getCurrentTime().toString (false, true, true, true);
 
     if (contextLabel == "dropout")
         line += " " + lighthost::process::describe (lighthost::process::memoryFacts());

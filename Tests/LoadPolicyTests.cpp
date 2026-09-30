@@ -367,6 +367,140 @@ namespace
                         "dropout reports");
             }
 
+            beginTest ("sporadic dropouts all day cannot fill the status sink either");
+            {
+                // MEASURED, and the case the continuous test above missed: a
+                // dropout every thirteen minutes on a real machine. Each one
+                // arrives more than a quiet minute after the last, so each is
+                // its own EPISODE, and the per-episode budget let every one
+                // through -- sixteen tray messages in three hours, and the
+                // eight-slot sink holding nothing else.
+                //
+                // FAILS IF: the only cap is per episode.
+                lighthost::status::Sink sink;
+                sink.report ("Plugin load failed: something else entirely");
+
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.06, 0, 0));
+
+                constexpr juce::int64 thirteenMinutes = 13 * 60 * 1000;
+                int reports = 0;
+
+                for (int n = 1; n <= 37; ++n)          // eight hours of them
+                {
+                    if (const auto escalation = monitor.observe (
+                            sampleAt (n * thirteenMinutes, 0.06, n, n));
+                        escalation.report)
+                    {
+                        ++reports;
+                        sink.report (escalation.message);
+                    }
+                }
+
+                expect (reports <= kMaxReportsPerSession,
+                        "a machine with a dropout every thirteen minutes got "
+                        + juce::String (reports) + " tray messages in eight hours");
+
+                expect (sink.all().front().message.contains ("something else entirely"),
+                        "sporadic dropout reports evicted the unrelated problem the user "
+                        "already had, which is what the budget exists to prevent");
+            }
+
+            beginTest ("only the final report of a session calls itself the last");
+            {
+                // FAILS IF: an episode's second report claims to be the last
+                // for the device again. It used to, and the next episode then
+                // reported anyway -- a message that contradicts itself within
+                // the quarter hour.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.06, 0, 0));
+
+                constexpr juce::int64 thirteenMinutes = 13 * 60 * 1000;
+                juce::StringArray messages;
+
+                for (int n = 1; n <= 10; ++n)
+                    if (const auto e = monitor.observe (sampleAt (n * thirteenMinutes, 0.06, n, n));
+                        e.report)
+                        messages.add (e.message);
+
+                expectEquals (messages.size(), kMaxReportsPerSession);
+
+                for (int i = 0; i < messages.size() - 1; ++i)
+                    expect (! messages[i].contains ("last report"),
+                            "report " + juce::String (i + 1) + " claimed to be the last, and "
+                            "then another one arrived");
+
+                expect (messages[messages.size() - 1].contains ("last report"),
+                        "the report that really was the last one did not say so");
+            }
+
+            beginTest ("every sporadic dropout reaches the log, reported or not");
+            {
+                // FAILS IF: the log line goes back to being written only
+                // alongside a report. The report budget is tightest exactly
+                // when dropouts are most frequent, which is when the log most
+                // needs to be complete.
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.06, 0, 0));
+
+                constexpr juce::int64 thirteenMinutes = 13 * 60 * 1000;
+                int logged = 0;
+
+                for (int n = 1; n <= 10; ++n)
+                    if (monitor.observe (sampleAt (n * thirteenMinutes, 0.06, n, n)).log)
+                        ++logged;
+
+                expectEquals (logged, 10,
+                              "a dropout the tray was not told about vanished from the log too");
+            }
+
+            beginTest ("continuous dropouts are logged at the spacing, not on every poll");
+            {
+                // One new dropout on every 500 ms poll for five minutes. The
+                // log must not take two lines a second; each line carries the
+                // cumulative count, so spacing them loses nothing but timing.
+                Monitor monitor;
+                monitor.useSession ("a");
+
+                int logged = 0;
+
+                for (int tick = 1; tick <= 600; ++tick)
+                    if (monitor.observe (sampleAt (tick * 500, 0.5, tick, tick)).log)
+                        ++logged;
+
+                const auto expected = static_cast<int> ((600 * 500) / kDropoutLogSpacingMs) + 1;
+
+                expect (logged <= expected,
+                        "continuous dropouts wrote " + juce::String (logged)
+                        + " log lines in five minutes");
+                expect (logged >= expected - 1,
+                        "continuous dropouts were under-logged, so the log stops describing "
+                        "the worst stretch");
+            }
+
+            beginTest ("a new device session gets a fresh report budget");
+            {
+                Monitor monitor;
+                monitor.useSession ("a");
+                (void) monitor.observe (sampleAt (0, 0.06, 0, 0));
+
+                constexpr juce::int64 thirteenMinutes = 13 * 60 * 1000;
+
+                for (int n = 1; n <= 10; ++n)
+                    (void) monitor.observe (sampleAt (n * thirteenMinutes, 0.06, n, n));
+
+                // Budget spent. A genuinely different device opens.
+                monitor.useSession ("b");
+                (void) monitor.observe (sampleAt (0, 0.06, 0, 0));
+
+                expect (monitor.observe (sampleAt (kSettleMs + 1000, 0.06, 1, 1)).report,
+                        "switching to a different device inherited the old one's spent "
+                        "budget, so its dropouts go unreported");
+            }
+
             beginTest ("a repeat is not reported when the dropouts stopped");
             {
                 Monitor monitor;

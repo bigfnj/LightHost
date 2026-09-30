@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+### Fixed — sporadic dropouts no longer send a tray message every time
+
+The report budget was two per *episode*, and an episode ends after a quiet
+minute. On a machine with a dropout every thirteen minutes — measured — each
+one was its own episode with a fresh budget, so every one reached the tray:
+sixteen messages in three hours, and the eight-slot status sink holding
+nothing else. That is the eviction the budget existed to prevent, reached
+through the case its test did not cover.
+
+There is now a ceiling of three per device session as well. The test that
+pins it was written first and failed on the old code with *"a machine with a
+dropout every thirteen minutes got 37 tray messages in eight hours"*.
+
+The second report of an episode also used to say *"This is the last report
+for this device"*, which was false the moment the next episode began. Only
+the report that really is the last now says so.
+
+### Fixed — the log records every dropout, and when
+
+The `AudioLoad [dropout]` line was written only alongside a tray report, so
+the report budget throttled the evidence too — tightest exactly when dropouts
+were most frequent. Every arrival is now logged, spaced at thirty seconds so
+a machine dropping out on every poll writes one line every thirty seconds
+rather than two a second. Each line carries cumulative counts, so the
+spacing costs timing resolution and loses no dropouts.
+
+And every `AudioLoad` line now carries `at=HH:MM:SS`. Without it the log said
+how many but never when, so neither the rate nor any periodicity could be
+seen — and "did moving the microphone to another USB port change anything"
+could not be answered from it.
+
 ### Changed — a dropout the device reported now points at the device
 
 When every dropout in a session was reported by the driver and none was

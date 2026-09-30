@@ -91,6 +91,30 @@ namespace lighthost::load
         stays available for everything else that can go wrong. */
     inline constexpr int kMaxReportsPerEpisode = 2;
 
+    /** The ceiling across a whole device session, whatever the episodes do.
+
+        The per-episode cap alone does not bound anything on a machine whose
+        dropouts are SPORADIC. Measured: one every thirteen minutes. Each
+        arrives more than a quiet minute after the last, so each is its own
+        episode with a fresh budget, and every single one reached the tray --
+        sixteen messages in three hours, leaving the eight-slot sink holding
+        nothing else. Three is enough to say "it started", "it is still
+        happening" and "this is the last you will hear of it"; the log keeps
+        every one regardless.
+    */
+    inline constexpr int kMaxReportsPerSession = 3;
+
+    /** Minimum spacing between two dropout lines in the log.
+
+        Every arrival is logged, rather than only the ones that happened to be
+        reported -- the log is where a pattern gets found, and a line tied to
+        the report budget would stop recording exactly when things are worst.
+        Spaced so a machine dropping out on every poll writes a line every
+        thirty seconds rather than two a second; each line carries cumulative
+        counts, so the spacing costs timing resolution and loses no dropouts.
+    */
+    inline constexpr juce::int64 kDropoutLogSpacingMs = 30000;
+
     /** How long a freshly-started chain gets before a dropout is news.
 
         Opening a WASAPI device reports an under-run for the open itself, and
@@ -163,8 +187,14 @@ namespace lighthost::load
 
     struct Escalation
     {
-        bool         report = false;
+        bool         report = false;   ///< tell the user, via the status sink
         juce::String message;
+        bool         log    = false;   ///< write an AudioLoad [dropout] line
+
+        // Separate from report on purpose. The log line used to be written
+        // only when a report was, so the report budget throttled the evidence
+        // too -- and the budget is at its tightest exactly when dropouts are
+        // most frequent, which is when the log most needs to be complete.
     };
 
     //==========================================================================
@@ -341,10 +371,12 @@ namespace lighthost::load
             deadlineMs        = 0.0;
             driverReports     = false;
             haveSeenSample    = false;
-            reportsMade       = 0;
-            totalAtLastReport = 0;
+            reportsMade        = 0;
+            reportsThisSession = 0;
+            totalAtLastReport  = 0;
             lastDropoutMs.reset();
             lastReportMs.reset();
+            lastDropoutLogMs.reset();
             cached = {};
             return true;
         }
@@ -437,7 +469,17 @@ namespace lighthost::load
                                        sample.coreLabel),
                        severityFor (current, alarmable.total(), since) };
 
-            return decideEscalation (sample);
+            auto escalation = decideEscalation (sample);
+
+            if (driverDelta + measuredDelta > 0
+                && (! lastDropoutLogMs.has_value()
+                    || sample.atMs - *lastDropoutLogMs >= kDropoutLogSpacingMs))
+            {
+                escalation.log   = true;
+                lastDropoutLogMs = sample.atMs;
+            }
+
+            return escalation;
         }
 
         /** What the UI draws. Computed in observe() and cached, so the timer
@@ -486,7 +528,9 @@ namespace lighthost::load
             const auto worthReporting = episode.driver > 0
                                      || episode.measured >= kMeasuredEscalationMin;
 
-            if (! worthReporting || reportsMade >= kMaxReportsPerEpisode)
+            if (! worthReporting
+                || reportsMade        >= kMaxReportsPerEpisode
+                || reportsThisSession >= kMaxReportsPerSession)
                 return {};
 
             if (lastReportMs.has_value())
@@ -501,15 +545,23 @@ namespace lighthost::load
             }
 
             ++reportsMade;
+            ++reportsThisSession;
             lastReportMs      = sample.atMs;
             totalAtLastReport = session.total();
 
-            // Keyed off "is this the first" rather than "is this the last".
-            // Written the other way round, a kMaxReportsPerEpisode of 1 -- a
-            // one-line edit to a constant documented as a tuning knob -- would
-            // make firstMessage() unreachable, and it is the only one carrying
-            // the buffer deadline and what to do about it.
-            return { true, reportsMade == 1 ? firstMessage() : lastMessage() };
+            // The final report of the session says so, and only it does. The
+            // second report of an episode used to say "this is the last
+            // report for this device", which was false the moment the next
+            // episode began and reported again.
+            //
+            // Otherwise keyed off "is this the first" rather than "is this
+            // the last": written the other way round, a kMaxReportsPerEpisode
+            // of 1 would make firstMessage() unreachable, and it is the only
+            // one carrying the diagnosis.
+            if (reportsThisSession >= kMaxReportsPerSession)
+                return { true, finalMessage() };
+
+            return { true, reportsMade == 1 ? firstMessage() : stillMessage() };
         }
 
         /** True when the chain has plenty of the block left over.
@@ -575,10 +627,17 @@ namespace lighthost::load
                              " thread; the log has the figures.";
         }
 
-        [[nodiscard]] juce::String lastMessage() const
+        [[nodiscard]] juce::String stillMessage() const
         {
             return "Audio is still dropping out (" + juce::String (session.total())
-                 + " so far). This is the last report for this device; the log keeps counting.";
+                 + " so far).";
+        }
+
+        [[nodiscard]] juce::String finalMessage() const
+        {
+            return "Audio is still dropping out (" + juce::String (session.total())
+                 + " so far). This is the last report until the device is reopened;"
+                   " the log records every one.";
         }
 
         juce::String sessionIdentity;
@@ -594,10 +653,12 @@ namespace lighthost::load
         juce::String coreLabel;
         bool   driverReports     = false;
         bool   haveSeenSample    = false;
-        int    reportsMade       = 0;
+        int    reportsMade        = 0;
+        int    reportsThisSession = 0;
         int    totalAtLastReport = 0;
         std::optional<juce::int64> lastDropoutMs;
         std::optional<juce::int64> lastReportMs;
+        std::optional<juce::int64> lastDropoutLogMs;
         Readout cached;
     };
 }
