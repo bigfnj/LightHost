@@ -10,6 +10,7 @@
 #include "SampleRatePolicy.hpp"
 #include "PluginWindow.h"
 #include "PreferencesWindow.h"
+#include "WindowForeground.hpp"
 #include <BinaryData.h>
 #include <algorithm>
 #include <exception>
@@ -27,6 +28,22 @@ namespace metrics = lighthost::ui::metrics;
 // state: it is a reference to the settings plus a staging area, and a long-lived
 // one would carry a half-finished edit into the next operation.
 using ChainStore = lighthost::chain::Store;
+
+namespace
+{
+    // Every window this application opens from the tray goes through here.
+    // toFront (true) restores and reorders; bringToForeground is the half JUCE
+    // leaves out on Windows, without which the window lands behind the one
+    // the user was working in. WindowForeground.hpp has the mechanism, and
+    // the log line is how a refusal is noticed.
+    void raiseFromTray (Component& window, const String& what)
+    {
+        window.toFront (true);
+
+        const auto raised = lighthost::window::bringToForeground (window);
+        Logger::writeToLog ("IconMenu: " + what + " raised: " + raised.describe());
+    }
+}
 
 //==============================================================================
 class IconMenu::PluginListWindow final : public DocumentWindow
@@ -1857,15 +1874,29 @@ void IconMenu::mouseDown (const MouseEvent& e)
     Process::setDockIconVisible (true);
     #endif
 
+    // A no-op on Windows (juce_Windowing_windows.cpp), which is why the
+    // press alone was never enough there; see TrayClick.hpp.
     Process::makeForegroundProcess();
 
-    if (e.mods.isLeftButtonDown())
-    {
-        showPreferences();
-        return;
-    }
+    performTrayAction (trayClick.onPress (e.mods.isLeftButtonDown()));
+}
 
-    startTimer (50);
+void IconMenu::mouseUp (const MouseEvent&)
+{
+    // The event's button modifiers are already cleared by the time JUCE's
+    // tray component delivers a release, so the tracker, not the event, says
+    // whether this was the left button.
+    performTrayAction (trayClick.onRelease());
+}
+
+void IconMenu::performTrayAction (lighthost::tray::Action action)
+{
+    switch (action)
+    {
+        case lighthost::tray::Action::openPreferences: showPreferences(); break;
+        case lighthost::tray::Action::showMenu:        startTimer (50);   break;
+        case lighthost::tray::Action::none:            break;
+    }
 }
 
 //==============================================================================
@@ -2085,7 +2116,7 @@ void IconMenu::handleEditPlugin (int index)
 
     if (auto* f = graph.getNodeForId (NodeID { static_cast<uint32> (nodeIdVal) }))
         if (auto* w = PluginWindow::getWindowFor (f, PluginWindow::Normal))
-            w->toFront (true);
+            raiseFromTray (*w, "editor");
 }
 
 void IconMenu::handleMovePlugin (int index, bool moveUp)
@@ -2367,7 +2398,7 @@ void IconMenu::showPreferences()
 {
     if (preferencesWindow != nullptr)
     {
-        preferencesWindow->toFront (true);
+        raiseFromTray (*preferencesWindow, "Preferences");
         return;
     }
 
@@ -2521,6 +2552,11 @@ void IconMenu::showPreferences()
     // Whatever has already gone wrong is shown as soon as the window opens, not
     // only when the next thing goes wrong.
     preferencesWindow->setStatusMessage (status.mostRecent());
+
+    // The constructor has shown it; this is what puts it in front. Without it
+    // a first open from the tray appeared behind the active window on Windows,
+    // every time.
+    raiseFromTray (*preferencesWindow, "Preferences");
 }
 
 void IconMenu::refreshPreferencesIfOpen()
@@ -2560,7 +2596,7 @@ void IconMenu::openPluginEditorFor (const PluginDescription& pd)
     if (auto* f = graph.getNodeForId (NodeID { static_cast<uint32> (nodeIdVal) }))
     {
         if (auto* w = PluginWindow::getWindowFor (f, PluginWindow::Normal))
-            w->toFront (true);
+            raiseFromTray (*w, "editor");
     }
     else
     {
@@ -3002,6 +3038,6 @@ void IconMenu::reloadPlugins()
     if (pluginListWindow == nullptr)
         pluginListWindow = std::make_unique<PluginListWindow> (*this, formatManager);
 
-    pluginListWindow->toFront (true);
+    raiseFromTray (*pluginListWindow, "Available Plugins");
 }
 

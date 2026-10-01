@@ -113,7 +113,7 @@ int main (int argc, char** argv)
                                        "PreferencesLayout",
                                        "ProcessFacts", "SampleRate", "SelfTest",
                                        "SettingsKeys", "SignalView",
-                                       "StartupFlags", "Status",
+                                       "StartupFlags", "Status", "TrayClick",
                                        "VisibilityTimers" };
 
     const juce::StringArray needsDisplay { "PluginWindowGui", "VisibilityTimersGui" };

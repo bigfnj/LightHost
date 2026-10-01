@@ -111,6 +111,16 @@ certificate is a recurring paid subscription tied to a verified legal identity,
 renewed for as long as releases continue, and one SmartScreen click per download
 is not worth that to this project.
 
+Windows Defender's machine-learning heuristics can go further and quarantine a
+brand-new unsigned release outright. 5.6.1 was reported on one machine as
+`Trojan:Win32/Bearfoos.A!ml`, a name Defender's own encyclopedia gives no
+technical detail for, and one that a cloud-connected Defender with current
+signatures does not reproduce for the identical bytes two days later. The 5.6.2
+section of [CHANGELOG.md](CHANGELOG.md) records what was checked. Every asset is
+built on GitHub's runners from the tagged commit and checksummed in the same
+run, so `SHA256SUMS` is the thing to trust: a download that matches it is what
+the tag built.
+
 ---
 
 ## Adding plugins

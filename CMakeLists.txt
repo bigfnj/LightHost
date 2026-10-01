@@ -97,6 +97,9 @@ target_sources(LightHost PRIVATE
     Source/ProcessFacts.hpp
     Source/ProcessQoS.hpp
     Source/ProcessQoS.cpp
+    Source/TrayClick.hpp
+    Source/WindowForeground.hpp
+    Source/WindowForeground.cpp
     Source/PluginScan.hpp
     Source/SettingsKeys.hpp
     Source/OfflineRender.hpp
@@ -324,6 +327,7 @@ if(LIGHTHOST_BUILD_TESTS)
         Tests/SignalMeteringTests.cpp
         Tests/SignalViewTests.cpp
         Tests/StatusSinkTests.cpp
+        Tests/TrayClickTests.cpp
         Tests/StubProcessors.hpp
     )
 

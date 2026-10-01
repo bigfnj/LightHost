@@ -16,6 +16,7 @@
 #include "SampleRatePolicy.hpp"
 #include "SettingsKeys.hpp"
 #include "StatusSink.hpp"
+#include "TrayClick.hpp"
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
@@ -39,7 +40,11 @@ public:
     IconMenu();
     ~IconMenu() override;
 
+    // Both halves of a click, because on Windows the window opens on the
+    // release and the press only remembers which button it was. The policy
+    // is TrayClick.hpp; the reason is written there.
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
     void changeListenerCallback (juce::ChangeBroadcaster* changed) override;
 
     /** Opens the Preferences window, as a left-click on the tray icon does.
@@ -294,6 +299,22 @@ private:
     [[nodiscard]] bool isStartupEnabled() const;
     void setStartupEnabled (bool shouldEnable);
     #endif
+
+    /** Windows withholds the right to take the foreground until the tray
+        button is released, so that is where Preferences opens there. Elsewhere
+        the press opens it, as it always has. See TrayClick.hpp.
+    */
+    [[nodiscard]] static constexpr bool trayOpensOnRelease() noexcept
+    {
+       #if JUCE_WINDOWS
+        return true;
+       #else
+        return false;
+       #endif
+    }
+
+    void performTrayAction (lighthost::tray::Action action);
+    lighthost::tray::ClickTracker trayClick { trayOpensOnRelease() };
 
     static void menuInvocationCallback (int id, IconMenu*);
 

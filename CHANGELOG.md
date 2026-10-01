@@ -8,6 +8,76 @@ Nothing yet.
 
 ---
 
+## [5.6.2] — 2026-09-30
+
+### Fixed — windows opened from the tray no longer open behind the one you were using
+
+Click the tray icon, or pick Preferences from its menu, and the window came up
+under whatever was active; it had to be fetched from the taskbar every time.
+Available Plugins and a plugin editor opened from the menu went through the
+same path, and get the same treatment.
+
+Two causes, both Windows. First, nothing ever asked for the foreground. JUCE's
+`toFront (true)` ends in `BringWindowToTop`, which reorders the Z-order and no
+more; the call that moves a process to the foreground is `SetForegroundWindow`,
+and the only one JUCE makes is on the hidden tray window, at the press.
+`Process::makeForegroundProcess`, which `mouseDown` called for exactly this
+purpose, is an empty function on Windows. Second, the moment was wrong. The
+shell grants a notification icon's process the right to take the foreground
+around the button-up it forwards, and Preferences opened from the button-down,
+before the grant, so nothing the process called at that point could have
+activated it.
+
+A left-click now opens Preferences on the release (`Source/TrayClick.hpp`; the
+press is remembered, because JUCE delivers the release with the button bits
+already cleared), and every window opened from the tray then goes through
+`Source/WindowForeground.hpp`: `SetForegroundWindow` on the window itself, and
+if Windows refuses, a lift to the top of the Z-order without focus, so it is at
+least visible. Each open logs `raised: foreground`, or what happened instead.
+Other platforms keep opening on the press, where `makeForegroundProcess` does
+what its name says.
+
+Measured, not reasoned. Injected mouse input on the real notification icon,
+Visual Studio Code holding the foreground, the same procedure for both
+binaries: on 5.6.1 the Preferences window existed after the click and the
+foreground stayed with Code; on this build the foreground was Preferences and
+the log read `raised: foreground`, with the fallback never needed. The policy
+is tested as an ORDER in `Tests/TrayClickTests.cpp`, because a test that only
+asked "does a left click open Preferences" passes 5.6.1 too; moving the open
+back to the press fails exactly that test and nothing else.
+
+Nothing is added to the binary's import table. `SetForegroundWindow` and
+`SetWindowPos` were already imported through JUCE, and the 5.6.2 build on the
+development machine imports the same 373 functions as the shipped 5.6.1.
+
+### Note — 5.6.1 and Windows Defender
+
+One machine quarantined the 5.6.1 Windows build as
+`Trojan:Win32/Bearfoos.A!ml`: a machine-learning verdict for which Defender's
+own encyclopedia offers no technical detail, and a name that fires often on
+freshly built unsigned software (several hundred GitHub issues carry it, a
+VST3 host and the MuLab audio host among them). It was checked rather than
+waved away:
+
+- The published zip hashes to the value in `SHA256SUMS`, which is the value
+  `sha256sum` printed inside the public release-run log before the upload step
+  ran, and that run built commit `081190c`, the commit the tag points at.
+- The executable imports no networking, process-creation, injection or
+  registry-write function. Its registry imports are the five read-only calls
+  a plugin host needs to find VST and ASIO entries.
+- A cloud-connected Defender with current signatures scans the identical bytes
+  clean two days later, and 5.4.0, 5.5.0 and 5.6.0 with them.
+
+What changed in 5.6.0 that a classifier would notice is the process-QoS code:
+five new kernel32 imports (`SetProcessInformation`, `GetProcessInformation`,
+`GetSystemCpuSetInformation`, `GetCurrentProcessorNumberEx`,
+`K32GetProcessMemoryInfo`), every one a query or setting on the current
+process, in a binary nobody has signed. That is the likeliest trigger, and it
+is a guess about an opaque model. README.md now mentions the detection beside
+the SmartScreen warning, with the one check that settles it: the hash.
+
+---
+
 ## [5.6.1] — 2026-09-28
 
 ### Added — the Device API choices explain themselves
