@@ -131,6 +131,13 @@ the local one that the two rarely disagree, but "rarely" is not "never".
 
 None of these are automated, and two of them need a person looking at a display.
 
+- **Click the tray icon with another window in front, and confirm Preferences
+  comes to the foreground.** `tools/trayclick-foreground.ps1 -Exe <built exe>`
+  does it with injected input and reads the foreground window back; run it
+  against the previous release first, because a check that passes the old
+  binary is measuring nothing. 5.6.1 fails it and 5.6.2 passes it, on the
+  same machine, same procedure. It launches its own `-multi-instance` and
+  deletes that instance's settings afterwards.
 - **Run the built binary on a machine that has never had Visual Studio
   installed.** The C runtime is linked statically so no Visual C++
   redistributable should be needed, and this is the only way to prove it rather
